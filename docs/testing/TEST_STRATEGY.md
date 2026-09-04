@@ -1,59 +1,158 @@
-# VPSReady v0.1 Test Strategy
+# VPSReady v0.1 Blind Test Strategy
 
 Status: Binding release-evidence strategy
 
-Testing is risk-based. Routine cards use targeted checks; broad regression belongs to major gates. Critical SSH/firewall behavior cannot be accepted with mocks alone.
+Testing is risk-based and evidence-labelled. The autonomous team has no real VPS during development. Routine cards use targeted E0–E3 checks; broad blind regression belongs to major gates. E5 real-VPS validation is performed only by the Owner after `release/*` exists.
 
-## Layers
+Read `docs/verification/BLIND_DEVELOPMENT.md` and `docs/diagnostics/LOGGING_AND_SUPPORT_BUNDLE.md` with this file.
 
-### Unit
+## 1. Development layers
 
-Cover input validation, error/result transitions, argument quoting, Ubuntu parsers/fixtures, UFW identity/idempotency, SSH config merge/preservation, authorized-key duplicate detection, redaction, and readiness logic.
+### E0 — Static and supply-chain checks
 
-### Application/component
+Restore/build, nullable/compiler warnings, analyzers, format, dependency inventory, license compatibility, vulnerability/secret scan, architecture/reference rules and documentation links.
 
-Use explicit fake transport/file boundaries for view-model state, cancellation/timeouts, partial facts, confirmation, plan/apply/verify, retry/reconnect, operation events, and prevention of success-before-verification. Fakes are not protocol/system evidence.
+### E1 — Unit tests
 
-### SSH integration
+Cover input validation, error/result transitions, command IDs and argument quoting, Ubuntu parsers/fixtures, UFW identity/idempotency, SSH config merge/preservation, authorized-key duplicate detection, diagnostic event mapping, redaction, retention, support-bundle manifests and readiness logic.
 
-Use disposable OpenSSH container/VM where practical. Test password/key authentication, invalid credentials, unreachable/closed port, unknown/matching/changed fingerprint, exit code/stdout/stderr, cancellation/timeout, and disposal. Test containers are developer dependencies, not product dependencies.
+### E2 — Application/component and stateful simulation
 
-### Disposable Ubuntu E2E
+Use explicit fake transport/file/time/process boundaries and the deterministic scenario host required by the blind-development contract. Exercise:
 
-Required before Gate B/final release. Use fresh disposable VPS/VM with console/rescue or snapshot, test-only credentials, no production data, isolated network, and destroy/reset procedure. Validate real connection/overview, UFW changes/access preservation, key deployment/separate login, local SSH config interoperability, system actions/reboot, repeat idempotency, and injected failure/recovery.
+- view-model state and navigation;
+- cancellation/timeouts/concurrent-operation prevention;
+- host trust and session lifecycle;
+- partial server facts;
+- confirmation and `validate -> preflight -> plan -> apply -> verify -> recovery` transitions;
+- stateful UFW, key deployment, config editing, apt/hostname/timezone/reboot behavior;
+- injected nonzero exits, malformed output, dropped connection, permission failure, verification failure and recovery failure;
+- operation-journal correlation and no success-before-verification.
 
-Never run destructive/lockout-risk E2E on Owner production/personal VPS without explicit authorization.
+Fakes fail on unexpected command IDs and never ship as production success paths.
 
-### Desktop/UI
+### E3 — Local contained protocol integration
 
-Automate view models, validation, enable/disable states, cancellation, error presentation, navigation, and secret non-persistence. Manual QA at gates checks full journey, warning clarity, resize/scaling, keyboard/basic accessibility, long-running progress, recovery, and platform path/file-dialog behavior.
+When practical, use a local or CI-contained OpenSSH server to test password/key authentication, invalid credentials, host-key unknown/match/change behavior, command exit/stdout/stderr, file transfer, cancellation/timeout and disposal. It requires no external endpoint or Owner credential.
 
-### Packaging smoke
+E3 is valuable but does not prove UFW/systemd/reboot/provider behavior. If unavailable on a host, record `NOT_RUN` and rely on E1/E2 plus Owner E5 later; do not claim E3 PASS.
 
-For every claimed artifact: archive extracts, app starts without separately installed .NET, main window appears, clean exit, native libraries present, no developer path/secret embedded, version metadata correct. One OS build does not prove another launch.
+### E4 — Desktop and packaging evidence
 
-## Gates
+Automate view models and headless UI where practical. On actual CI hosts build/publish each claimed RID, verify archive/app composition, version/build SHA, no embedded secrets/developer paths and startup/clean exit when technically possible.
+
+A build for one OS does not prove another. Separate states:
+
+- built;
+- package-inspected;
+- startup-smoked;
+- manually exercised in simulation;
+- Owner-tested with real VPS.
+
+### Simulated Manual QA
+
+At major gates, Manual QA uses the candidate desktop build with deterministic scenario profiles. It assesses full user journeys, warning clarity, validation, cancellation, recovery, long-running progress, keyboard/basic accessibility, resize/scaling and platform file/path behavior.
+
+Manual QA must display/record `SIMULATED ENVIRONMENT`; it cannot mark remote behavior E5 PASS.
+
+### E5 — Owner real-VPS validation
+
+Performed only after Principal creates `release/x.y.z`, following `docs/owner-testing/OWNER_VPS_TEST_PROTOCOL.md`. Owner evidence is tied to exact release SHA/artifact and is the only evidence that may be described as real VPS validation.
+
+## 2. Gate requirements
 
 ### Gate A — M2 Connection/Overview
 
-Targeted unit/component suite, OpenSSH integration, at least one real Ubuntu connection, password success/failure, timeout/cancel, host-key unknown/match/change, partial overview failure, Manual QA workflow, Principal architecture/security review.
+- E0/E1/E2 complete.
+- E3 OpenSSH evidence where available.
+- Negative catalog for input/auth/network/trust/cancel/partial facts.
+- Simulated Manual QA complete journey.
+- Diagnostics show distinct safe error IDs and correlated operation records.
+- Principal decision: `BLIND_PHASE_APPROVED` or corrective cards.
+- Mandatory statement: `REAL VPS: NOT TESTED`.
 
 ### Gate B — M3/M4 Access Safety
 
-Relevant Gate A regression, UFW tests, disposable Ubuntu firewall E2E with recovery path, active-port protection, key generation/deployment/separate login, SSH config preservation/interoperability, repeat idempotency, Manual QA E2E, Principal safety gate.
+- relevant Gate A blind regression;
+- exhaustive stateful UFW and active-port policy tests;
+- failure injection before/during/after apply and verify;
+- key generation/deployment/separate-login logic;
+- local SSH config preservation/interoperability tests;
+- E3 key-authentication evidence where available;
+- simulated Manual QA password -> firewall -> key -> alias workflow;
+- Principal decision with `REAL UFW/VPS: NOT TESTED`.
 
-### Gate C — Final
+### Gate C — Blind Release Readiness
 
-Complete automated suite, disposable Ubuntu release E2E, supported-platform CI, each artifact packaging smoke, dependency/license/security/secret scan, final Manual QA, Principal exact-commit gate.
+- complete E0–E4 suite;
+- supported-platform CI/package evidence;
+- diagnostic/redaction/support-bundle DoD;
+- dependency/license/security/secret scan;
+- final simulated Manual QA;
+- Owner VPS test protocol and artifact/checksum package;
+- Principal exact-commit gate.
 
-## Minimum negative catalog
+Gate C success creates `release/0.1.0` and `READY_FOR_OWNER_VPS_TEST`. It does not create real-VPS PASS.
 
-Blank/invalid host; port 0/>65535/non-numeric; wrong credentials; denied sudo; unsupported/malformed Ubuntu output; missing command; locale variation; nonzero/partial output; dropped connection; cancellation; duplicate firewall/key/config operations; active SSH removal attempt; invalid timezone/hostname/alias/path; existing/read-only/malformed local files; changed host key; secret-like values through every log path; reconnect timeout; UI double-click/concurrent mutation.
+## 3. Minimum scenario catalog
 
-## GitHub evidence
+- blank/invalid host, port 0/>65535/non-numeric, invalid username/control characters;
+- wrong credentials, denied sudo, unsupported OS, missing command;
+- unknown/matching/changed host key;
+- timeout, cancellation, connection refused, unreachable, dropped connection;
+- malformed/partial/locale-varied Ubuntu output;
+- UFW absent/inactive/active/error, duplicate rules, IPv4/IPv6 variants, stale rule identity;
+- active SSH removal attempt and enable-firewall precondition failures;
+- key path collision, invalid/encrypted/unsupported key, duplicate deployment, remote permission failure;
+- existing/read-only/malformed local SSH config and interrupted atomic write;
+- apt lock/nonzero exit/reboot-required/reconnect timeout;
+- invalid timezone/hostname/alias/path;
+- secret-like values through every log/export/crash path;
+- UI double-click/concurrent mutation;
+- verification failure and recovery/rollback failure.
 
-Issue Workpad records exact commands/results, environment/RID, artifact/log link, skipped tests/reason, CI/PR link, and redacted media only when useful. Never post credentials/private keys/tokens or unnecessary public VPS data.
+## 4. Diagnostic assertions
 
-## Failure policy
+Every remote-feature test should assert applicable events:
 
-Relevant failure blocks acceptance. Do not delete/weaken tests for green CI. Quarantine requires tracked bug/owner/reason/bounded plan. Environment failure is not product PASS. QA reports; Developer fixes. Production changes after a gate invalidate affected evidence and require risk-appropriate re-test.
+- start and terminal state share an operation ID;
+- phase and stable event/command/error IDs are present;
+- duration/exit/verification state is accurate;
+- no success event precedes verification;
+- cancellation is not failure or success;
+- known seeded secrets never appear in Activity, JSONL, exception UI, issue report or ZIP;
+- truncation and payload-omission policy are explicit;
+- public-safe issue report pseudonymizes server/user identifiers.
+
+## 5. CI separation
+
+Ordinary CI:
+
+- no VPS secrets/endpoints;
+- E0/E1/E2 on all useful hosts;
+- E3 only against local contained services;
+- E4 build/package jobs separated from normal targeted tests;
+- no privileged firewall mutation or provider dependency.
+
+Release-candidate CI builds artifacts from the exact Principal-approved SHA. It still does not contact a real VPS.
+
+## 6. GitHub evidence
+
+Issue Workpad records:
+
+- evidence class and environment;
+- exact command/result;
+- scenario ID or local protocol fixture;
+- artifact/log/CI link;
+- skipped/not-run reason;
+- commit/PR;
+- redacted media only when useful;
+- explicit `REAL VPS: NOT TESTED` before Owner E5.
+
+Never post credentials/private keys/tokens, unreviewed support bundles or unnecessary public VPS data.
+
+## 7. Failure policy
+
+Relevant failure blocks the applicable blind gate. Do not delete/weaken tests for green CI. Quarantine requires a tracked bug, owner, reason and bounded plan. Environment failure is not product PASS.
+
+An Owner E5 failure always overrides earlier simulated PASS for the affected behavior. Reproduce it as a blind regression scenario, fix, rerun affected E0–E4 evidence, obtain Principal re-approval and return to Owner for retest.
