@@ -6,6 +6,7 @@
     <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../src/VpsReady.Core/VpsReady.Core.csproj" />
     <ProjectReference Include="../../src/VpsReady.Application/VpsReady.Application.csproj" />
+    <ProjectReference Include="../../src/VpsReady.Infrastructure/VpsReady.Infrastructure.csproj" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
