@@ -27,19 +27,20 @@ Then complete the GitHub control-plane bootstrap autonomously:
 - Verify the repository is trusted and `.codex/config.toml` plus all custom role files are loaded.
 - Verify GitHub issue/comment/branch/PR write access.
 - Create or update every desired label from `.github/labels.yml` idempotently.
-- Use existing #1 release tracker, #2–#8 milestones, #9–#11 gates, #12–#18 M0 work, and #19 blind-development governance issue; do not duplicate them.
+- Use existing #1 release tracker, #2–#8 milestones, #9–#11 gates, #12–#18 M0 work, completed governance issue #19, and inactive Owner-test issue #20; do not duplicate them.
 - Link hierarchy through sub-issues when available or linked task lists otherwise.
+- Keep #20 inactive/backlog and never apply E5 until Principal creates `release/0.1.0` and the Owner actually tests it.
 - Add/update exactly one persistent `## Codex Workpad` for each issue activated now; maintain #1 as the Owner-facing summary.
 - Ensure status/evidence labels reflect the E0–E5 contract. Never apply E5 during development.
-- Correct stale issue text that requires real-VPS evidence before `release/*`.
+- Correct stale issue text that requires real-VPS evidence before `release/*`; create a tracked governance issue for any new material correction because #19 is completed.
 - Optionally create/reuse GitHub Project `VPSReady v0.1`; Issues remain canonical and Project failure is not a blocker.
 - Verify each M0 issue has outcome, scope, dependencies, risk, evidence class, validation and primary role.
-- Update the active ExecPlan with issue links and bootstrap evidence.
-- Commit/push only governance/harness corrections required for coherence, linked to #19 or the appropriate M0 issue.
+- Update the active ExecPlan with issue links including #20 and bootstrap evidence.
+- Commit/push only governance/harness corrections required for coherence, linked to the appropriate M0/governance issue.
 
 Use configured roles on demand. Spawn Researcher or Principal only for a genuine current-source/architecture/safety/evidence decision. Do not activate Manual QA and do not start product implementation.
 
 Do not ask the Owner ordinary questions. If GitHub write access or trusted role discovery is unavailable, document the exact blocker and stop before untracked implementation. The absence of a VPS is expected and is never this bootstrap's blocker.
 
-Finish only when docs/agents/GITHUB_BOOTSTRAP.md is complete. Report release tracker #1, hierarchy/labels/Project status, role discovery, current development SHA, and exact next ready M0 cards.
+Finish only when docs/agents/GITHUB_BOOTSTRAP.md is complete. Report release tracker #1, hierarchy/labels/Project status, role discovery, current development SHA, #20 inactive status, and exact next ready M0 cards.
 ```
