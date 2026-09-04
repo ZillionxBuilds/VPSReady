@@ -51,8 +51,8 @@ continuing. The baseline has no repository vulnerability or warning
 suppressions.
 
 The secret check scans tracked text for private-key material and populated
-credential-style assignments. Its two narrow allow-list paths are product
-redaction pattern/test fixtures, not keys; changes to either require review.
+credential-style assignments. Its narrow allow-list paths are product redaction
+pattern/test fixtures, not keys; changes to any of them require review.
 Ignored files are intentionally outside this scan because they may contain
 local generated state and must never be added to Git.
 

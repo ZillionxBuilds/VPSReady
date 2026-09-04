@@ -18,22 +18,25 @@ check_absent() {
   fi
 }
 
-# The redactor's pattern and its deliberately non-key test marker exercise the
-# product's fail-closed policy; neither is key material. Keep these narrow
+# The redactor's pattern and deliberately non-key test markers exercise the
+# product's fail-closed policy; none is key material. Keep these narrow
 # allow-list paths visible and reviewed rather than broadly excluding tests.
 check_absent \
   'private-key material' \
   '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
   ':!src/VpsReady.Infrastructure/Diagnostics/FailClosedRedactor.cs' \
   ':!tests/VpsReady.UnitTests/FailClosedRedactorTests.cs' \
+  ':!tests/VpsReady.UnitTests/DiagnosticLeakageTests.cs' \
   ':!eng/verify-tracked-secrets.sh'
 
 # Reject populated credential-style assignments while permitting the redaction
-# regex that detects their names and the scanner implementation itself.
+# regex/scanner implementation and deliberate synthetic redaction-test seeds.
 check_absent \
   'credential-style assignment' \
   '(password|passphrase|token|secret|api[_-]?key|credential)[[:space:]]*[=:][[:space:]]*[^[:space:]{}]+' \
   ':!src/VpsReady.Infrastructure/Diagnostics/FailClosedRedactor.cs' \
+  ':!tests/VpsReady.UnitTests/FailClosedRedactorTests.cs' \
+  ':!tests/VpsReady.UnitTests/DiagnosticLeakageTests.cs' \
   ':!eng/verify-tracked-secrets.sh'
 
 printf 'Tracked secret scan passed: no private-key material or populated credential-style assignments found.\n'
