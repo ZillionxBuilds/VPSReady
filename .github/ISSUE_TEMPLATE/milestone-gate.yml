@@ -1,52 +1,45 @@
 name: Major milestone gate
-description: Track integrated scope, regression, Manual QA, and Principal decision.
-title: "[MILESTONE] "
+description: Create a blind milestone or release-readiness gate.
+title: "[GATE] "
 body:
-  - type: input
-    id: milestone
-    attributes:
-      label: Milestone ID and name
-      placeholder: M2 — Secure VPS connection and server overview
-    validations:
-      required: true
   - type: input
     id: parent
     attributes:
-      label: Release tracking issue
-      placeholder: "#1"
+      label: Parent release/milestone
+      placeholder: "#1 / #4"
     validations:
       required: true
   - type: textarea
-    id: included
+    id: scope
     attributes:
-      label: Included card issues
-      placeholder: |
-        - [ ] #...
-        - [ ] #...
+      label: Gate scope and included issues
     validations:
       required: true
-  - type: textarea
-    id: exit
+  - type: checkboxes
+    id: evidence
     attributes:
-      label: Exit criteria
-      description: Observable criteria required before outer-gate QA begins.
-    validations:
-      required: true
-  - type: textarea
-    id: automation
-    attributes:
-      label: Automation regression requirements
-    validations:
-      required: true
+      label: Required blind evidence
+      options:
+        - label: E0 static checks complete
+        - label: E1 unit checks complete
+        - label: E2 stateful simulation/fault injection complete
+        - label: E3 local protocol complete or explicitly NOT RUN with reason
+        - label: E4 packaging/host evidence complete when applicable
+        - label: Diagnostics/redaction evidence complete
+        - label: REAL VPS explicitly marked NOT TESTED before Owner stage
   - type: textarea
     id: manual
     attributes:
-      label: Manual QA charter
-    validations:
-      required: true
+      label: Simulated Manual QA charter and result
+      description: Name local platforms/scenario IDs. Never claim E5.
   - type: textarea
     id: principal
     attributes:
-      label: Principal review focus
+      label: Principal decision
+      placeholder: BLIND_PHASE_APPROVED or PRINCIPAL_CHANGES_REQUESTED with rationale.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Unresolved risks and Owner-test focus
     validations:
       required: true

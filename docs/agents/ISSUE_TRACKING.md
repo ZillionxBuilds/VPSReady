@@ -1,62 +1,71 @@
 # GitHub Issue Tracking Contract
 
-Status: Owner-approved control-plane policy
+Status: Owner-approved control-plane policy — blind development edition
 
-GitHub Issues are the authoritative execution tracker for VPSReady autonomous development. Chat messages, local notes, agent memory, and terminal output are not substitutes.
+GitHub Issues are authoritative for VPSReady autonomous execution. Chat messages, agent memory and terminal output are not substitutes.
 
 ## 1. Hierarchy
 
-Use four levels:
+1. Release tracking issue — one for `v0.1.0 Core Basic`.
+2. Milestone/gate issues — M0–M6 and Gate A/B/C.
+3. Card/research/bug/governance/Owner-test issues — independently trackable work.
+4. Pull requests/commits/CI artifacts — evidence linked to an issue.
 
-1. **Release tracking issue** — one issue for `v0.1.0 Core Basic`; remains open until stable release or explicit cancellation.
-2. **Milestone issues** — M0–M6; summarize included cards and gate evidence.
-3. **Card/research/bug issues** — independently assignable work with acceptance criteria.
-4. **Pull requests/commits** — implementation evidence linked back to an issue.
+Prefer sub-issues when available; otherwise use linked task lists. Every issue links its parent milestone/release.
 
-Prefer GitHub sub-issues when available. Otherwise maintain linked task lists in the release and milestone issue bodies. A card must link its parent milestone.
+## 2. Required card contents
 
-## 2. Required issue contents
+Outcome, in/out scope, acceptance criteria, dependencies, risk, expected evidence classes, validation, branch/workspace, primary role and parent milestone.
 
-Every card must contain outcome, in/out scope, acceptance criteria, dependencies, risk, expected validation, intended branch/workspace, primary role, and parent milestone.
-
-Do not create vague cards such as “implement SSH.” Split until one owner can implement and verify the card without mixing unrelated concerns.
+Do not create vague cards such as “implement SSH.” Split until one owner can implement and blind-verify the card without mixing unrelated concerns.
 
 ## 3. Labels and states
 
-Desired labels are declared in `.github/labels.yml`. Bootstrap them before implementation.
+Desired labels live in `.github/labels.yml`. Open work normally has exactly one `type:*`, one `status:*`, one `role:*`, one `priority:*`, zero or more `risk:*` and zero or more `evidence:*` labels. Only one `status:*` may be present.
 
-An open work issue normally has exactly one `type:*`, one `status:*`, one current `role:*`, one `priority:*`, and zero or more `risk:*`. Only one `status:*` may be present.
+Routine:
 
-Routine flow:
-
-`status:backlog -> status:ready -> status:in-progress -> status:orchestrator-review -> status:qa-automation -> status:accepted`
+`backlog -> ready -> in-progress -> orchestrator-review -> qa-automation -> blind-verified -> accepted`
 
 Failure:
 
-`status:qa-automation -> status:qa-failed -> status:in-progress`
+`qa-automation -> qa-failed -> in-progress`
 
-Any active state may become `status:blocked` with a documented unblock action.
+Major blind gate:
 
-Major flow:
+`milestone-gate -> qa-automation -> manual-qa -> principal-gate -> blind-phase-approved`
 
-`status:milestone-gate -> status:qa-automation -> status:manual-qa -> status:principal-gate -> status:accepted`
+Final internal:
 
-Final internal outcome:
+`principal-gate -> ready-owner-vps`
 
-`status:principal-gate -> status:ready-owner`
+Owner stage:
 
-## 4. Persistent Workpad
+`ready-owner-vps -> owner-vps-testing -> owner-vps-failed | owner-vps-passed -> owner-approved`
 
-Use exactly one persistent top-level issue comment beginning with `## Codex Workpad`. Edit it in place. Do not use the issue description for volatile progress or create streams of tiny status comments.
+Any active state may become `blocked` with exact unblock action. Expected lack of a development VPS is not a blocker.
 
-Template:
+## 4. Evidence labels
+
+- `evidence:e0-static`
+- `evidence:e1-unit`
+- `evidence:e2-simulated`
+- `evidence:e3-local-protocol`
+- `evidence:e4-packaging`
+- `evidence:e5-owner-vps`
+
+A label means evidence actually exists and is linked. Never apply E5 based on simulation or a local container.
+
+## 5. Persistent Workpad
+
+Use exactly one top-level comment beginning `## Codex Workpad` and edit it in place.
 
 ```markdown
 ## Codex Workpad
 
 **Status:** `IN_PROGRESS`  
 **Primary role:** Developer  
-**Branch/worktree:** `feature/123-short-slug` / `<absolute path>`  
+**Branch/worktree:** `feature/123-short-slug` / `<path>`  
 **Base commit:** `<sha>`  
 **Last updated:** `YYYY-MM-DD HH:MM UTC`
 
@@ -66,56 +75,70 @@ Template:
 ### Acceptance Criteria
 - [ ] AC1 — ...
 
+### Evidence Classification
+- [ ] E0 Static
+- [ ] E1 Unit
+- [ ] E2 Simulated
+- [ ] E3 Local protocol — PASS / NOT RUN
+- [ ] E4 Packaging — PASS / NOT APPLICABLE
+- [ ] E5 Owner real VPS — NOT TESTED before release
+
 ### Validation
 - [ ] `<exact command>` — pending
 
 ### Evidence
 - Commit/PR:
-- CI/logs/artifacts:
-- Screenshots/video when applicable:
+- CI/artifacts/scenario IDs:
+- Operation/error IDs or sanitized bundle:
 
 ### Decisions and Risks
-- None, or concise factual entries.
-
-### Notes
-- `YYYY-MM-DD HH:MM UTC` — meaningful progress.
+- Include explicit `REAL VPS: NOT TESTED` before Owner E5.
 
 ### Blockers
-- None, or blocker / impact / attempted actions / exact unblock action.
+- None, or blocker / impact / attempts / exact unblock action.
 
 ### Next Action
 - ...
 ```
 
-The current issue owner updates the Workpad. The Orchestrator owns status labels and resolves concurrent-edit conflicts.
+Current owner updates the Workpad. Orchestrator owns status labels and resolves concurrent edits.
 
-## 5. Update cadence
+## 6. Update cadence
 
-Update GitHub immediately at claim; after plan formation; after meaningful checkpoints or changed decisions; before/after QA handoff; on failure/blocker; when commit/PR changes; before the run ends; and at least once per 30 minutes during long uninterrupted active work when technically practical.
+Update immediately at claim, after plan formation, meaningful checkpoint/decision, before/after QA handoff, failure/blocker, commit/PR change and before run end; at least once per 30 minutes during long active work when practical.
 
-A heartbeat must state real progress or next action. Do not post empty “still working” updates.
+A heartbeat states real progress or next action. Do not post empty “still working” comments.
 
-## 6. Ownership and concurrency
+## 7. Ownership and branches
 
-- One primary agent owns one card/workspace at a time.
-- Two Developers may work in parallel only on independent cards and separate worktrees.
-- QA Automation may verify a completed card while Developers work elsewhere.
-- Manual QA and Principal activate only at major milestones/final gate or genuine escalation.
-- Researcher uses a dedicated research issue.
-- Takeover requires Orchestrator ownership/Workpad update.
+- one primary agent per issue/workspace;
+- two Developers only on independent worktrees;
+- routine feature/fix branches start from `development` and target `development`;
+- Owner-discovered release fixes start from `release/x.y.z` and target that release branch, then synchronize to `development`;
+- every PR links the issue;
+- takeover requires Orchestrator Workpad/ownership update.
 
-## 7. Branch and PR linkage
+## 8. Public diagnostic safety
 
-Use `feature/<issue>-<slug>`, `fix/<issue>-<slug>`, or research branch only when research commits artifacts. Every PR links the issue and targets `development` unless release/hotfix policy says otherwise. Do not combine unrelated issues.
+The repository is public. GitHub issue text uses only the app-generated Safe Issue Report or separately reviewed sanitized evidence.
 
-## 8. Closing rules
+Do not post:
 
-Close a routine card only after criteria and targeted QA pass, evidence is linked, Orchestrator accepts/integrates into `development`, and no blocker remains. Close major milestone only after Principal approval. Keep release tracker open until Owner-approved stable release or explicit cancellation.
+- passwords/passphrases/tokens;
+- private keys/full public keys;
+- raw SSH config/known-hosts/authorized_keys;
+- provider details;
+- raw IP/hostname/username unless Owner explicitly decides disclosure is safe;
+- unreviewed support bundles or screenshots.
 
-## 9. Discoveries and scope
+Record operation ID, error code, release SHA, stage and pseudonymous server reference instead.
 
-Create a new backlog issue for out-of-scope improvements, link it, and continue current work unless it is a genuine blocker. Never hide expansion inside a card.
+## 9. Closing rules
+
+Close routine card only after criteria, targeted blind QA, evidence and Orchestrator integration pass. Close major milestone after Principal `BLIND_PHASE_APPROVED`. Keep release tracker open through Owner E5 and stable release/cancellation.
+
+Owner-test defects remain open until affected Owner retest passes or Owner explicitly accepts/defer them.
 
 ## 10. GitHub Project
 
-A GitHub Project is a recommended visual view, but Issues, labels, relationships, and Workpads remain canonical. If Project permission is unavailable, continue with Issues rather than creating a second tracker.
+A GitHub Project is an optional view. Issues, labels, relationships and Workpads remain canonical. Project permission failure does not justify a second tracker.

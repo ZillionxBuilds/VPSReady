@@ -1,48 +1,29 @@
 # VPSReady Autonomous Workflow
 
-Status: Owner-approved workflow
+Status: Owner-approved workflow — blind development edition
 
-This workflow is designed for long autonomous Codex runs with a fast routine-card loop and explicit gates only at major milestones.
+This workflow supports long autonomous Codex runs with a fast routine-card loop, explicit major gates and no real VPS access before a Principal-created release branch.
 
-## 1. Work Unit
+## 1. Work unit
 
-A normal unit of work is a **card**. Each card should have:
+A normal unit is a **card**. Each card has a clear outcome, acceptance criteria, one primary owner, dependencies, risk, evidence plan and isolated branch/workspace.
 
-- a clear goal;
-- relevant acceptance criteria;
-- one primary Developer owner;
-- dependencies/blockers;
-- a branch/workspace when implementation is required;
-- verification evidence before acceptance.
+Prefer small independently verifiable cards. Every non-trivial card exists in GitHub before implementation begins and uses one persistent `## Codex Workpad`.
 
-Prefer small, independently verifiable cards over broad tasks that mix unrelated concerns.
+## 2. Routine card loop
 
-## 2. Routine Card Loop
+`Developer -> Orchestrator readiness -> QA Automation -> accepted into development -> next card`
 
-Routine cards use this flow:
+1. Orchestrator assigns a ready issue and names expected evidence classes.
+2. Developer implements in `feature/<issue>-<slug>` or `fix/<issue>-<slug>`, adds tests, self-reviews and updates Workpad.
+3. Orchestrator checks scope, dependencies, acceptance coverage and handoff evidence; this is not Principal review.
+4. QA Automation independently verifies with targeted E0–E3 checks and reports PASS/FAIL.
+5. FAIL returns to Developer with reproducible evidence; PASS allows Orchestrator integration/acceptance into `development`.
+6. Manual QA and Principal are not invoked for ordinary cards.
 
-`Developer -> Orchestrator -> QA Automation -> accepted into development -> next card`
+No agent requests a real VPS for a routine card. Missing VPS access is expected, not blocked work.
 
-Detailed flow:
-
-1. **Orchestrator assigns** a ready card to one Developer and identifies dependencies/expected acceptance criteria.
-2. **Developer implements** the card in an isolated branch/workspace, adds appropriate tests, self-reviews, and runs targeted verification.
-3. **Developer hands off to Orchestrator** with branch/commit, summary, criteria addressed, tests run, and known risks.
-4. **Orchestrator checks readiness**, scope, dependencies, and evidence. This is a coordination/readiness check, not a Principal-level code review.
-5. If ready, **Orchestrator sends the card to QA Automation**.
-6. **QA Automation independently verifies** acceptance criteria, negative/boundary behavior, and relevant safety conditions.
-7. If QA fails, the card returns to a Developer with reproducible evidence. The fix is re-verified by QA Automation.
-8. If QA passes, **Orchestrator accepts/integrates the card into `development`** and dispatches the next eligible work.
-
-### Routine-card rule
-
-Manual QA and Principal review are **not required** for ordinary cards.
-
-Do not add extra gates simply because a card touched user-visible code. Escalate only when the card creates a genuine major-milestone, architecture, or safety decision as defined below.
-
-## 3. Routine Card States
-
-Recommended state machine:
+## 3. Routine states
 
 - `BACKLOG`
 - `READY`
@@ -51,158 +32,134 @@ Recommended state machine:
 - `READY_FOR_ORCHESTRATOR`
 - `READY_FOR_AUTOMATION_QA`
 - `AUTOMATION_QA_FAILED`
+- `BLIND_VERIFIED`
 - `ACCEPTED_IN_DEVELOPMENT`
 - `BLOCKED`
 
-The Orchestrator owns authoritative card state transitions.
+The Orchestrator owns authoritative transitions. Workpad evidence must identify E0–E4 accurately.
 
-A successful agent run or compilation alone does not make a card accepted.
+## 4. Major milestone gates
 
-## 4. Major Milestone Gate
+A major milestone is a coherent user-facing or risk-bearing phase composed of accepted cards.
 
-A major milestone is a coherent user-facing or risk-bearing phase composed of multiple accepted cards. The Orchestrator declares a milestone candidate only when its required cards are integrated and there are no known blocking failures.
+`integrated development -> blind automation regression -> simulated Manual QA -> Principal -> next phase`
 
-Major milestone flow:
+1. Orchestrator checks milestone completeness.
+2. QA Automation runs milestone regression through unit, deterministic scenario and available local protocol evidence.
+3. Manual QA exercises the complete workflow using test-only simulated scenario profiles and available packaged builds. It records `SIMULATED ENVIRONMENT` prominently.
+4. Principal reviews architecture, safety, maintainability, diagnostics, unresolved risk and evidence honesty.
+5. Principal returns `BLIND_PHASE_APPROVED` or `PRINCIPAL_CHANGES_REQUESTED`.
 
-`integrated development -> QA Automation regression -> QA Manual -> Principal -> next phase`
+Principal does not repeat QA. No milestone before Owner testing may claim real VPS/UFW/systemd/reboot PASS.
 
-Detailed flow:
+## 5. Early Principal escalation
 
-1. **Orchestrator confirms milestone completeness** against the active specification.
-2. **QA Automation runs milestone-level regression**, including relevant integration and safety coverage beyond individual-card targeted tests.
-3. On automation PASS, **QA Manual performs milestone exploratory/user-flow validation**.
-4. On Manual QA PASS, **Principal performs the final milestone gate**.
-5. Principal chooses one outcome:
-   - `PHASE_APPROVED` — Orchestrator may start the next phase.
-   - `PRINCIPAL_CHANGES_REQUESTED` — corrective cards are created and routed through the normal engineering/QA loop before the milestone is re-evaluated.
+Consult Principal before a milestone only for a genuine blocker:
 
-The Principal should not repeat QA. Principal review focuses on architecture, technical coherence, safety, maintainability, unresolved risk, and whether evidence is strong enough to advance.
+- architecture choice with substantial cross-cutting consequence;
+- SSH/firewall safety ambiguity unresolved by the specification;
+- security/privacy/redaction trade-off;
+- conflicting acceptance criteria;
+- dependency/platform limitation requiring material design change;
+- evidence boundary ambiguity;
+- blocked technical decision the team cannot safely resolve.
 
-## 5. When to Escalate to Principal Early
+Do not escalate ordinary API choices, naming, local refactors, routine test failures or expected absence of a VPS. Researcher may gather current primary-source evidence first.
 
-Principal may be consulted before a milestone only for a genuine blocker such as:
+## 6. Blind development rules
 
-- architecture decisions with significant cross-cutting consequences;
-- SSH/firewall safety uncertainty with lockout risk;
-- a security trade-off not resolved by the active specification;
-- conflicting acceptance criteria or technical constraints;
-- a dependency/platform limitation that may require a material design change;
-- a blocked technical decision that the team cannot safely resolve inside existing rules.
+- No agent receives or uses real VPS credentials/endpoints before `release/*`.
+- CI contains no public SSH target or VPS secret.
+- Use the stateful scenario host, golden fixtures, fault injection, local contained OpenSSH where available and packaging runners.
+- Every Workpad/gate states evidence class and `REAL VPS: NOT TESTED` until Owner evidence exists.
+- Simulation must model state and failure; no unconditional fake success.
+- Missing E5 does not prevent phase progression to the release candidate, because E5 is the purpose of Owner testing.
 
-Do not escalate ordinary library/API choices, refactors, naming, local implementation details, or fixable test failures.
+## 7. Final internal gate
 
-The Orchestrator may involve Researcher before Principal when external evidence can resolve the uncertainty.
+When approved v0.1 scope is complete:
 
-## 6. Final Internal Gate and Release Branch
+1. Orchestrator reconciles all required cards, risks and development SHA.
+2. QA Automation runs full E0–E4 regression and diagnostic/redaction/export checks.
+3. QA Manual performs final simulated end-to-end/cross-platform validation and names actually exercised hosts.
+4. Principal executes the blind release-readiness gate.
+5. On approval, Principal creates `release/0.1.0` from the exact approved `development` SHA.
+6. Candidate CI produces immutable artifacts/checksums tied to that SHA.
+7. Principal updates release tracker to `READY_FOR_OWNER_VPS_TEST` and provides the Owner protocol and known unverified risks.
 
-When all approved release scope is complete:
+Creation of `release/0.1.0` means:
 
-1. Orchestrator confirms all required cards/milestones are accepted.
-2. QA Automation runs the full release-relevant regression suite and required real Ubuntu integration/E2E checks.
-3. QA Manual performs final end-to-end exploratory and cross-platform release validation.
-4. Principal conducts the final internal technical/release-readiness gate.
-5. If approved, **Principal creates `release/x.y.z` from the exact approved `development` commit**.
+> The autonomous team considers implementation and blind evidence complete. Real VPS behavior has not yet been tested and is ready for staged Owner validation.
 
-Creation of `release/x.y.z` means:
+Only Principal creates the normal release branch. Principal does not merge to `main`, tag or publish stable.
 
-> The autonomous team considers implementation, automated QA, Manual QA, and Principal review complete and the candidate is READY FOR OWNER TEST.
+## 8. Owner real-VPS stage
 
-Only the Principal may create the normal `release/x.y.z` branch.
-
-## 7. Release Branch Rules
-
-`release/x.y.z` is temporary and represents an Owner-test candidate.
-
-After it is created:
-
-- no new product scope or normal feature work is added;
-- only Owner-discovered defects, release blockers, packaging fixes, compatibility fixes, and necessary release documentation may change it;
-- any production-code change invalidates the previous READY FOR OWNER TEST state until affected automated checks pass again and the Principal re-approves readiness;
-- Manual QA must be repeated when the fix materially affects user-visible workflow or when Principal determines exploratory re-validation is warranted;
-- applicable fixes must be synchronized back to `development` so branches do not diverge.
-
-## 8. Owner Gate
-
-The Owner is intentionally not involved in routine cards or normal major milestones.
-
-The Owner enters the workflow when Principal has created a ready `release/x.y.z` candidate.
+Owner follows `docs/owner-testing/OWNER_VPS_TEST_PROTOCOL.md` on a disposable/recoverable VPS and exact candidate artifact.
 
 Owner outcomes:
 
-- **APPROVED** — the release may be promoted to `main` and tagged/published as stable according to the Owner's explicit authorization.
-- **CHANGES REQUESTED** — Principal/Orchestrator triage the finding, dispatch corrective work, re-run affected QA, and return a Principal-approved candidate for Owner re-test.
+- `OWNER_VPS_PASSED` — all release-blocking stages pass; Owner may explicitly approve promotion.
+- `OWNER_VPS_FAILED` — one or more product defects found; safe issue report/support evidence is provided.
+- `BLOCKED_ENVIRONMENT` — test could not be performed safely; not a PASS.
 
-No role may infer Owner approval from silence or from passing internal gates.
+The autonomous team must never ask for the Owner's password/private key or direct server access. Diagnose from safe reports and bundles.
 
-## 9. Major Milestone States
+## 9. Release defect loop
 
-Recommended outer-loop states:
+For each Owner-reported defect:
 
-- `MILESTONE_CANDIDATE`
-- `IN_MILESTONE_AUTOMATION_REGRESSION`
-- `MILESTONE_AUTOMATION_FAILED`
-- `READY_FOR_MANUAL_QA`
-- `MANUAL_QA_FAILED`
-- `READY_FOR_PRINCIPAL`
-- `PRINCIPAL_CHANGES_REQUESTED`
-- `PHASE_APPROVED`
-- `READY_FOR_OWNER_TEST`
-- `OWNER_CHANGES_REQUESTED`
-- `OWNER_APPROVED`
-- `RELEASED`
+1. Principal/Orchestrator creates or normalizes a bug linked to release tracker and exact SHA.
+2. Developer reproduces it using a deterministic scenario/fixture when possible and adds a regression test.
+3. Use a `fix/<issue>-<slug>` branch from `release/0.1.0`; PR targets the release branch.
+4. QA Automation reruns affected blind evidence. Manual QA repeats only affected major user journeys when warranted.
+5. Principal reviews and marks `READY_FOR_OWNER_VPS_RETEST`.
+6. Orchestrator synchronizes the accepted fix back to `development`.
+7. Owner retests the affected stage plus requested regression subset.
 
-These states are outer gates. They must not be imposed on every routine card.
+Any production change invalidates previous readiness for affected behavior. Never describe the fix as real-VPS PASS before Owner retest.
 
-## 10. Branch Workflow
+## 10. Release branch rules
 
-Normal development:
+After `release/x.y.z` exists:
 
-`feature/* or fix/* -> development`
+- no new product scope or normal feature work;
+- only Owner-discovered defects, release blockers, packaging/compatibility fixes and necessary release documentation;
+- every change is issue-linked and revalidated;
+- fixes are synchronized back to `development`;
+- support bundles are reviewed/redacted before public sharing;
+- stable promotion requires explicit Owner authorization.
 
-Final release preparation:
+## 11. Owner gate
 
-`development --Principal approval--> release/x.y.z --Owner approval--> main -> stable tag/release`
+The Owner is intentionally absent from routine cards and internal milestones. Owner enters when `release/*` is ready for real-VPS testing or when an unavoidable Owner-reserved decision blocks safe progress.
 
-Hotfixes for an already released version may branch from `main`, but still require appropriate QA and explicit Owner approval before stable release.
+Silence is not approval. Passing internal gates is not approval. Only explicit Owner authorization allows promotion to `main` and a stable tag/release.
 
-There is no permanent `pre-release` branch.
+## 12. Parallelism
 
-## 11. Parallelism
+- one primary owner per issue/workspace;
+- up to two Developers on independent cards;
+- Orchestrator prevents overlapping foundation edits;
+- Researcher may run in parallel without mutating the same work;
+- QA Automation may verify a completed card while Developers continue elsewhere;
+- Manual QA/Principal spawn only at major gates or genuine escalation;
+- no two agents share a mutable test workspace blindly.
 
-Use parallel work when tasks are independent and it improves throughput.
-
-Rules:
-
-- one primary Developer owns one card/workspace at a time;
-- the two Developers may work in parallel on independent cards;
-- the Orchestrator tracks dependencies and avoids assigning conflicting edits blindly;
-- shared foundational architecture should be stabilized before parallel cards depend on incompatible versions of it;
-- Researcher can run in parallel with implementation when research does not block or mutate the same work;
-- QA Automation may verify one completed card while Developers continue on other independent work.
-
-## 12. Verification Policy
-
-Testing effort should match risk.
-
-For a routine low-risk card, run the targeted meaningful tests needed to prove its behavior. Do not repeatedly run full regression without a new reason.
-
-Broader regression belongs at major milestones and final release readiness.
-
-Critical SSH/firewall lockout-sensitive behavior requires real Ubuntu integration/E2E verification before the final release branch is considered Owner-ready.
-
-## 13. Handoff Format
-
-Use a compact handoff:
+## 13. Handoff format
 
 ```text
 Card/Milestone:
 Status:
 Branch/Commit:
+Evidence classes:
 Summary:
 Acceptance criteria addressed:
-Tests/Evidence:
+Tests/scenarios/artifacts:
+Diagnostics/logging evidence:
+REAL VPS: NOT TESTED | OWNER E5 result
 Known risks/blockers:
 Next owner/action:
 ```
 
-A handoff with failed tests must say FAIL/BLOCKED explicitly. Do not present partial or unverified behavior as complete.
+A handoff with failed/not-run checks says so explicitly. Partial or simulated behavior is never presented as complete real-infrastructure validation.
