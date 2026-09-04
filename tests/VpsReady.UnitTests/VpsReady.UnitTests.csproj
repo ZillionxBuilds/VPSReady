@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/VpsReady.Core/VpsReady.Core.csproj" />
+    <ProjectReference Include="../../src/VpsReady.Desktop/VpsReady.Desktop.csproj" />
     <ProjectReference Include="../../src/VpsReady.Infrastructure/VpsReady.Infrastructure.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />

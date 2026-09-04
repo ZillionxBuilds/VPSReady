@@ -1,0 +1,6 @@
+{
+  "scenario_id": "scenario.timeout",
+  "kind": "timeout",
+  "expected_error": "TIMEOUT",
+  "evidence": "E2"
+}

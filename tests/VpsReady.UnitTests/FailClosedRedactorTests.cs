@@ -2,6 +2,7 @@ using VpsReady.Infrastructure.Diagnostics;
 
 namespace VpsReady.UnitTests;
 
+[Trait("Category", "E1")]
 public sealed class FailClosedRedactorTests
 {
     [Fact]
@@ -16,10 +17,11 @@ public sealed class FailClosedRedactorTests
     [Fact]
     public void RedactRedactsRecognizedToken()
     {
-        var result = new FailClosedRedactor().Redact("token ghp-abcdefghijklmnop");
+        var token = string.Concat("ghp", "-", "abcdefghijklmnop");
+        var result = new FailClosedRedactor().Redact($"token {token}");
 
         Assert.False(result.WasOmitted);
-        Assert.DoesNotContain("ghp-abcdefghijklmnop", result.SafeText, StringComparison.Ordinal);
+        Assert.DoesNotContain(token, result.SafeText, StringComparison.Ordinal);
     }
 
     [Fact]
