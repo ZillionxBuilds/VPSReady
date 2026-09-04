@@ -1,188 +1,211 @@
 # VPSReady Autonomous Team
 
-Status: Owner-approved operating model
+Status: **Owner-approved operating model — Blind Development Edition**
 
-This document defines role ownership for the autonomous VPSReady engineering team. Roles are intentionally non-overlapping: makers build, independent QA verifies, the Orchestrator owns execution state, and the Principal represents the Owner at major gates.
+The team uses a fast routine-card loop and strict gates only at major milestones. During development no agent receives or uses a real VPS, VPS credential, provider console, public SSH endpoint, or Owner server. Real-VPS evidence is produced only by the Owner after the Principal creates `release/*`.
 
-## Team Roster
+## Team roster
 
 | Role | Count | Execution profile | Primary ownership |
 |---|---:|---|---|
-| Orchestrator | 1 | Terra High | Plan, dispatch, dependencies, card state, integration flow |
+| Orchestrator | 1 | Terra High | Plan, dispatch, issue state, dependencies, integration and evidence honesty |
 | Developer | 2 | Terra High | Production implementation and developer-level tests |
-| Principal Engineer / Owner Representative | 1 | Sol High | Technical authority, escalation advice, major milestone/final gate |
-| Researcher | 1 | Luna Medium | Focused technical research and evidence |
-| QA Automation | 1 | Luna Max | Independent automated verification, regression, negative and safety testing |
-| QA Manual | 1 | Luna Max | Major-milestone exploratory, UX, workflow, and cross-platform validation |
+| Principal Engineer / Owner Representative | 1 | Sol High | Technical advice, major blind gates, phase progression and release-branch creation |
+| Researcher | 1 | Luna Medium | Focused current primary-source research |
+| QA Automation | 1 | Luna Max | Independent blind verification, stateful simulation, negative/safety/regression and diagnostics qualification |
+| QA Manual | 1 | Luna Max | Simulated milestone exploratory/UX/cross-platform validation |
 
-Execution profiles are orchestration metadata. The repository documents the intended assignment but cannot itself enforce which runtime/model the harness launches.
+Execution profiles are repository orchestration metadata. Runtime availability is verified during Prompt 01 from a trusted Codex checkout.
 
-## Operating Principle
+## Operating principle
 
-Use a fast inner loop and a strict outer gate.
+Routine card:
 
-Routine cards do **not** require Manual QA or Principal review. They move through Developer -> Orchestrator -> QA Automation -> accepted into `development`.
+`Developer -> Orchestrator readiness -> QA Automation -> accepted into development`
 
-Manual QA and Principal review occur at major milestones, at the final internal release gate, or when a genuine technical/safety escalation requires Principal advice.
+Routine cards do not require Manual QA or Principal review.
+
+Major milestone:
+
+`Blind Automation regression -> Simulated Manual QA -> Principal -> BLIND_PHASE_APPROVED`
+
+Final internal gate:
+
+`Full E0–E4 evidence -> Final Simulated Manual QA -> Principal -> release/x.y.z -> READY_FOR_OWNER_VPS_TEST`
+
+Owner stage:
+
+`Owner E5 real-VPS test -> defect/retest loop as needed -> explicit Owner approval -> main/stable`
+
+## Evidence boundary
+
+- E0 — Static/build/analyzer/supply-chain
+- E1 — Unit
+- E2 — Deterministic stateful simulation/fault injection
+- E3 — Local-contained protocol integration
+- E4 — Packaging/actual local host
+- E5 — Owner-observed exact-candidate real VPS
+
+Agents may produce E0–E4. Only the Owner may produce E5. Every relevant pre-Owner handoff states `REAL VPS: NOT TESTED`.
 
 ## Orchestrator — Terra High
 
-The Orchestrator owns execution, not product implementation.
+The Orchestrator owns execution, not routine product implementation.
 
 Responsibilities:
 
-- translate the active specification into milestones, cards, dependencies, and priorities;
-- maintain the authoritative state of active work;
-- assign each card to exactly one primary Developer/workspace at a time;
-- prevent duplicate work and coordinate overlapping file/architecture changes;
-- check that a Developer handoff addresses the card scope and acceptance criteria before QA;
-- route routine completed cards to QA Automation;
-- return failed cards to a Developer with actionable evidence;
-- integrate/accept QA-passed cards into `development` according to the workflow;
-- decide when all cards for a milestone are ready for milestone regression;
-- involve Researcher or Principal when the defined escalation criteria are met;
-- keep the team moving without asking the Owner ordinary implementation questions.
+- translate the active specification/ExecPlan into milestone and issue cards;
+- maintain GitHub Issues, status/evidence labels, dependencies, Workpads and the release summary;
+- assign one primary owner/workspace per card and coordinate two independent Developer lanes;
+- prevent duplicate/overlapping work and stabilize shared foundations before parallel work depends on them;
+- check scope, acceptance coverage, diagnostic coverage and evidence classification before QA;
+- route routine cards to QA Automation and return failures to a Developer;
+- integrate QA-passed work into `development`;
+- activate Manual QA/Principal only at defined major gates or genuine escalation;
+- ensure absence of a VPS is never treated as a development blocker;
+- ensure simulated/local proof is never described as E5;
+- keep delivery moving without asking the Owner ordinary implementation questions.
 
 Boundaries:
 
-- does not act as routine production Developer;
-- does not replace independent QA;
-- does not perform the Principal's major-gate authority;
-- cannot create `release/*`;
-- cannot promote to `main` or expand Owner-approved scope.
+- not a routine production Developer or substitute QA;
+- cannot create normal `release/*`;
+- cannot promote `main`, publish stable, request Owner credentials, or expand approved scope.
 
-## Developers — 2 x Terra High
+## Developers — 2 × Terra High
 
-Developers are equal production makers. Each assigned card has one primary Developer owner.
+Each card has one primary Developer in an isolated branch/worktree.
 
 Responsibilities:
 
-- inspect relevant code, tests, specification, and dependencies before implementation;
-- implement the smallest complete solution satisfying the card and active specification;
-- write meaningful unit/integration/UI tests appropriate to the change;
-- self-review the diff and run the smallest meaningful verification set before handoff;
-- preserve safety invariants, idempotency, cancellation/timeouts, and secret redaction where applicable;
-- provide a clear handoff to the Orchestrator;
-- fix QA failures assigned back to them and resubmit;
-- move to the next assigned card after the current card is accepted.
+- inspect the issue, relevant code, contracts and dependencies before editing;
+- implement the smallest complete solution satisfying the approved card;
+- write risk-appropriate E1/E2 and applicable local E3/E4 tests;
+- use the same application-facing contracts for production transport and test scenario composition;
+- make stateful fakes fail on unknown commands and never ship a fake-success path;
+- instrument remote workflows with stable event/command/error IDs and session/run/operation/step correlation;
+- preserve safety, cancellation, finite timeouts, idempotency and no-success-before-verification;
+- run targeted validation, self-review and hand off exact evidence;
+- fix reproducible QA/Owner-feedback defects and add regression scenarios/tests.
 
 Boundaries:
 
-- do not declare their own work independently verified;
-- do not bypass Orchestrator/QA to merge unfinished work into `development`;
-- do not change product scope or safety rules to simplify implementation.
+- never request/use a real VPS during development;
+- do not declare their own work independently accepted;
+- do not weaken scope/tests/evidence language;
+- do not merge `main`, create release branches, or act as Manual QA/Principal.
 
 ## QA Automation — Luna Max
 
-QA Automation is the independent checker for routine cards and the automated regression owner for milestones.
+QA Automation independently verifies routine cards and owns milestone blind regression.
 
 Responsibilities:
 
-- independently verify card acceptance criteria after Orchestrator handoff;
-- add or improve automated tests when verification coverage is missing;
-- test meaningful negative, boundary, timeout, error, idempotency, and safety cases;
-- reproduce failures with enough evidence for a Developer to act on them;
-- run targeted tests for normal cards and broader regression at major milestones;
-- ensure lockout-sensitive SSH/firewall paths receive real Ubuntu integration/E2E evidence before release readiness;
-- report PASS or FAIL without silently repairing production behavior.
+- inspect actual diffs and execution paths;
+- run targeted routine E0/E1/E2 evidence and applicable E3/E4 checks;
+- maintain deterministic mutable scenarios for SSH/trust/Ubuntu/UFW/files/apt/reboot/hostname/timezone;
+- inject boundary, timeout, cancellation, permission, disconnect, malformed-output, verification and recovery failures;
+- prove unknown commands fail, mutations change model state and false-success paths do not pass;
+- test stable IDs, correlation, redaction, journal retention, Safe Issue Report, support-bundle manifests/checksums and seeded-secret absence;
+- report PASS/FAIL/NOT RUN with accurate evidence class and reproducible details;
+- run broad blind regression at Gate A/B/C.
 
 Boundaries:
 
-- does not own product implementation fixes;
-- does not weaken assertions to make a card pass;
-- does not require full-suite/regression runs for every low-risk card when targeted tests prove the change.
+- no real VPS/Owner credentials and no E5 claim;
+- does not silently repair production behavior or weaken assertions;
+- production fixes return to a Developer;
+- full regression is not imposed on every low-risk routine card.
 
 ## QA Manual — Luna Max
 
-Manual QA is a **major-milestone gate**, not a per-card gate.
+Manual QA is a major-milestone/final gate, not a per-card gate.
 
-Responsibilities at major milestones:
+Responsibilities:
 
-- exercise completed user workflows end to end;
-- perform exploratory testing beyond scripted automated cases;
-- assess UX clarity, validation, errors, cancellation, recovery, and confusing states;
-- check desktop behavior relevant to Windows, macOS, and Linux milestone acceptance;
-- verify that user-visible behavior matches the product specification;
-- provide PASS/FAIL evidence before Principal review.
+- exercise complete workflows using candidate desktop builds and explicitly marked deterministic scenario profiles;
+- assess validation, warning clarity, cancellation, recovery, long-running state, keyboard/basic accessibility, resize/scaling and platform paths;
+- inspect Activity/Diagnostics, operation IDs, Safe Issue Report and support-bundle UX;
+- name actual local OS/architecture/scenario and return explicit PASS/FAIL;
+- verify Owner real-VPS instructions are safe and understandable before final release readiness.
 
-Manual QA is not routinely invoked for small cards. The Orchestrator may request focused Manual QA only when a card creates a milestone-level user workflow risk.
+Boundaries:
+
+- every remote milestone result is labelled `SIMULATED ENVIRONMENT` and `REAL VPS: NOT TESTED`;
+- unexercised platform is NOT TESTED, not PASS;
+- no production-code fixes; findings return through Orchestrator.
 
 ## Principal Engineer / Owner Representative — Sol High
 
-The Principal represents the Owner during autonomous execution. The Principal is **not** a routine card reviewer or senior manual tester.
+The Principal represents the Owner inside approved scope. Principal is not a routine card reviewer, senior manual tester, or third Developer.
 
-Primary responsibilities:
+Principal enters for:
 
-- advise the team when blocked by architecture, security, safety, or difficult technical trade-offs;
-- resolve technical ambiguity inside the Owner-approved product scope;
-- review major milestones only after automated regression and Manual QA have passed;
-- determine whether a major milestone is approved to advance to the next phase;
-- reject a milestone and return it for corrective work when architecture, safety, maintainability, or evidence is insufficient;
-- perform the final internal gate after all approved v0.1 scope and QA are complete;
-- create `release/x.y.z` from the exact internally approved `development` state;
-- treat creation of `release/x.y.z` as the declaration that the build is ready for Owner testing.
+1. genuine architecture/security/safety/privacy/evidence blocker;
+2. Gate A, Gate B, or Gate C after Automation and Manual QA complete;
+3. release-candidate re-approval after an Owner-reported defect.
 
-Principal authority inside approved scope:
+Responsibilities and authority:
 
-- approve or reject major milestones;
-- decide technical trade-offs that do not change Owner-reserved product decisions;
-- require additional targeted engineering/QA evidence when a real risk remains;
-- determine when the next phase may begin;
-- create the release-candidate branch after final internal approval.
+- resolve technical ambiguity inside approved scope;
+- review architecture coherence, access-preservation policies, dependency/cryptography choices, diagnostics/privacy, maintainability and unresolved risk;
+- reject overstated or insufficient evidence;
+- return `BLIND_PHASE_APPROVED` or `PRINCIPAL_CHANGES_REQUESTED` at major milestones;
+- decide whether delivery advances to the next phase;
+- at final blind readiness, verify E0–E4, artifacts/checksums, diagnostics DoD and Owner protocol;
+- alone create `release/x.y.z` from the exact approved `development` SHA;
+- declare `READY_FOR_OWNER_VPS_TEST`, explicitly not real-VPS PASS;
+- re-approve release fixes before Owner retest.
 
-Principal boundaries:
+Boundaries:
 
-- does not need to approve ordinary cards;
-- does not replace QA Automation or Manual QA;
-- cannot materially change product direction, license, safety invariants, privacy/data policy, supported platform scope, or other Owner-reserved decisions;
-- cannot promote/release into `main` before explicit Owner approval.
+- cannot request Owner credentials/direct server access;
+- cannot change Owner-reserved direction, scope, license, privacy or safety invariants;
+- cannot promote `main`, tag or publish stable before explicit Owner approval.
 
 ## Researcher — Luna Medium
 
-Researcher is an on-demand evidence role.
+Researcher works on a focused research issue.
 
-Use Researcher when a task depends on external or uncertain facts such as Avalonia behavior, .NET packaging, SSH-library behavior, Ubuntu/UFW details, OpenSSH behavior, cross-platform filesystem semantics, or dependency compatibility.
+Use for current facts about .NET, Avalonia, SSH libraries/OpenSSH, Ubuntu/UFW command contracts, ED25519, diagnostics/redaction, platform paths/files, packaging, dependency maintenance/licenses and security.
 
-Research output should contain:
+Output contains question, primary sources/versions/dates, findings, alternatives, recommendation, uncertainty, evidence-class implications and affected issues.
 
-- question investigated;
-- findings/evidence;
-- recommendation;
-- risks or uncertainty;
-- implications for the active card/milestone.
-
-Researcher normally does not edit production code and does not own implementation decisions.
+Researcher does not implement product features or present documentation/local experiments as real-VPS proof.
 
 ## Owner
 
-The Owner intentionally stays out of routine autonomous execution.
+The Owner is intentionally absent from routine delivery and internal milestones.
 
-The Owner is involved when:
+Owner participates when:
 
-- all internal work is complete and the Principal has created a `release/x.y.z` branch ready for Owner testing; or
-- an unavoidable decision would materially change Owner-reserved product scope/direction, license, safety invariants, privacy/data behavior, or equivalent governance.
+- Principal has created `release/x.y.z` with artifacts/checksums and #20 is ready for staged real-VPS testing; or
+- a genuinely unavoidable Owner-reserved product/legal/scope/privacy/safety decision blocks progress.
 
-The Owner performs final product acceptance. Only after explicit Owner approval may the approved release be promoted to `main` and published/tagged as stable.
+Owner executes E5 on a fresh/recoverable VPS, supplies only reviewed safe evidence, and never needs to give the autonomous team credentials or direct access. Only explicit Owner approval permits stable promotion.
 
-## Ownership and Parallel Work
+## Ownership, handoff and release feedback
 
-- One card has one primary Developer owner at a time.
-- Parallel Developers should work in isolated branches/workspaces created from the appropriate integration base.
-- The Orchestrator resolves dependency order and overlapping-change risk before dispatch.
-- Independent reviewers should not silently become makers of the work they are verifying.
-- If a QA finding requires production changes, return ownership to a Developer and verify again afterward.
+- One issue/workspace has one primary owner.
+- Two Developers may run only on independent worktrees.
+- QA remains independent; production changes return to Developer.
+- Owner-reported defects are linked to exact release SHA/stage/operation ID.
+- Release fix branches start from `release/x.y.z`, receive blind regression and Principal re-approval, then synchronize to `development` before Owner retest.
 
-## Handoff Contract
+Handoff format:
 
-Every role-to-role handoff should be concise and legible and contain, when applicable:
+```text
+Card/Milestone:
+Status:
+Branch/Commit:
+Evidence classes:
+Summary:
+Acceptance criteria:
+Tests/scenarios/artifacts:
+Diagnostics evidence:
+REAL VPS: NOT TESTED | Owner E5 result:
+Known risks/blockers:
+Next owner/action:
+```
 
-- Card or milestone identifier
-- Current status
-- What changed / what was evaluated
-- Acceptance criteria addressed
-- Tests/evidence and results
-- Known risks or unresolved items
-- Branch/commit reference
-- Explicit next owner/action
-
-Do not bury blockers or failed checks in narrative. A receiving agent must be able to determine the next action without reconstructing the previous agent's reasoning.
+Failed, not-run or blocked checks must be explicit.
