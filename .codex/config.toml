@@ -1,0 +1,11 @@
+# Project-scoped Codex defaults. Loaded only when this repository is trusted.
+# The primary session acts as the Orchestrator; role-specific models live in
+# .codex/agents/*.toml.
+
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 6
+interrupt_message = true
