@@ -1,80 +1,125 @@
-# VPSReady Agent Guide
+# VPSReady Agent Map
 
-This file is the entry point for autonomous agents. Keep it concise. Detailed team roles, workflow rules, product scope, and acceptance criteria live in version-controlled documents under `docs/`.
+VPSReady is an Ubuntu-first, cross-platform desktop application built with C#/.NET and Avalonia UI. It runs locally on Windows, macOS, and Linux and manages remote servers over SSH. No permanent VPSReady daemon is installed on a managed server.
 
-## Read Before Work
+This file is the map, not the full manual. Read the linked source-of-truth documents before changing code.
 
-1. Read `docs/agents/TEAM.md` for role ownership, model assignments, authority, and escalation rules.
-2. Read `docs/agents/WORKFLOW.md` for the card loop, milestone gates, branch flow, and handoff contract.
-3. On `development`, `feature/*`, `fix/*`, and release work, read the active product specification. For v0.1 this is `docs/V0.1_CORE_BASIC_SPEC.md` when present.
-4. Inspect the relevant code and tests before changing anything. Do not rely on assumptions that can be verified from the repository or target environment.
+## Required reading order
 
-## Product Direction
+1. `docs/agents/TEAM.md` — roles and authority.
+2. `docs/agents/WORKFLOW.md` — routine-card, milestone, and release flow.
+3. `docs/agents/ISSUE_TRACKING.md` — mandatory GitHub Issues control plane and Workpad protocol.
+4. `PLANS.md` — ExecPlan requirements for long or cross-cutting work.
+5. `docs/V0.1_CORE_BASIC_SPEC.md` on `development` — approved v0.1 scope, acceptance criteria, and Definition of Done.
+6. `docs/exec-plans/active/V0.1_CORE_BASIC.md` on `development` — living delivery plan.
+7. `docs/architecture/ARCHITECTURE_GUARDRAILS.md` and `docs/testing/TEST_STRATEGY.md`.
 
-VPSReady is a cross-platform C#/.NET desktop application using Avalonia UI. It runs locally on Windows, macOS, and Linux and manages remote VPS servers over SSH.
+When instructions conflict, apply this order:
 
-For v0.1, the supported remote operating system is Ubuntu. The design may allow future distributions, but agents must not expand supported scope without Owner approval.
+1. explicit current Owner instruction;
+2. safety invariants in this file;
+3. active product specification and acceptance criteria;
+4. Principal decision inside approved scope;
+5. active ExecPlan;
+6. team workflow;
+7. existing implementation.
 
-VPSReady must not require a permanent VPSReady agent or daemon on the managed server.
+## Mandatory issue-first work
 
-## Branch Model
+Every non-trivial implementation, research, QA, bug, milestone, and release-gate activity must be linked to a GitHub Issue before work starts.
 
-- `main` — stable, Owner-approved releases and governance.
-- `development` — active integration branch.
-- `feature/*` — normal feature/card work from `development`.
-- `fix/*` — bug-fix work from `development` unless fixing a release candidate.
-- `release/x.y.z` — temporary Owner-test/release-candidate branch created only by the Principal after the final internal gate passes.
-- `hotfix/*` — urgent fixes for an already released version.
+- GitHub Issues are the execution control plane.
+- One issue has one primary owner/workspace at a time.
+- Use one persistent `## Codex Workpad` comment and update it in place.
+- Update the issue at claim, meaningful progress, handoff, failure/blocker, QA result, and completion.
+- Use `feature/<issue>-<slug>` or `fix/<issue>-<slug>` from `development`.
+- Keep each issue's worktree isolated. Never let two Developers edit the same workspace concurrently.
+- Out-of-scope discoveries become new backlog issues; do not silently expand the active card.
 
-There is no permanent `pre-release` branch.
+Do not continue substantial untracked work when GitHub write access is unavailable. Record the exact blocker and stop the affected card safely.
 
-No autonomous role may promote work into `main` or create a stable public release without explicit Owner approval.
+## Fast inner loop, strict outer gate
 
-## Safety Invariants
+Routine card:
 
-Safety overrides speed and convenience.
+`Developer -> Orchestrator readiness check -> QA Automation -> accepted into development`
 
-- Never disable password SSH authentication until key authentication succeeds through a separate new SSH connection.
-- Never remove the current administrator access path until replacement access is verified.
-- Never enable a firewall before ensuring the active SSH port is allowed.
-- Never remove or block the active SSH port through a normal flow without verified replacement connectivity.
+Routine cards do not require Manual QA or Principal review.
+
+Major milestone:
+
+`Automation regression -> QA Manual -> Principal/Owner Representative -> next phase`
+
+Final internal gate:
+
+`Full regression -> QA Manual -> Principal -> Principal creates release/x.y.z -> READY FOR OWNER TEST`
+
+Only the Principal may create a normal `release/x.y.z` branch. Only the Owner may authorize promotion to `main` and a stable release.
+
+## Owner boundaries
+
+Agents must not, without explicit Owner approval:
+
+- merge or push product changes to `main`;
+- publish a stable release or stable tag;
+- change the Apache-2.0 license;
+- materially expand/reduce approved scope;
+- replace C#/.NET or Avalonia;
+- add a hosted control plane or persistent remote agent;
+- add telemetry, accounts, advertising, remote secret storage, or analytics;
+- add Docker, Coolify, Kubernetes, web/database stacks, DNS/TLS automation, cloud-provider APIs, Fail2ban, or other out-of-scope modules;
+- weaken a safety invariant.
+
+The Principal represents the Owner only inside the approved scope and may decide phase progression and release-candidate readiness.
+
+## Safety invariants
+
+Safety outranks speed.
+
+### SSH and access
+
+- Never silently trust an unknown SSH host key.
+- A changed known-host fingerprint is a hard failure until explicitly reviewed and accepted by the user.
+- Never disable password access before a separate new key-authenticated connection succeeds.
+- Never remove/restrict the current administrator before replacement access and privilege are verified.
 - Validate SSH configuration before reload/restart when configuration is changed.
-- Back up security-critical configuration before modification when rollback is practical.
-- Verify resulting state before reporting success when verification is practical.
-- Never log or persist passwords, private SSH-key contents, tokens, or equivalent secrets by default.
-- Destructive or lockout-risk actions require explicit user action in the UI.
+- Keep the old SSH access path until replacement connectivity is verified.
 
-## Engineering Rules
+### Firewall
 
-- Prefer simple, maintainable implementations over clever abstractions.
-- Keep UI, application/domain logic, and SSH/Linux infrastructure independently testable.
-- Do not scatter raw remote shell commands through UI code; encapsulate platform operations behind focused services/adapters.
-- Make operations idempotent where practical.
-- Use cancellation and finite timeouts for remote operations.
-- Surface useful sanitized errors instead of fake success or swallowed failures.
-- Do not leave acceptance-critical placeholders or TODOs while claiming a card is complete.
-- Do not weaken tests or acceptance criteria merely to obtain a passing build.
+- Never enable a firewall until the active SSH port is allowed and verified.
+- Never remove/block the active SSH port through a normal rule-removal flow.
+- Verify firewall state after every mutation.
+- Lockout-risk E2E tests run only on disposable Ubuntu infrastructure with an out-of-band recovery path.
 
-## Testing
+### Secrets and destructive actions
 
-Use testing proportional to the change. Small cards should not be blocked by unnecessary broad testing, but the smallest meaningful test set must prove the changed behavior.
+- Never log or persist passwords by default.
+- Never log, display unnecessarily, or transmit private-key contents.
+- Redact secrets from exceptions, diagnostics, screenshots, test artifacts, and issue comments.
+- Reboot, destructive replacement, rule removal, and lockout-risk operations require explicit user action.
+- Back up security-critical configuration where rollback is practical.
+- Prefer `plan -> apply -> verify`; report success only after verification.
 
-Lockout-sensitive SSH/firewall behavior must receive real Ubuntu integration/E2E validation before a release branch is declared ready for Owner testing. Mocks alone are insufficient for release acceptance of those paths.
+## Engineering baseline
 
-## Scope and Owner Authority
+- Keep desktop UI, application logic, domain models, and infrastructure/SSH adapters independently testable.
+- Do not place VPS-management logic or raw shell commands in Avalonia views.
+- Centralize remote command construction and parse structured/stable outputs where possible.
+- Handle cancellation, finite timeouts, partial failure, idempotency, and sanitized diagnostics.
+- Favor simple maintainable code over speculative abstraction.
+- Do not declare placeholders, fake success, skipped critical tests, or acceptance-criterion TODOs complete.
 
-Agents may make ordinary implementation, refactoring, library, and test decisions inside the approved specification. Escalate only when the decision materially changes product scope, core technology direction, safety invariants, license, data/privacy behavior, supported platforms, or another Owner-reserved decision.
+## Verification
 
-Docker, Coolify, Kubernetes, Nginx, databases, Fail2ban, cloud-provider automation, DNS/TLS automation, monitoring, telemetry, advertising, hosted-service architecture, and persistent remote agents are outside v0.1 unless an approved specification explicitly adds them.
+A green compile is not Done. Each change must satisfy its issue acceptance criteria and the active release DoD with risk-appropriate evidence.
 
-## Instruction Priority
+Before push/handoff:
 
-When repository instructions conflict, apply this order:
+- run targeted build/tests/format/analyzers applicable to the change;
+- update the issue Workpad with exact commands and results;
+- self-review the diff;
+- attach/link the PR or commit;
+- state known risks honestly.
 
-1. Explicit current Owner instruction.
-2. Safety invariants.
-3. Active product specification and acceptance criteria.
-4. `docs/agents/TEAM.md` and `docs/agents/WORKFLOW.md`.
-5. Existing implementation details.
-
-The Principal represents the Owner during autonomous execution as defined in `docs/agents/TEAM.md`, but cannot override Owner-reserved product decisions.
+At milestone/final gates, follow `docs/testing/TEST_STRATEGY.md`, including real disposable Ubuntu validation for SSH/firewall lockout-sensitive behavior.
