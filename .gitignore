@@ -1,0 +1,137 @@
+# VPSReady
+# C#/.NET + Avalonia desktop application
+# Keep generated output, local diagnostics, credentials, and machine-specific state out of Git.
+
+# -----------------------------------------------------------------------------
+# .NET build output
+# -----------------------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+[Aa]rtifacts/
+[Pp]ublish/
+[Dd]ist/
+[Ll]ogs/
+
+# NuGet / package output
+*.nupkg
+*.snupkg
+packages/
+!**/packages/build/
+
+# Test / coverage / benchmark output
+TestResults/
+[Tt]est[Rr]esults/
+coverage/
+.coverage/
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+coverage*.lcov
+BenchmarkDotNet.Artifacts/
+
+# -----------------------------------------------------------------------------
+# IDE / editor / user-specific files
+# -----------------------------------------------------------------------------
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.sln.iml
+*.DotSettings.user
+_ReSharper*/
+*.[Rr]e[Ss]harper
+
+# VS Code: keep team-shareable files if they are intentionally added later.
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# -----------------------------------------------------------------------------
+# OS-generated files
+# -----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+$RECYCLE.BIN/
+
+# -----------------------------------------------------------------------------
+# Local environment / credentials / secrets
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.sample
+secrets.json
+*.secrets.json
+appsettings.Local.json
+appsettings.*.local.json
+
+# Private/signing key material must never be committed.
+*.pem
+*.pfx
+*.p12
+*.key
+*.ppk
+*.snk
+id_rsa
+id_rsa.*
+id_dsa
+id_dsa.*
+id_ecdsa
+id_ecdsa.*
+id_ed25519
+id_ed25519.*
+
+# -----------------------------------------------------------------------------
+# VPSReady local runtime state / diagnostics
+# -----------------------------------------------------------------------------
+# The product stores diagnostics outside the repository by default, but these
+# patterns also protect local development/test runs from accidental commits.
+.vpsready/
+.vpsready-local/
+vpsready-state/
+VPSReadyState/
+
+/runs/
+/exports/
+/diagnostics/
+/crash/
+/crashes/
+/support-bundles/
+
+vpsready-support-*.zip
+vpsready-issue-report-*.md
+*.dmp
+*.dump
+
+# Local temporary/scratch work
+/tmp/
+/temp/
+.local/
+.local-state/
+
+# -----------------------------------------------------------------------------
+# Local SSH/user state created during development or Owner testing
+# -----------------------------------------------------------------------------
+/known_hosts
+/known_hosts.old
+/authorized_keys
+/ssh_config
+/ssh-config.local
+/generated-keys/
+/test-keys/
+
+# IMPORTANT:
+# Sanitized golden fixtures and deterministic scenario data under tests/ are
+# intentionally NOT ignored. They are part of Blind Development evidence and
+# should be committed when reviewed and secret-free.
