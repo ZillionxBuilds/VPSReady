@@ -1,12 +1,12 @@
 name: Work card
-description: Create an independently assignable implementation or engineering card.
+description: Create one independently assignable blind-development implementation or engineering card.
 title: "[CARD] "
 body:
   - type: markdown
     attributes:
       value: |
-        Every card must link a parent milestone and be independently verifiable.
-        Progress belongs in one persistent `## Codex Workpad` comment.
+        Link one parent milestone and one primary owner/workspace.
+        Development has no real VPS. Progress belongs in one persistent `## Codex Workpad`.
   - type: input
     id: plan_id
     attributes:
@@ -26,14 +26,14 @@ body:
     id: outcome
     attributes:
       label: Outcome
-      description: Concrete user or engineering result.
+      description: One concrete user or engineering result.
     validations:
       required: true
   - type: textarea
     id: scope
     attributes:
       label: In scope
-      description: Behavior/files/components included.
+      description: Behavior, files and components included.
     validations:
       required: true
   - type: textarea
@@ -47,7 +47,7 @@ body:
     id: acceptance
     attributes:
       label: Acceptance criteria
-      description: One testable criterion per checklist item.
+      description: One observable/testable criterion per checklist item.
       placeholder: |
         - [ ] AC1 ...
         - [ ] AC2 ...
@@ -57,7 +57,7 @@ body:
     id: dependencies
     attributes:
       label: Dependencies and blockers
-      placeholder: "Blocked by #...; none otherwise."
+      placeholder: "Blocked by #...; none otherwise. Expected lack of a VPS is not a blocker."
     validations:
       required: true
   - type: dropdown
@@ -67,16 +67,34 @@ body:
       options:
         - Low
         - Cross-platform
-        - Security
+        - Security or privacy
         - SSH/firewall lockout
-        - Destructive/recovery
+        - Destructive or recovery
     validations:
       required: true
+  - type: checkboxes
+    id: evidence_classes
+    attributes:
+      label: Expected evidence classes
+      options:
+        - label: E0 — Static/build/analyzer/supply-chain
+        - label: E1 — Unit
+        - label: E2 — Stateful simulation/fault injection
+        - label: E3 — Local-contained protocol when applicable
+        - label: E4 — Packaging/actual local host when applicable
+        - label: E5 — Owner real VPS; must remain NOT TESTED before release Owner stage
   - type: textarea
     id: validation
     attributes:
       label: Expected validation
-      description: Tests, runtime checks, environments, and evidence required.
+      description: Exact tests, scenario IDs, local protocol/host environments, and PASS/FAIL/NOT RUN evidence. Do not request a VPS.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics and redaction impact
+      description: Event/command/error IDs, correlation, output policy, Activity/journal/report/bundle tests, or explicit N/A.
     validations:
       required: true
   - type: input
