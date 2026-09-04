@@ -45,13 +45,13 @@ public sealed class AppViewModelTests
     [Fact]
     public void SafeStartupFailureUsesOnlyAnOpaqueIdentifier()
     {
-        const string sensitiveExceptionDetail = "password=do-not-display";
+        const string exceptionDetail = "synthetic startup failure detail";
 
-        var viewModel = AppViewModel.CreateSafeStartupFailure(new InvalidOperationException(sensitiveExceptionDetail));
+        var viewModel = AppViewModel.CreateSafeStartupFailure(new InvalidOperationException(exceptionDetail));
         var safeText = string.Join(Environment.NewLine, viewModel.Title, viewModel.Status, viewModel.StartupErrorId);
 
         Assert.True(viewModel.HasStartupFailure);
         Assert.Matches("^startup-[a-f0-9]{32}$", viewModel.StartupErrorId);
-        Assert.DoesNotContain(sensitiveExceptionDetail, safeText, StringComparison.Ordinal);
+        Assert.DoesNotContain(exceptionDetail, safeText, StringComparison.Ordinal);
     }
 }
