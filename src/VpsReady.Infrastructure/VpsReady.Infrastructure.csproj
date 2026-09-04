@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../VpsReady.Core/VpsReady.Core.csproj" />
+    <PackageReference Include="SSH.NET" />
+  </ItemGroup>
+</Project>
