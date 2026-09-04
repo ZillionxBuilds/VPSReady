@@ -1,0 +1,88 @@
+name: Work card
+description: Create an independently assignable implementation or engineering card.
+title: "[CARD] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every card must link a parent milestone and be independently verifiable.
+        Progress belongs in one persistent `## Codex Workpad` comment.
+  - type: input
+    id: plan_id
+    attributes:
+      label: Plan ID
+      description: ID from the active ExecPlan, for example C203.
+      placeholder: C203
+    validations:
+      required: true
+  - type: input
+    id: parent
+    attributes:
+      label: Parent milestone/tracking issue
+      placeholder: "#123"
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Outcome
+      description: Concrete user or engineering result.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: Behavior/files/components included.
+    validations:
+      required: true
+  - type: textarea
+    id: non_scope
+    attributes:
+      label: Out of scope
+      description: Explicit boundaries that prevent scope drift.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: One testable criterion per checklist item.
+      placeholder: |
+        - [ ] AC1 ...
+        - [ ] AC2 ...
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+      placeholder: "Blocked by #...; none otherwise."
+    validations:
+      required: true
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Highest risk
+      options:
+        - Low
+        - Cross-platform
+        - Security
+        - SSH/firewall lockout
+        - Destructive/recovery
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Expected validation
+      description: Tests, runtime checks, environments, and evidence required.
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Intended role owner
+      placeholder: Developer / QA Automation / Orchestrator
+    validations:
+      required: true
