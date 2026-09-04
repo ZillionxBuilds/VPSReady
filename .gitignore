@@ -73,6 +73,9 @@ $RECYCLE.BIN/
 !.env.sample
 secrets.json
 *.secrets.json
+credentials.json
+*.credentials.json
+*.credential.json
 appsettings.Local.json
 appsettings.*.local.json
 
@@ -104,6 +107,7 @@ VPSReadyState/
 
 /runs/
 /exports/
+/reports/
 /diagnostics/
 /crash/
 /crashes/
@@ -119,6 +123,9 @@ vpsready-issue-report-*.md
 /temp/
 .local/
 .local-state/
+*.scenario.tmp
+*.scenario.local.json
+*.scenario.local.jsonl
 
 # -----------------------------------------------------------------------------
 # Local SSH/user state created during development or Owner testing
@@ -128,6 +135,9 @@ vpsready-issue-report-*.md
 /authorized_keys
 /ssh_config
 /ssh-config.local
+/.ssh/
+/.ssh-config/
+/.vpsready-ssh/
 /generated-keys/
 /test-keys/
 
@@ -135,3 +145,9 @@ vpsready-issue-report-*.md
 # Sanitized golden fixtures and deterministic scenario data under tests/ are
 # intentionally NOT ignored. They are part of Blind Development evidence and
 # should be committed when reviewed and secret-free.
+!tests/**/fixtures/
+!tests/**/fixtures/**
+!tests/**/golden/
+!tests/**/golden/**
+!tests/**/scenarios/
+!tests/**/scenarios/**
