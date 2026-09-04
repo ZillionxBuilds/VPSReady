@@ -1,0 +1,52 @@
+name: Major milestone gate
+description: Track integrated scope, regression, Manual QA, and Principal decision.
+title: "[MILESTONE] "
+body:
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone ID and name
+      placeholder: M2 — Secure VPS connection and server overview
+    validations:
+      required: true
+  - type: input
+    id: parent
+    attributes:
+      label: Release tracking issue
+      placeholder: "#1"
+    validations:
+      required: true
+  - type: textarea
+    id: included
+    attributes:
+      label: Included card issues
+      placeholder: |
+        - [ ] #...
+        - [ ] #...
+    validations:
+      required: true
+  - type: textarea
+    id: exit
+    attributes:
+      label: Exit criteria
+      description: Observable criteria required before outer-gate QA begins.
+    validations:
+      required: true
+  - type: textarea
+    id: automation
+    attributes:
+      label: Automation regression requirements
+    validations:
+      required: true
+  - type: textarea
+    id: manual
+    attributes:
+      label: Manual QA charter
+    validations:
+      required: true
+  - type: textarea
+    id: principal
+    attributes:
+      label: Principal review focus
+    validations:
+      required: true
