@@ -1,12 +1,24 @@
 name: Bug report
-description: Record a reproducible VPSReady defect or regression.
+description: Record a reproducible VPSReady defect or regression using safe evidence.
 title: "[BUG] "
 body:
   - type: input
     id: parent
     attributes:
       label: Related card/milestone/release
-      placeholder: "#123"
+      placeholder: "#1 / release/0.1.0 @ SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: evidence_source
+    attributes:
+      label: Evidence source
+      options:
+        - E1 — Unit
+        - E2 — Stateful simulation
+        - E3 — Local contained protocol
+        - E4 — Packaging/host
+        - E5 — Owner real VPS
     validations:
       required: true
   - type: textarea
@@ -19,9 +31,14 @@ body:
     id: environment
     attributes:
       label: Environment
-      placeholder: VPSReady commit/version, local OS/RID, Ubuntu version, test target type.
+      placeholder: VPSReady version/build SHA, local OS/RID, scenario ID or sanitized Ubuntu capability/version. Do not post credentials or raw server identity.
     validations:
       required: true
+  - type: input
+    id: operation
+    attributes:
+      label: Operation ID / error code
+      placeholder: "operation abc123 / SSH_AUTHENTICATION_FAILED"
   - type: textarea
     id: reproduce
     attributes:
@@ -40,14 +57,14 @@ body:
   - type: textarea
     id: actual
     attributes:
-      label: Actual behavior
+      label: Actual behavior and access/recovery state
     validations:
       required: true
   - type: textarea
     id: evidence
     attributes:
       label: Sanitized evidence
-      description: Logs/screenshots/CI links with passwords, keys, tokens, and unnecessary IPs removed.
+      description: Prefer the app-generated Safe Issue Report. Review any support bundle before sharing because this repository is public. Never attach passwords, private keys, full SSH config, provider details, or unreviewed logs.
     validations:
       required: true
   - type: dropdown
