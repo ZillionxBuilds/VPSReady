@@ -1,7 +1,12 @@
 name: Research decision
-description: Investigate a focused question using primary evidence and produce a decision recommendation.
+description: Investigate one focused question using current primary evidence and produce a recommendation.
 title: "[RESEARCH] "
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Research may use official/upstream sources and reproducible local experiments.
+        It must not request a real VPS or present documentation/local protocol tests as Owner E5 proof.
   - type: input
     id: plan_id
     attributes:
@@ -27,19 +32,27 @@ body:
     id: context
     attributes:
       label: Context and constraints
+      description: Include approved scope, blind-development boundary, platform/security/privacy/license constraints and affected cards.
     validations:
       required: true
   - type: textarea
     id: evidence
     attributes:
-      label: Required evidence
-      description: Prefer official docs, standards, upstream repositories/releases, and reproducible experiments.
+      label: Required primary evidence
+      description: Official docs, standards, upstream repositories/releases, package metadata/licenses, and reproducible local experiments with versions/dates.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence_boundary
+    attributes:
+      label: Evidence-class boundary
+      placeholder: What can be established as E0/E1/E2/E3/E4, what remains E5 Owner real VPS, and uncertainty.
     validations:
       required: true
   - type: textarea
     id: output
     attributes:
       label: Required output
-      placeholder: Findings, alternatives, recommendation, risks, affected cards, and decision owner.
+      placeholder: Findings, alternatives, recommendation, maintenance/license/security table, risks, affected cards, decision owner, and follow-up issue.
     validations:
       required: true
