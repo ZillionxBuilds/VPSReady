@@ -1,0 +1,215 @@
+name: Blind CI
+
+on:
+  pull_request:
+    branches:
+      - development
+  push:
+    branches:
+      - development
+      - "release/**"
+  workflow_dispatch:
+    inputs:
+      run_local_protocol:
+        description: "Run the opt-in E3 local-contained protocol suite (never a public SSH target)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  # Pull-request runs otherwise expose a synthetic merge SHA as github.sha.
+  # Artifacts must instead identify the immutable commit reviewed in the PR.
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+concurrency:
+  group: blind-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: E0-E2 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Record runner, SDK, OS and architecture
+        shell: pwsh
+        run: |
+          Write-Host "runner.os=${{ runner.os }}"
+          Write-Host "runner.arch=${{ runner.arch }}"
+          Write-Host "runner.name=${{ runner.name }}"
+          dotnet --info
+
+      # These are the documented C003 commands, intentionally run without any
+      # VPS endpoint, credential, SSH target, provider access, or privilege.
+      - name: E0 restore (C003)
+        run: dotnet restore VpsReady.slnx --locked-mode
+
+      - name: E0 build (C003)
+        run: dotnet build VpsReady.slnx --configuration Release --no-restore
+
+      - name: E0 format (C003)
+        run: dotnet format VpsReady.slnx --verify-no-changes --no-restore
+
+      - name: E0 analyzer build (C003)
+        run: dotnet build VpsReady.slnx --configuration Release --no-restore -p:RunAnalyzersDuringBuild=true
+
+      - name: E0 package inventory (C003)
+        run: dotnet list VpsReady.slnx package --include-transitive
+
+      - name: E0 vulnerability inventory (C003)
+        run: dotnet list VpsReady.slnx package --vulnerable --include-transitive
+
+      - name: E0 tracked-secret scan (C003)
+        shell: bash
+        run: bash eng/verify-tracked-secrets.sh
+
+      - name: E0 reviewed-source SHA policy
+        shell: bash
+        run: bash eng/verify-ci-source-sha.sh
+
+      - name: E1 unit tests
+        run: dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
+
+      - name: E2 deterministic scenario tests
+        run: dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build --logger "trx;LogFileName=scenario.trx" --results-directory TestResults/scenario
+
+      - name: Reject unsafe retained test artifacts
+        id: artifact_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh TestResults
+
+      - name: Upload safe test results
+        if: always() && steps.artifact_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ runner.os }}-${{ env.SOURCE_SHA }}
+          path: TestResults
+          if-no-files-found: ignore
+          retention-days: 14
+
+  local-protocol:
+    name: E3 local-contained protocol (opt-in)
+    # E3 is intentionally opt-in. It must be implemented by C005 as a suite
+    # that provisions and tears down only a local-contained service; the guard
+    # below rejects an empty or missing suite rather than reporting a false pass.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_local_protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Record contained E3 runner identity
+        shell: pwsh
+        run: |
+          Write-Host "runner.os=${{ runner.os }}"
+          Write-Host "runner.arch=${{ runner.arch }}"
+          dotnet --info
+
+      - name: Run only the declared local-contained E3 suite
+        shell: bash
+        run: |
+          test -x eng/run-local-contained-e3.sh
+          bash eng/run-local-contained-e3.sh
+
+      - name: Reject unsafe retained E3 artifacts
+        id: artifact_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh TestResults
+
+      - name: Upload safe E3 results
+        if: always() && steps.artifact_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e3-local-contained-results-${{ env.SOURCE_SHA }}
+          path: TestResults
+          if-no-files-found: ignore
+          retention-days: 14
+
+  package:
+    name: E4 package (${{ matrix.rid }})
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+          - os: macos-latest
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+          - os: windows-latest
+            rid: win-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Record packaging runner, SDK, OS and architecture
+        shell: pwsh
+        run: |
+          Write-Host "runner.os=${{ runner.os }}"
+          Write-Host "runner.arch=${{ runner.arch }}"
+          Write-Host "artifact.rid=${{ matrix.rid }}"
+          Write-Host "source.sha=${{ env.SOURCE_SHA }}"
+          dotnet --info
+
+      - name: Restore locked declared runtime dependencies for publish
+        run: dotnet restore src/VpsReady.Desktop/VpsReady.Desktop.csproj --locked-mode
+
+      - name: Publish and package E4 artifact
+        shell: pwsh
+        run: >
+          ./eng/package-artifact.ps1
+          -Rid '${{ matrix.rid }}'
+          -CommitSha '${{ env.SOURCE_SHA }}'
+          -RunnerOs '${{ runner.os }}'
+          -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Reject unsafe retained package material
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh artifacts/publish
+
+      - name: Upload SHA-tied package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpsready-${{ matrix.rid }}-${{ env.SOURCE_SHA }}
+          path: artifacts/packages
+          if-no-files-found: error
+          retention-days: 14
