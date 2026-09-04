@@ -50,6 +50,13 @@ separate evidence values for `built`, `package_inspected`, and
 `startup_smoked`. Each package job performs its own locked restore against the
 desktop project's declared runtime identifiers before publishing.
 
+For a pull request, the source SHA is the immutable reviewed PR head commit;
+this deliberately avoids GitHub Actions' synthetic merge commit exposed as
+`github.sha`. Push and manual-dispatch runs fall back to their event SHA. The
+same selected source SHA is checked out, names test/package artifacts, and is
+written to every package manifest and checksum sidecar.
+`eng/verify-ci-source-sha.sh` guards that workflow contract.
+
 C004 reports startup smoke as **NOT RUN**: C606 must add an actual host-specific
 startup-smoke suite before that field may be PASS. Package artifacts are
 retained for 14 days and are not a release-ready status. E4 package success
