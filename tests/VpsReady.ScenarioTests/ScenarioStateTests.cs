@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
+using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
 namespace VpsReady.ScenarioTests;
@@ -222,7 +223,8 @@ public sealed class ScenarioStateTests
 
         Assert.False(result.Succeeded);
         Assert.False(result.VerificationCompleted);
-        Assert.Equal("UNEXPECTED", result.ErrorCode);
+        Assert.Equal("UNEXPECTED_FAILURE", result.ErrorCode);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
         Assert.Equal("mutated-but-unverified", state.Hostname);
     }
 
@@ -259,6 +261,41 @@ public sealed class ScenarioStateTests
             state => state.Ssh.DisconnectNextCommand = true);
         var disconnectHost = disconnectServices.GetRequiredService<DeterministicScenarioHost>();
         await Assert.ThrowsAsync<ScenarioDisconnectException>(() => disconnectHost.ExecuteAsync(Command(ScenarioCommandIds.UbuntuFactsRead), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task OperationRunnerMapsCancellationAndRecoveryToTypedSafeResults()
+    {
+        await using var cancellationServices = ScenarioComposition.Create("scenario.e2.taxonomy.cancellation");
+        var cancellationFaults = cancellationServices.GetRequiredService<ScenarioFaultPlan>();
+        cancellationFaults.Inject(DiagnosticPhase.Apply, ScenarioFaultKind.Cancellation, "fault-cancel");
+        var cancellationRunner = cancellationServices.GetRequiredService<ScenarioOperationRunner>();
+
+        var cancelled = await cancellationRunner.RunAsync(
+            "operation-taxonomy-cancel",
+            apply: (_, _) => Task.CompletedTask,
+            verify: (_, _) => Task.CompletedTask);
+
+        Assert.True(cancelled.Cancelled);
+        Assert.Equal("OPERATION_CANCELLED", cancelled.ErrorCode);
+        Assert.Equal(OperationState.PartiallyApplied, cancelled.Result.State);
+        Assert.DoesNotContain("fault-cancel", cancelled.Result.UserMessage, StringComparison.Ordinal);
+
+        await using var recoveryServices = ScenarioComposition.Create("scenario.e2.taxonomy.recovery");
+        var recoveryFaults = recoveryServices.GetRequiredService<ScenarioFaultPlan>();
+        recoveryFaults.Inject(DiagnosticPhase.Apply, ScenarioFaultKind.VerificationMismatch, "fault-apply");
+        recoveryFaults.Inject(DiagnosticPhase.Recovery, ScenarioFaultKind.Throw, "fault-recovery");
+        var recoveryRunner = recoveryServices.GetRequiredService<ScenarioOperationRunner>();
+
+        var recoveredFailure = await recoveryRunner.RunAsync(
+            "operation-taxonomy-recovery",
+            apply: (_, _) => Task.CompletedTask,
+            verify: (_, _) => Task.CompletedTask,
+            recovery: (_, _) => Task.CompletedTask);
+
+        Assert.Equal("RECOVERY_FAILED", recoveredFailure.ErrorCode);
+        Assert.Equal(OperationRecovery.Failed, recoveredFailure.Result.Recovery);
+        Assert.False(recoveredFailure.Succeeded);
     }
 
     [Fact]
