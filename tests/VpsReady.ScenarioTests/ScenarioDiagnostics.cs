@@ -341,6 +341,8 @@ public sealed class ScenarioOperationRunner
             TimeoutException => OperationErrorCode.Timeout,
             ScenarioDisconnectException => OperationErrorCode.Network,
             ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.PermissionDenied => OperationErrorCode.Privilege,
+            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.NonZeroExit => OperationErrorCode.Command,
+            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.MalformedOutput => OperationErrorCode.Parse,
             ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.VerificationMismatch => OperationErrorCode.Verification,
             ScenarioFaultException => OperationErrorCode.Unexpected,
             _ => OperationErrorCode.Unexpected,

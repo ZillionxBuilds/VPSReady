@@ -298,6 +298,27 @@ public sealed class ScenarioStateTests
         Assert.False(recoveredFailure.Succeeded);
     }
 
+    [Theory]
+    [InlineData(ScenarioFaultKind.NonZeroExit, "REMOTE_COMMAND_FAILED")]
+    [InlineData(ScenarioFaultKind.MalformedOutput, "REMOTE_OUTPUT_PARSE_FAILED")]
+    public async Task OperationRunnerMapsCommandAndParseFaultsToTheirStableCodes(ScenarioFaultKind faultKind, string expectedCode)
+    {
+        await using var services = ScenarioComposition.Create($"scenario.e2.taxonomy.{faultKind.ToString().ToLowerInvariant()}");
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        faults.Inject(DiagnosticPhase.Apply, faultKind, $"fault-{faultKind}");
+        var runner = services.GetRequiredService<ScenarioOperationRunner>();
+
+        var result = await runner.RunAsync(
+            $"operation-taxonomy-{faultKind.ToString().ToLowerInvariant()}",
+            apply: (_, _) => Task.CompletedTask,
+            verify: (_, _) => Task.CompletedTask);
+
+        Assert.Equal(expectedCode, result.ErrorCode);
+        Assert.Equal(OperationCompletion.Failed, result.Result.Completion);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
+        Assert.DoesNotContain($"fault-{faultKind}", result.Result.UserMessage, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task HostReturnsEachFactsFixtureWithoutInventingMissingData()
     {
