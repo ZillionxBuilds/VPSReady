@@ -92,8 +92,30 @@ public sealed partial class FailClosedRedactor : IRedactor
             return output;
         }
 
-        var safe = Redact(output.SanitizedText, DiagnosticDataClassification.CommandOutput);
-        return output with { SanitizedText = safe.SafeText, WasOmitted = output.WasOmitted || safe.WasOmitted };
+        // BoundedOutput is a public record and callers can construct it
+        // directly. Treat its text as untrusted at the final sink boundary so
+        // a caller cannot bypass redaction or the 64 KiB storage ceiling.
+        if (output.WasOmitted)
+        {
+            // Omission metadata is authoritative: never retain caller-owned
+            // text alongside it, even when that text appears harmless.
+            var omissionMarker = Redact("omitted", DiagnosticDataClassification.Credential).SafeText;
+            var omitted = BoundedOutputCapture.Capture(omissionMarker, output.Policy, this);
+            return omitted with
+            {
+                OriginalByteCount = Math.Max(output.OriginalByteCount, omitted.OriginalByteCount),
+                WasTruncated = output.WasTruncated || omitted.WasTruncated,
+                WasOmitted = true,
+            };
+        }
+
+        var captured = BoundedOutputCapture.Capture(output.SanitizedText, output.Policy, this);
+        return captured with
+        {
+            OriginalByteCount = Math.Max(output.OriginalByteCount, captured.OriginalByteCount),
+            WasTruncated = output.WasTruncated || captured.WasTruncated,
+            WasOmitted = output.WasOmitted || captured.WasOmitted,
+        };
     }
 
     private Dictionary<string, DiagnosticValue>? RedactContext(IReadOnlyDictionary<string, DiagnosticValue>? context)

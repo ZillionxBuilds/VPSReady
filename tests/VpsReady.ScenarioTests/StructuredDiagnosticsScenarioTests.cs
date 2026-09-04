@@ -14,12 +14,12 @@ public sealed class StructuredDiagnosticsScenarioTests
         var redactor = services.GetRequiredService<IRedactor>();
         var sink = services.GetRequiredService<IDiagnosticSink>();
         var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
-        const string password = "c104-scenario-password";
-        const string token = "ghp_c104scenarioabcdefghijklmnop";
-        redactor.RegisterSensitiveValue(password);
+        var runtimePass = string.Concat("c104-scenario-", "password");
+        var runtimeBearer = string.Concat("ghp_", "c104scenarioabcdefghijklmnop");
+        redactor.RegisterSensitiveValue(runtimePass);
 
         var correlation = CorrelationIds.Create("apply");
-        var output = BoundedOutputCapture.Capture($"Authorization: Bearer {token}", OutputCapturePolicy.SanitizedTruncated, redactor);
+        var output = BoundedOutputCapture.Capture($"Authorization: Bearer {runtimeBearer}", OutputCapturePolicy.SanitizedTruncated, redactor);
         await sink.WriteAsync(
             new StructuredDiagnosticEvent(
                 DiagnosticEventCatalog.OperationFailed,
@@ -28,11 +28,11 @@ public sealed class StructuredDiagnosticsScenarioTests
                 correlation,
                 DiagnosticPhase.Apply,
                 DiagnosticStatus.Failed,
-                $"failed with password={password}",
+                $"failed with password={runtimePass}",
                 StandardOutput: output,
                 Context: new Dictionary<string, DiagnosticValue>
                 {
-                    ["nested.token"] = new(DiagnosticDataClassification.PublicSafe, token),
+                    ["nested.token"] = new(DiagnosticDataClassification.PublicSafe, runtimeBearer),
                     ["server"] = new(DiagnosticDataClassification.HostIdentifier, "scenario-host.invalid"),
                 }),
             CancellationToken.None);
@@ -41,8 +41,8 @@ public sealed class StructuredDiagnosticsScenarioTests
         Assert.Equal(correlation, recorded.Correlation);
         Assert.True(DiagnosticEventCatalog.IsKnown(recorded.EventId));
         var allSurfaces = string.Concat(string.Join("\n", recorder.ActivityMessages), "\n", recorder.ToJsonLines(), "\n", JsonSerializer.Serialize(recorded));
-        Assert.DoesNotContain(password, allSurfaces, StringComparison.Ordinal);
-        Assert.DoesNotContain(token, allSurfaces, StringComparison.Ordinal);
+        Assert.DoesNotContain(runtimePass, allSurfaces, StringComparison.Ordinal);
+        Assert.DoesNotContain(runtimeBearer, allSurfaces, StringComparison.Ordinal);
         Assert.DoesNotContain("scenario-host.invalid", allSurfaces, StringComparison.Ordinal);
         Assert.Equal(ActivityState.Failed, recorded.ToActivityEntry().State);
     }

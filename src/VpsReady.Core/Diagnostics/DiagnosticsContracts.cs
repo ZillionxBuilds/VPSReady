@@ -267,7 +267,8 @@ public static class BoundedOutputCapture
         var redacted = redactor.Redact(value, DiagnosticDataClassification.CommandOutput);
         if (redacted.WasOmitted)
         {
-            return new BoundedOutput(policy, originalBytes, redacted.SafeText, false, true);
+            var omissionMarker = TruncateUtf8(redacted.SafeText, maximumBytes, out var omissionWasTruncated);
+            return new BoundedOutput(policy, originalBytes, omissionMarker, omissionWasTruncated, true);
         }
 
         var bounded = TruncateUtf8(redacted.SafeText, maximumBytes, out var wasTruncated);
@@ -284,12 +285,13 @@ public static class BoundedOutputCapture
 
         const string marker = "\n[TRUNCATED_BY_OUTPUT_POLICY]";
         var markerBytes = Encoding.UTF8.GetByteCount(marker);
+        var contentBudget = Math.Max(0, maximumBytes - markerBytes);
         var builder = new StringBuilder();
         var used = 0;
         foreach (var rune in value.EnumerateRunes())
         {
             var runeBytes = rune.Utf8SequenceLength;
-            if (used + runeBytes + markerBytes > maximumBytes)
+            if (used + runeBytes > contentBudget)
             {
                 break;
             }
@@ -299,6 +301,11 @@ public static class BoundedOutputCapture
         }
 
         wasTruncated = true;
-        return builder.Append(marker).ToString();
+        // When the caller's positive ceiling is smaller than the marker, the
+        // explicit WasTruncated/WasOmitted metadata is the marker. Never let
+        // a helpful text marker violate the caller's storage limit.
+        return markerBytes <= maximumBytes
+            ? builder.Append(marker).ToString()
+            : builder.ToString();
     }
 }

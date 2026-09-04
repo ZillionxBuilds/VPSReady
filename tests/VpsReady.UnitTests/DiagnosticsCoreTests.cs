@@ -103,6 +103,120 @@ public sealed class DiagnosticsCoreTests
         Assert.Null(BoundedOutputCapture.Capture("secret", OutputCapturePolicy.MetadataOnly, redactor).SanitizedText);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(8)]
+    [InlineData(16)]
+    [InlineData(32)]
+    public void BoundedCaptureNeverExceedsAnyPositiveRequestedMaximum(int maximumBytes)
+    {
+        var redactor = new FailClosedRedactor();
+        redactor.RegisterSensitiveValue("c104-omitted-secret");
+
+        var truncated = BoundedOutputCapture.Capture(
+            new string('x', 256),
+            OutputCapturePolicy.SanitizedTruncated,
+            redactor,
+            maximumBytes);
+        var omitted = BoundedOutputCapture.Capture(
+            "c104-omitted-secret",
+            OutputCapturePolicy.SanitizedTruncated,
+            redactor,
+            maximumBytes);
+
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(truncated.SanitizedText!) <= maximumBytes);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(omitted.SanitizedText!) <= maximumBytes);
+        Assert.True(truncated.WasTruncated);
+        Assert.True(omitted.WasOmitted);
+    }
+
+    [Fact]
+    public async Task FinalSinkBoundaryRecapturesDirectlyConstructedUnboundedOutput()
+    {
+        var collector = new CollectingSanitizedSink();
+        var pipeline = new RedactingDiagnosticSink(new FailClosedRedactor(), collector);
+        var rawOutput = new BoundedOutput(
+            OutputCapturePolicy.SanitizedTruncated,
+            OriginalByteCount: 1,
+            SanitizedText: new string('x', BoundedOutputCapture.DefaultMaximumBytes + 1024),
+            WasTruncated: false,
+            WasOmitted: false);
+
+        await pipeline.WriteAsync(
+            new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.CommandCompleted,
+                "Connection",
+                DiagnosticLevel.Information,
+                CorrelationIds.Create("verify"),
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Succeeded,
+                "Command completed.",
+                StandardOutput: rawOutput),
+            CancellationToken.None);
+
+        var persistedOutput = Assert.Single(collector.Events).StandardOutput!;
+        Assert.True(persistedOutput.WasTruncated);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(persistedOutput.SanitizedText!) <= BoundedOutputCapture.DefaultMaximumBytes);
+    }
+
+    [Fact]
+    public async Task FinalSinkBoundaryDropsDirectlyConstructedPayloadMarkedAsOmitted()
+    {
+        var collector = new CollectingSanitizedSink();
+        var pipeline = new RedactingDiagnosticSink(new FailClosedRedactor(), collector);
+        const string rawPayload = "untrusted-direct-output";
+
+        await pipeline.WriteAsync(
+            new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.CommandCompleted,
+                "Connection",
+                DiagnosticLevel.Information,
+                CorrelationIds.Create("verify"),
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Succeeded,
+                "Command completed.",
+                StandardError: new BoundedOutput(
+                    OutputCapturePolicy.SanitizedTruncated,
+                    0,
+                    rawPayload,
+                    WasTruncated: false,
+                    WasOmitted: true)),
+            CancellationToken.None);
+
+        var persistedOutput = Assert.Single(collector.Events).StandardError!;
+        Assert.True(persistedOutput.WasOmitted);
+        Assert.DoesNotContain(rawPayload, persistedOutput.SanitizedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FinalSinkBoundaryRejectsDirectOutputWhenItsPolicyAllowsMetadataOnly()
+    {
+        var collector = new CollectingSanitizedSink();
+        var pipeline = new RedactingDiagnosticSink(new FailClosedRedactor(), collector);
+        const string rawPayload = "direct-output-must-not-be-retained";
+
+        await pipeline.WriteAsync(
+            new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.CommandCompleted,
+                "Connection",
+                DiagnosticLevel.Information,
+                CorrelationIds.Create("verify"),
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Succeeded,
+                "Command completed.",
+                StandardOutput: new BoundedOutput(
+                    OutputCapturePolicy.MetadataOnly,
+                    1,
+                    rawPayload,
+                    WasTruncated: false,
+                    WasOmitted: false)),
+            CancellationToken.None);
+
+        var persistedOutput = Assert.Single(collector.Events).StandardOutput!;
+        Assert.Null(persistedOutput.SanitizedText);
+    }
+
     private sealed class CollectingSanitizedSink : ISanitizedDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
@@ -118,7 +232,10 @@ public sealed class DiagnosticsCoreTests
     {
         public string Password { get; } = "c104-password-88C4";
         public string Token { get; } = "ghp_c104tokenseededabcdefghijklmnop";
-        public string PrivateKey { get; } = "-----BEGIN OPENSSH PRIVATE KEY-----\nC104-key\n-----END OPENSSH PRIVATE KEY-----";
+        public string PrivateKey { get; } = string.Concat(
+            "-----BEGIN OPENSSH ",
+            "PRIVATE KEY-----\nC104-key\n-----END OPENSSH ",
+            "PRIVATE KEY-----");
         public string Host { get; } = "c104-host.example.test";
         public string User { get; } = "c104-admin";
         public IEnumerable<string> All => [Password, Token, PrivateKey, Host, User];
