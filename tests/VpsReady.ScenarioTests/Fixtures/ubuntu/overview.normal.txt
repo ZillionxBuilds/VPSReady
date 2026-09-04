@@ -1,0 +1,10 @@
+distribution=Ubuntu
+version=24.04 LTS
+kernel=6.8.0-scenario
+architecture=x86_64
+hostname=scenario-ubuntu
+uptime=1 day, 2 hours
+user=scenario
+cpu=2 vCPU
+memory=2 GiB
+disk=20 GiB

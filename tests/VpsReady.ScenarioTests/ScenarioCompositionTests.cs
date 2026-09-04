@@ -3,6 +3,7 @@ using VpsReady.Core.Remote;
 
 namespace VpsReady.ScenarioTests;
 
+[Trait("Category", "E2")]
 public sealed class ScenarioCompositionTests
 {
     private static readonly RemoteCommand CounterRead = new(new RemoteCommandId("scenario.counter.read"), "counter", TimeSpan.FromSeconds(1));
