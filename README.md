@@ -22,6 +22,11 @@ Docker, Coolify, Fail2ban, web/database stacks, cloud-provider APIs, DNS/TLS aut
 
 The project uses GitHub Issues as the execution control plane for its Codex agent team. Start with [AGENTS.md](AGENTS.md), the team/workflow documents under `docs/agents/`, and the active specification/ExecPlan on `development`.
 
+For the deterministic local repository checks (restore, build, format,
+analyzers, dependency/vulnerability inventory, and tracked-secret scan), see
+[docs/development/QUALITY_CHECKS.md](docs/development/QUALITY_CHECKS.md). These
+are blind E0 checks and require no VPS endpoint or credential.
+
 ## Status
 
 VPSReady is in early autonomous development.
