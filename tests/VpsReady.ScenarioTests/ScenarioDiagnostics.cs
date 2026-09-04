@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
 
 namespace VpsReady.ScenarioTests;
 
@@ -115,14 +116,21 @@ public sealed record ScenarioOperationContext(
     ScenarioDiagnosticRecorder Diagnostics);
 
 public sealed record ScenarioOperationResult(
-    string OperationId,
-    bool Succeeded,
+    OperationResult Result,
     DiagnosticPhase? FailurePhase,
     bool VerificationCompleted,
     bool RecoveryAttempted,
     bool RecoverySucceeded,
-    string? ErrorCode,
-    IReadOnlyList<StructuredDiagnosticEvent> Events);
+    IReadOnlyList<StructuredDiagnosticEvent> Events)
+{
+    public string OperationId => Result.OperationId;
+
+    public bool Succeeded => Result.Succeeded;
+
+    public bool Cancelled => Result.Cancelled;
+
+    public string? ErrorCode => Result.ErrorCode?.ToStableCode();
+}
 
 /// <summary>
 /// Small test-only pipeline that enforces validate -> preflight -> plan -> apply
@@ -202,13 +210,11 @@ public sealed class ScenarioOperationRunner
         }
 
         return new ScenarioOperationResult(
-            operationId,
-            Succeeded: verificationCompleted,
+            OperationResult.Success(operationId, OperationState.Unchanged),
             FailurePhase: null,
             VerificationCompleted: verificationCompleted,
             RecoveryAttempted: false,
             RecoverySucceeded: false,
-            ErrorCode: null,
             Events: diagnostics.Events);
     }
 
@@ -223,7 +229,7 @@ public sealed class ScenarioOperationRunner
         {
             if (faults.TryTake(phase, null, out var fault) && fault is not null)
             {
-                throw new ScenarioFaultException(fault);
+                throw ExceptionFor(fault);
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -272,14 +278,22 @@ public sealed class ScenarioOperationRunner
             recoverySucceeded = await RunPhaseAsync(context, DiagnosticPhase.Recovery, recovery, cancellationToken).ConfigureAwait(false) is null;
         }
 
+        var state = StateFor(phase);
+        var result = failure is OperationCanceledException
+            ? OperationResult.Cancellation(context.OperationId, state)
+            : OperationResult.Failure(
+                context.OperationId,
+                recoveryAttempted && !recoverySucceeded ? OperationErrorCode.Recovery : ErrorCodeFor(failure),
+                state,
+                phase == DiagnosticPhase.Verify ? OperationVerification.Failed : OperationVerification.NotRun,
+                RecoveryFor(recoveryAttempted, recoverySucceeded));
+
         return new ScenarioOperationResult(
-            context.OperationId,
-            Succeeded: false,
+            result,
             FailurePhase: phase,
             VerificationCompleted: verificationCompleted,
             RecoveryAttempted: recoveryAttempted,
             RecoverySucceeded: recoverySucceeded,
-            ErrorCode: ErrorCodeFor(failure),
             Events: diagnostics.Events);
     }
 
@@ -312,24 +326,44 @@ public sealed class ScenarioOperationRunner
     {
         return exception switch
         {
-            ScenarioFaultException fault => $"fault={fault.Fault.FaultId}",
+            ScenarioFaultException => "scenario fault",
             TimeoutException => "timeout",
             ScenarioDisconnectException => "disconnect",
-            _ => exception.GetType().Name,
+            _ => "operation failure",
         };
     }
 
-    private static string ErrorCodeFor(Exception exception)
+    private static OperationErrorCode ErrorCodeFor(Exception exception)
     {
         return exception switch
         {
-            OperationCanceledException => "CANCELLED",
-            TimeoutException => "TIMEOUT",
-            ScenarioDisconnectException => "DISCONNECTED",
-            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.PermissionDenied => "PERMISSION_DENIED",
-            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.VerificationMismatch => "VERIFICATION_FAILED",
-            ScenarioFaultException => "SCENARIO_FAULT",
-            _ => "UNEXPECTED",
+            OperationCanceledException => OperationErrorCode.Cancelled,
+            TimeoutException => OperationErrorCode.Timeout,
+            ScenarioDisconnectException => OperationErrorCode.Network,
+            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.PermissionDenied => OperationErrorCode.Privilege,
+            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.NonZeroExit => OperationErrorCode.Command,
+            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.MalformedOutput => OperationErrorCode.Parse,
+            ScenarioFaultException fault when fault.Fault.Kind == ScenarioFaultKind.VerificationMismatch => OperationErrorCode.Verification,
+            ScenarioFaultException => OperationErrorCode.Unexpected,
+            _ => OperationErrorCode.Unexpected,
         };
     }
+
+    private static OperationState StateFor(DiagnosticPhase phase) => phase switch
+    {
+        DiagnosticPhase.Validate or DiagnosticPhase.Preflight or DiagnosticPhase.Plan => OperationState.Unchanged,
+        _ => OperationState.PartiallyApplied,
+    };
+
+    private static OperationRecovery RecoveryFor(bool attempted, bool succeeded) => attempted
+        ? succeeded ? OperationRecovery.Succeeded : OperationRecovery.Failed
+        : OperationRecovery.NotRequired;
+
+    private static Exception ExceptionFor(ScenarioFault fault) => fault.Kind switch
+    {
+        ScenarioFaultKind.Cancellation => new OperationCanceledException(),
+        ScenarioFaultKind.Timeout => new TimeoutException(),
+        ScenarioFaultKind.Disconnect => new ScenarioDisconnectException("Injected deterministic scenario disconnect."),
+        _ => new ScenarioFaultException(fault),
+    };
 }
