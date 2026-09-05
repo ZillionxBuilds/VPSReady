@@ -14,6 +14,8 @@ public sealed class RebootWorkflowScenarioTests
     {
         await using var services = ScenarioComposition.Create("c504-reboot");
         var state = services.GetRequiredService<ScenarioHostState>();
+        const string beforeIdentity = "boot-token-before";
+        state.Reboot.BootIdentity = beforeIdentity;
         var diagnostics = services.GetRequiredService<IDiagnosticSink>();
         var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
         await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
@@ -34,6 +36,8 @@ public sealed class RebootWorkflowScenarioTests
         Assert.All(operationEvents, item =>
         {
             Assert.Equal(result.Result.OperationId, item.Correlation.OperationId);
+            Assert.DoesNotContain(beforeIdentity, item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("00000000-0000-0000-0000-", item.Message, StringComparison.Ordinal);
             Assert.Null(item.StandardOutput);
             Assert.Null(item.StandardError);
         });

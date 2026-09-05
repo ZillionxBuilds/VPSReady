@@ -389,10 +389,47 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
     {
         var command = UbuntuPackageCommandCatalog.CreateBootIdentityRequest();
         var bounded = new RemoteCommand(command.Id, command.SafeArgumentSummary, timeout, command.OutputCapturePolicy, command.MaximumOutputBytes);
-        var response = await ExecuteAsync(bounded, cancellationToken).ConfigureAwait(false);
-        return response.Succeeded && TryReadSingleLine(response.StandardOutput, out var raw) && BootIdentityToken.TryCreate(raw, out var token)
-            ? new BootIdentityReadResult(token, true)
-            : BootIdentityReadResult.Unavailable;
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        var connectedClient = client;
+        if (connectedClient is null || !connectedClient.IsConnected)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
+
+        using var timeoutCancellation = new CancellationTokenSource(timeout);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+        try
+        {
+            using var sshCommand = connectedClient.CreateCommand(UbuntuPackageCommandCatalog.RequireShellCommand(bounded));
+            sshCommand.CommandTimeout = timeout;
+            await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
+
+            // This value is deliberately not a RemoteCommandResult. It is a
+            // bounded parser input used only to create the opaque in-memory
+            // BootIdentityToken; command diagnostics remain metadata-only.
+            var raw = await SshNetBoundedOutputCapture.ReadEphemeralSingleLineAsync(sshCommand.OutputStream, 128, linkedCancellation.Token).ConfigureAwait(false);
+            await SshNetBoundedOutputCapture.ReadAsync(sshCommand.ExtendedOutputStream, OutputCapturePolicy.MetadataOnly, 0, linkedCancellation.Token).ConfigureAwait(false);
+            return sshCommand.ExitStatus == 0 && raw is not null && BootIdentityToken.TryCreate(raw, out var token)
+                ? new BootIdentityReadResult(token, true)
+                : BootIdentityReadResult.Unavailable;
+        }
+        catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (SshOperationTimeoutException)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (Exception exception)
+        {
+            throw ToSafeConnectionFailure(exception);
+        }
     }
 
     /// <summary>
@@ -618,6 +655,54 @@ internal static class SshNetBoundedOutputCapture
         {
             Array.Clear(buffer);
             await retained.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Reads one bounded parser-only line without creating a command result or
+    /// diagnostic value. Callers must immediately transform it into an opaque
+    /// domain token and must never forward it to UI, journals, or support data.
+    /// </summary>
+    public static async Task<string?> ReadEphemeralSingleLineAsync(Stream source, int maximumBytes, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumBytes, 0);
+        var retained = new byte[maximumBytes];
+        var buffer = new byte[256];
+        var count = 0;
+        var malformed = false;
+        try
+        {
+            int bytesRead;
+            while ((bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+            {
+                var remaining = maximumBytes - count;
+                if (remaining <= 0)
+                {
+                    malformed = true;
+                    continue;
+                }
+
+                var copyLength = Math.Min(remaining, bytesRead);
+                buffer.AsSpan(0, copyLength).CopyTo(retained.AsSpan(count));
+                count += copyLength;
+                malformed |= copyLength != bytesRead;
+            }
+
+            if (malformed || count == 0)
+            {
+                return null;
+            }
+
+            var text = Encoding.UTF8.GetString(retained, 0, count);
+            return text.EndsWith("\r\n", StringComparison.Ordinal) ? text[..^2]
+                : text.EndsWith('\n') ? text[..^1]
+                : text;
+        }
+        finally
+        {
+            Array.Clear(buffer);
+            Array.Clear(retained);
         }
     }
 

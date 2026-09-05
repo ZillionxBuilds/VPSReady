@@ -22,8 +22,14 @@ public sealed class SshNetReauthenticationE3Tests
         var trust = new MatchingTrustStore();
         await using var transport = new SshNetRemoteTransport(trust);
         await transport.ConnectAsync(endpoint, sessionValue, TimeSpan.FromSeconds(10), CancellationToken.None);
+        var beforeReconnect = await transport.ReadBootIdentityAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+        Assert.True(beforeReconnect.IsAvailable);
+        Assert.Equal("[boot identity redacted]", beforeReconnect.Token!.ToString());
         sessionValue.Clear();
         await transport.ReconnectAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+        var afterReconnect = await transport.ReadBootIdentityAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+        Assert.True(afterReconnect.IsAvailable);
+        Assert.Equal("[boot identity redacted]", afterReconnect.Token!.ToString());
         Assert.True(trust.Assessments >= 2);
 
         await transport.DisposeAsync();

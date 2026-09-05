@@ -11,7 +11,8 @@ public sealed class RebootWorkflowTests
     [Fact]
     public void CatalogContainsOnlyBoundedExplicitRebootAndReconnectCommands()
     {
-        var commands = new[] { UbuntuPackageCommandCatalog.CreateRebootRequiredRequest(), UbuntuPackageCommandCatalog.CreateRebootRequest(), UbuntuPackageCommandCatalog.CreateReconnectVerifyRequest() };
+        var bootIdentity = UbuntuPackageCommandCatalog.CreateBootIdentityRequest();
+        var commands = new[] { UbuntuPackageCommandCatalog.CreateRebootRequiredRequest(), UbuntuPackageCommandCatalog.CreateRebootRequest(), UbuntuPackageCommandCatalog.CreateReconnectVerifyRequest(), bootIdentity };
         var shell = string.Concat(commands.Select(UbuntuPackageCommandCatalog.RequireShellCommand));
 
         Assert.All(commands, command => Assert.True(DiagnosticCommandCatalog.IsKnown(command.Id.Value)));
@@ -22,6 +23,8 @@ public sealed class RebootWorkflowTests
         Assert.DoesNotContain("full-upgrade", shell, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("release-upgrade", shell, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("shutdown", shell, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(OutputCapturePolicy.MetadataOnly, bootIdentity.OutputCapturePolicy);
+        Assert.Equal(0, bootIdentity.MaximumOutputBytes);
     }
 
     [Theory]
@@ -63,6 +66,29 @@ public sealed class RebootWorkflowTests
             Assert.Null(entry.StandardError);
         });
         Assert.Contains(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootRecoveryRequired && entry.Phase == DiagnosticPhase.Recovery);
+    }
+
+    [Fact]
+    public async Task NewBootIdentityCanProduceSuccessWithoutReachingTheDiagnosticSink()
+    {
+        const string beforeIdentity = "boot-token-before";
+        const string afterIdentity = "boot-token-after";
+        var sink = new Sink();
+        var transport = new RebootTransport(Ok("reboot=started"), Ok("reconnect=verified"));
+        transport.BootIdentities.Enqueue(beforeIdentity);
+        transport.BootIdentities.Enqueue(afterIdentity);
+
+        var result = await CreateWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(RebootReconnectOutcome.Reconnected, result.ReconnectOutcome);
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.DoesNotContain(beforeIdentity, entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(afterIdentity, entry.Message, StringComparison.Ordinal);
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+        });
     }
 
     [Fact]
