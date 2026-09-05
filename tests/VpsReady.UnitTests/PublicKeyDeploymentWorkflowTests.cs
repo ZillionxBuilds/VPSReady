@@ -37,6 +37,8 @@ public sealed class PublicKeyDeploymentWorkflowTests
         });
         Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("ssh-ed25519", StringComparison.Ordinal));
         Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded && item.Phase == DiagnosticPhase.Verify);
+        Assert.All(diagnostics.Events.Where(item => item.EventId == DiagnosticEventCatalog.CommandCompleted), item => Assert.Equal(0, item.ExitCode));
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded && item.Verification == OperationVerification.Passed && item.Recovery == OperationRecovery.NotRequired);
         Assert.Throws<InvalidOperationException>(() => _ = key.Length);
     }
 
@@ -47,7 +49,8 @@ public sealed class PublicKeyDeploymentWorkflowTests
         var key = await CreateMaterialAsync(workspace);
         var transport = new RecordingDeploymentTransport(alreadyPresent: true);
 
-        var result = await new PublicKeyDeploymentWorkflow(new CollectingDiagnosticSink()).DeployAsync(transport, key);
+        var diagnostics = new CollectingDiagnosticSink();
+        var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(transport, key);
 
         Assert.True(result.Result.Succeeded);
         Assert.True(result.AlreadyPresent);
@@ -61,8 +64,9 @@ public sealed class PublicKeyDeploymentWorkflowTests
         await using var workspace = new KeyWorkspace();
         var key = await CreateMaterialAsync(workspace);
         var transport = new RecordingDeploymentTransport(alreadyPresent: false, failFirstVerify: true);
+        var diagnostics = new CollectingDiagnosticSink();
 
-        var result = await new PublicKeyDeploymentWorkflow(new CollectingDiagnosticSink()).DeployAsync(transport, key);
+        var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(transport, key);
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal(OperationErrorCode.Verification, result.Result.ErrorCode);
@@ -72,6 +76,8 @@ public sealed class PublicKeyDeploymentWorkflowTests
             [DiagnosticPhase.Preflight, DiagnosticPhase.Apply, DiagnosticPhase.Verify, DiagnosticPhase.Recovery],
             transport.Phases);
         Assert.Equal(RemoteCommandCatalog.UbuntuAuthorizedKeysVerify, transport.Commands[^1].Id.Value);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.Phase == DiagnosticPhase.Verify && item.ExitCode == 4);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentFailed && item.Verification == OperationVerification.Failed && item.Recovery == OperationRecovery.Succeeded);
     }
 
     [Fact]

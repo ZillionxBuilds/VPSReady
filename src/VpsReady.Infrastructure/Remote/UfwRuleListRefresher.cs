@@ -82,7 +82,7 @@ public sealed class UfwRuleListRefresher
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Preflight, DiagnosticStatus.Running, "Reading the current numbered firewall rules.", CancellationToken.None, command.Id.Value).ConfigureAwait(false);
             var result = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
-            await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Preflight, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Numbered firewall rule read completed.", CancellationToken.None, command.Id.Value, result.Succeeded ? null : OperationErrorCode.Command).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Preflight, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Numbered firewall rule read completed.", CancellationToken.None, command.Id.Value, result.Succeeded ? null : OperationErrorCode.Command, result.ExitCode).ConfigureAwait(false);
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Validating the current numbered firewall rules.", CancellationToken.None, command.Id.Value).ConfigureAwait(false);
 
             var read = UbuntuServerFactParser.ParseUfwRuleList(result);
@@ -136,7 +136,8 @@ public sealed class UfwRuleListRefresher
         string message,
         CancellationToken cancellationToken,
         string? commandId = null,
-        OperationErrorCode? errorCode = null)
+        OperationErrorCode? errorCode = null,
+        int? exitCode = null)
     {
         try
         {
@@ -151,7 +152,8 @@ public sealed class UfwRuleListRefresher
                     message,
                     commandId,
                     errorCode?.ToStableCode(),
-                    ActionName),
+                    ActionName,
+                    ExitCode: exitCode),
                 cancellationToken).ConfigureAwait(false);
         }
         catch

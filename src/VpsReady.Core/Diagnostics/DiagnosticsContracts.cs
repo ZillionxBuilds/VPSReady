@@ -339,7 +339,10 @@ public sealed record StructuredDiagnosticEvent(
     BoundedOutput? StandardOutput = null,
     BoundedOutput? StandardError = null,
     IReadOnlyDictionary<string, DiagnosticValue>? Context = null,
-    DateTimeOffset? TimestampUtc = null)
+    DateTimeOffset? TimestampUtc = null,
+    int? ExitCode = null,
+    OperationVerification? Verification = null,
+    OperationRecovery? Recovery = null)
 {
     public const int CurrentSchemaVersion = 1;
 

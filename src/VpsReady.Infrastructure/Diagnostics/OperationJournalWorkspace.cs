@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Infrastructure.Local;
@@ -141,6 +142,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             AssertSafeEventForExport(diagnosticEvent);
         }
         var terminal = selected.Length == 0 ? null : selected[^1];
+        var commandEvidence = selected.LastOrDefault(diagnosticEvent => diagnosticEvent.ExitCode is not null);
         var run = terminal?.Correlation.RunId ?? "not-recorded";
         var operation = terminal?.Correlation.OperationId ?? "not-recorded";
         var action = terminal?.Action ?? terminal?.Category ?? "Diagnostics";
@@ -160,9 +162,10 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             $"- Operation ID: {Safe(operation)}",
             $"- Action/stage: {Safe(action)} / {terminal?.Phase.ToString() ?? "not-recorded"}",
             $"- Status/error code: {terminal?.Status.ToString() ?? "not-recorded"} / {Safe(error)}",
+            $"- Exit code: {commandEvidence?.ExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not-recorded"}",
             $"- Expected: Describe the expected result without server identifiers or credentials.",
             $"- Observed safe summary: {Safe(summary)}",
-            $"- Verification/recovery: {terminal?.Status.ToString() ?? "not-recorded"}; review the local sanitized support bundle before sharing.",
+            $"- Verification/recovery: {terminal?.Verification?.ToString() ?? "not-recorded"} / {terminal?.Recovery?.ToString() ?? "not-recorded"}; review the local sanitized support bundle before sharing.",
             "- Evidence boundary: REAL VPS: NOT TESTED unless this report was produced by Owner testing of a release candidate.");
     }
 
@@ -498,6 +501,21 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             throw new ArgumentException("Only catalogued error codes may enter the journal.", nameof(diagnosticEvent));
         }
 
+        if (diagnosticEvent.ExitCode is < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(diagnosticEvent), "Diagnostic exit codes must be non-negative when present.");
+        }
+
+        if (diagnosticEvent.Verification is { } verification && !Enum.IsDefined(verification))
+        {
+            throw new ArgumentOutOfRangeException(nameof(diagnosticEvent), "Diagnostic verification state must be defined when present.");
+        }
+
+        if (diagnosticEvent.Recovery is { } recovery && !Enum.IsDefined(recovery))
+        {
+            throw new ArgumentOutOfRangeException(nameof(diagnosticEvent), "Diagnostic recovery state must be defined when present.");
+        }
+
         ValidateOpaqueCorrelation(diagnosticEvent.Correlation);
     }
 
@@ -543,6 +561,8 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         $"- Recorded events: {selected.Length}",
         $"- Operations: {string.Join(", ", selected.Select(item => item.Correlation.OperationId).Distinct(StringComparer.Ordinal))}",
         $"- Terminal statuses: {string.Join(", ", selected.Select(item => item.Status).Distinct())}",
+        $"- Verification states: {string.Join(", ", selected.Where(item => item.Verification is not null).Select(item => item.Verification).Distinct())}",
+        $"- Recovery states: {string.Join(", ", selected.Where(item => item.Recovery is not null).Select(item => item.Recovery).Distinct())}",
         "- This summary intentionally excludes server identity, credentials, keys, trust data, raw command output, and local paths.");
 
     private static string Safe(string value) => value.Replace('\r', ' ').Replace('\n', ' ');
@@ -675,6 +695,9 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         string? CommandId,
         string? ErrorCode,
         long? DurationMs,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? ExitCode,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Verification,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Recovery,
         string OutputPolicy,
         BoundedOutput? StandardOutput,
         BoundedOutput? StandardError,
@@ -701,6 +724,9 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             value.CommandId,
             value.ErrorCode,
             value.Duration is null ? null : (long)value.Duration.Value.TotalMilliseconds,
+            value.ExitCode,
+            value.Verification?.ToString(),
+            value.Recovery?.ToString(),
             value.OutputPolicy.ToString(),
             value.StandardOutput,
             value.StandardError,

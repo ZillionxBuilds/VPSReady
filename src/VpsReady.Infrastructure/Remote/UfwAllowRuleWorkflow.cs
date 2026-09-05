@@ -74,13 +74,13 @@ public sealed class UfwAllowRuleWorkflow
             }
 
             var success = OperationResult.Success(correlation.OperationId, alreadyPresent ? OperationState.Unchanged : OperationState.Applied);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "Firewall allow rule is present in a fresh verified listing.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "Firewall allow rule is present in a fresh verified listing.", CancellationToken.None, listCommand.Id.Value, verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new UfwAllowRuleOperationResult(success, verified.Snapshot, alreadyPresent, UfwAllowRuleValidationError.None);
         }
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.PartiallyApplied : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Firewall allow-rule operation was cancelled before verification.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Firewall allow-rule operation was cancelled before verification.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new UfwAllowRuleOperationResult(cancelled, Snapshot: null, AlreadyPresent: false, UfwAllowRuleValidationError.None);
         }
         catch (RemoteTransportException exception)
@@ -122,13 +122,13 @@ public sealed class UfwAllowRuleWorkflow
                 OperationState.PartiallyApplied,
                 originalError == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun,
                 recoverySucceeded ? OperationRecovery.Succeeded : OperationRecovery.Failed);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, recoverySucceeded ? "Firewall state was refreshed, but the allow-rule operation remains unverified." : "Firewall state refresh after an unverified allow-rule operation failed.", CancellationToken.None, listCommand.Id.Value, error).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, recoverySucceeded ? "Firewall state was refreshed, but the allow-rule operation remains unverified." : "Firewall state refresh after an unverified allow-rule operation failed.", CancellationToken.None, listCommand.Id.Value, error, verification: result.Verification, recovery: result.Recovery).ConfigureAwait(false);
             return new UfwAllowRuleOperationResult(result, recovered.IsComplete ? recovered.Snapshot : null, AlreadyPresent: false, UfwAllowRuleValidationError.None);
         }
         catch
         {
             var result = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Recovery, OperationState.PartiallyApplied, OperationVerification.NotRun, OperationRecovery.Failed);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, "Firewall state refresh after an unverified allow-rule operation failed.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Recovery).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, "Firewall state refresh after an unverified allow-rule operation failed.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Recovery, verification: result.Verification, recovery: result.Recovery).ConfigureAwait(false);
             return new UfwAllowRuleOperationResult(result, Snapshot: null, AlreadyPresent: false, UfwAllowRuleValidationError.None);
         }
     }
@@ -142,10 +142,10 @@ public sealed class UfwAllowRuleWorkflow
 
     private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId)
     {
-        await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", CancellationToken.None, commandId, result.Succeeded ? null : OperationErrorCode.Command, result.Duration).ConfigureAwait(false);
+        await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", CancellationToken.None, commandId, result.Succeeded ? null : OperationErrorCode.Command, result.Duration, result.ExitCode).ConfigureAwait(false);
     }
 
-    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null)
+    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
     {
         try
         {
@@ -160,7 +160,10 @@ public sealed class UfwAllowRuleWorkflow
                 commandId,
                 errorCode?.ToStableCode(),
                 ActionName,
-                duration), cancellationToken).ConfigureAwait(false);
+                duration,
+                ExitCode: exitCode,
+                Verification: verification,
+                Recovery: recovery), cancellationToken).ConfigureAwait(false);
         }
         catch
         {

@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Diagnostics;
 
 namespace VpsReady.UnitTests;
@@ -340,6 +342,66 @@ public sealed class OperationJournalWorkspaceTests
             Assert.True(Directory.Exists(Path.Combine(runs, "run_000000000000000000000000")));
             Assert.True(Directory.Exists(Path.Combine(runs, "run_000000000000000000000018")));
             Assert.False(Directory.Exists(Path.Combine(runs, "run_000000000000000000000054")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SafeCommandEvidenceProjectsApplicableExitVerificationAndRecoveryWithoutRawPayloads()
+    {
+        var root = CreateTemporaryDirectory();
+        var exports = Path.Combine(root, "selected-export");
+        const string unsafePayload = "c607-command-output-must-not-persist";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            redactor.RegisterSensitiveValue(unsafePayload);
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c607build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("apply");
+
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Apply, DiagnosticStatus.Succeeded, exitCode: 0), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Apply, DiagnosticStatus.Failed, exitCode: 42, error: OperationErrorCode.Command), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Apply, DiagnosticStatus.Failed, error: OperationErrorCode.Network, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.OperationCancelled, DiagnosticPhase.Apply, DiagnosticStatus.Cancelled, error: OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, error: OperationErrorCode.Recovery, verification: OperationVerification.Failed, recovery: OperationRecovery.Failed), CancellationToken.None);
+
+            var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var journal = await File.ReadAllTextAsync(journalPath);
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exports, CancellationToken.None);
+
+            Assert.Contains("\"exitCode\": 0", journal, StringComparison.Ordinal);
+            Assert.Contains("\"exitCode\": 42", journal, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"exitCode\": 5", journal, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"exitCode\": null", journal, StringComparison.Ordinal);
+            Assert.Contains("\"verification\": \"Failed\"", journal, StringComparison.Ordinal);
+            Assert.Contains("\"recovery\": \"Failed\"", journal, StringComparison.Ordinal);
+            Assert.Contains("- Exit code: 42", report, StringComparison.Ordinal);
+            Assert.Contains("- Verification/recovery: Failed / Failed", report, StringComparison.Ordinal);
+            Assert.DoesNotContain(unsafePayload, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(unsafePayload, report, StringComparison.Ordinal);
+
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var events = archive.GetEntry("events.jsonl");
+            Assert.NotNull(events);
+            using var reader = new StreamReader(events.Open(), Encoding.UTF8);
+            var selected = reader.ReadToEnd();
+            Assert.Contains("\"exitCode\": 42", selected, StringComparison.Ordinal);
+            Assert.Contains("\"verification\": \"Failed\"", selected, StringComparison.Ordinal);
+            Assert.Contains("\"recovery\": \"Failed\"", selected, StringComparison.Ordinal);
+            Assert.DoesNotContain(unsafePayload, selected, StringComparison.Ordinal);
+
+            StructuredDiagnosticEvent Event(string eventId, DiagnosticPhase phase, DiagnosticStatus status, int? exitCode = null, OperationErrorCode? error = null, OperationVerification? verification = null, OperationRecovery? recovery = null) =>
+                new(eventId, "Safe diagnostics", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, $"Safe command evidence omitted {unsafePayload}.", RemoteCommandCatalog.UbuntuUfwStatusRead, error?.ToStableCode(), "C607Evidence", ExitCode: exitCode, Verification: verification, Recovery: recovery);
         }
         finally
         {

@@ -116,13 +116,13 @@ public sealed class UfwSelectedRuleRemovalWorkflow
             }
 
             var success = OperationResult.Success(correlation.OperationId, OperationState.Applied);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "The selected firewall rule is absent from a fresh verified listing.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "The selected firewall rule is absent from a fresh verified listing.", CancellationToken.None, listCommand.Id.Value, verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new UfwRuleRemovalOperationResult(success, verified.Snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
         }
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.PartiallyApplied : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Selected firewall-rule removal was cancelled before verification.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Selected firewall-rule removal was cancelled before verification.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new UfwRuleRemovalOperationResult(cancelled, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
         }
         catch (RemoteTransportException exception)
@@ -154,13 +154,13 @@ public sealed class UfwSelectedRuleRemovalWorkflow
             var recoverySucceeded = recovered.IsComplete;
             var error = recoverySucceeded ? originalError : OperationErrorCode.Recovery;
             var result = OperationResult.Failure(correlation.OperationId, error, OperationState.PartiallyApplied, originalError == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun, recoverySucceeded ? OperationRecovery.Succeeded : OperationRecovery.Failed);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, recoverySucceeded ? "Firewall state was refreshed, but selected-rule removal remains unverified." : "Firewall state refresh after unverified selected-rule removal failed.", CancellationToken.None, listCommand.Id.Value, error).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, recoverySucceeded ? "Firewall state was refreshed, but selected-rule removal remains unverified." : "Firewall state refresh after unverified selected-rule removal failed.", CancellationToken.None, listCommand.Id.Value, error, verification: result.Verification, recovery: result.Recovery).ConfigureAwait(false);
             return new UfwRuleRemovalOperationResult(result, recovered.IsComplete ? recovered.Snapshot : null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
         }
         catch
         {
             var result = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Recovery, OperationState.PartiallyApplied, OperationVerification.NotRun, OperationRecovery.Failed);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, "Firewall state refresh after unverified selected-rule removal failed.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Recovery).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, "Firewall state refresh after unverified selected-rule removal failed.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Recovery, verification: result.Verification, recovery: result.Recovery).ConfigureAwait(false);
             return new UfwRuleRemovalOperationResult(result, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
         }
     }
@@ -173,13 +173,13 @@ public sealed class UfwSelectedRuleRemovalWorkflow
     }
 
     private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId) =>
-        await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", CancellationToken.None, commandId, result.Succeeded ? null : OperationErrorCode.Command, result.Duration).ConfigureAwait(false);
+        await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", CancellationToken.None, commandId, result.Succeeded ? null : OperationErrorCode.Command, result.Duration, result.ExitCode).ConfigureAwait(false);
 
-    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null)
+    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
     {
         try
         {
-            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Firewall", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, errorCode?.ToStableCode(), ActionName, duration), cancellationToken).ConfigureAwait(false);
+            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Firewall", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, errorCode?.ToStableCode(), ActionName, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery), cancellationToken).ConfigureAwait(false);
         }
         catch
         {
