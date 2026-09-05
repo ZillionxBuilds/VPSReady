@@ -22,6 +22,7 @@ public static class DesktopComposition
         services.AddSingleton<IPlatformPaths, SystemPlatformPaths>();
         services.AddSingleton<ILocalFileStore, AtomicFileStore>();
         services.AddSingleton<ISecureLocalStorage, SecureLocalStorage>();
+        services.AddSingleton<IKnownHostTrustStore, KnownHostTrustStore>();
         services.AddSingleton<IProcessRunner, SystemProcessRunner>();
         services.AddSingleton<IRedactor, FailClosedRedactor>();
         services.AddSingleton(new DiagnosticEnvironment(
