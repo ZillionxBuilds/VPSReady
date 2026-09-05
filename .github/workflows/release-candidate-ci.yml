@@ -116,7 +116,7 @@ jobs:
           bash eng/verify-packaging-profiles.sh
           bash eng/verify-release-candidate-ci.sh
           bash eng/verify-startup-smoke-suite.sh
-          pwsh ./eng/startup-smoke-package.ps1 -SelfTest
+          pwsh -NoProfile -Command '$tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("eng/startup-smoke-package.ps1", [ref]$tokens, [ref]$errors); if ($errors.Count -ne 0) { throw "Startup-smoke script has PowerShell parser errors." }; ./eng/startup-smoke-package.ps1 -SelfTest'
           dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
           dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build --logger "trx;LogFileName=scenario.trx" --results-directory TestResults/scenario
 

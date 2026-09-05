@@ -135,7 +135,12 @@ jobs:
 
       - name: E0 startup-smoke script self-test
         shell: pwsh
-        run: ./eng/startup-smoke-package.ps1 -SelfTest
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile('eng/startup-smoke-package.ps1', [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) { throw 'Startup-smoke script has PowerShell parser errors.' }
+          ./eng/startup-smoke-package.ps1 -SelfTest
 
       - name: E1 unit tests
         run: dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit

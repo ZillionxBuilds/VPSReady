@@ -209,7 +209,7 @@ try {
         $report.result_reason = 'RUNNER_OS_MISMATCH'
         $report.error_code = 'NONE'
         Write-SafeReport $report $reportPath
-        Write-Host "Startup smoke NOT RUN for $Rid: matching host OS is unavailable."
+        Write-Host "Startup smoke NOT RUN for ${Rid}: matching host OS is unavailable."
         exit 0
     }
 
@@ -218,7 +218,7 @@ try {
         $report.result_reason = 'RUNNER_ARCHITECTURE_MISMATCH'
         $report.error_code = 'NONE'
         Write-SafeReport $report $reportPath
-        Write-Host "Startup smoke NOT RUN for $Rid: matching host architecture is unavailable."
+        Write-Host "Startup smoke NOT RUN for ${Rid}: matching host architecture is unavailable."
         exit 0
     }
 
@@ -262,7 +262,7 @@ try {
             $report.result_reason = 'HEADLESS_DISPLAY_UNAVAILABLE'
             $report.error_code = 'NONE'
             Write-SafeReport $report $reportPath
-            Write-Host "Startup smoke NOT RUN for $Rid: no contained headless display launcher is available."
+            Write-Host "Startup smoke NOT RUN for ${Rid}: no contained headless display launcher is available."
             exit 0
         }
 
@@ -293,7 +293,7 @@ try {
     $report.error_code = 'NONE'
     $report.cleanup = $cleanup
     Write-SafeReport $report $reportPath
-    Write-Host "Startup smoke PASS for $Rid: direct self-contained apphost remained running and exited after bounded shutdown."
+    Write-Host "Startup smoke PASS for ${Rid}: direct self-contained apphost remained running and exited after bounded shutdown."
 } catch {
     $report.status = 'FAIL'
     $report.result_reason = 'STARTUP_SMOKE_FAILED'

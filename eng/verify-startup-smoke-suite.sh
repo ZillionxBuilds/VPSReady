@@ -33,10 +33,16 @@ require_smoke 'VpsReady.Desktop'
 require_smoke 'Write-SafeReport'
 require_smoke 'Remove-Item -LiteralPath $ridDirectory -Recurse -Force'
 
+if grep -Fq '$Rid:' "$smoke"; then
+  printf '%s\n' 'Startup-smoke script has an invalid unbraced PowerShell variable followed by a colon.' >&2
+  exit 1
+fi
+
 for workflow in "$blind_ci" "$release_ci"; do
   grep -Fq 'startup-smoke-package.ps1' "$workflow" || { printf 'Startup-smoke workflow wiring missing in %s\n' "$workflow" >&2; exit 1; }
   grep -Fq 'verify-startup-smoke-suite.sh' "$workflow" || { printf 'Startup-smoke static guard missing in %s\n' "$workflow" >&2; exit 1; }
   grep -Fq 'startup-smoke-report.json' "$workflow" || { printf 'Startup-smoke report retention missing in %s\n' "$workflow" >&2; exit 1; }
+  grep -Fq 'Parser]::ParseFile' "$workflow" || { printf 'Startup-smoke PowerShell parse guard missing in %s\n' "$workflow" >&2; exit 1; }
 done
 
 if grep -Eiq '(^|[[:space:];|])(curl|wget|ssh|scp|rsync)[[:space:]]' "$smoke"; then
