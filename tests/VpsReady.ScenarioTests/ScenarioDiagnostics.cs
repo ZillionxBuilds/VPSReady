@@ -1,73 +1,14 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 
 namespace VpsReady.ScenarioTests;
 
 /// <summary>
-/// Fail-closed redactor used by the test-only diagnostic recorder when the
-/// production Infrastructure project is intentionally not referenced by the
-/// scenario test project.  Unit tests exercise the production redactor itself.
+/// In-memory sanitized sink for scenario tests. The shared production
+/// RedactingDiagnosticSink is the only ingress in scenario composition.
 /// </summary>
-public sealed partial class ScenarioRedactor : IRedactor
-{
-    private const string Omitted = "PAYLOAD_OMITTED_BY_REDACTION_POLICY";
-    private readonly List<string> sensitiveValues = [];
-    private readonly Lock sync = new();
-
-    public void RegisterSensitiveValue(string value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            lock (sync)
-            {
-                sensitiveValues.Add(value);
-            }
-        }
-    }
-
-    public RedactionResult Redact(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return new RedactionResult(value, false);
-        }
-
-        lock (sync)
-        {
-            if (sensitiveValues.Any(sensitiveValue => value.Contains(sensitiveValue, StringComparison.Ordinal)))
-            {
-                return new RedactionResult(Omitted, true);
-            }
-        }
-
-        if (PrivateKeyRegex().IsMatch(value) || SensitiveFieldRegex().IsMatch(value) || AuthorizationRegex().IsMatch(value))
-        {
-            return new RedactionResult(Omitted, true);
-        }
-
-        return new RedactionResult(TokenRegex().Replace(value, "[REDACTED_TOKEN]"), false);
-    }
-
-    [GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----", RegexOptions.CultureInvariant)]
-    private static partial Regex PrivateKeyRegex();
-
-    [GeneratedRegex("\\b(password|passphrase|token|secret)\\s*[=:]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex SensitiveFieldRegex();
-
-    [GeneratedRegex("authorization\\s*:\\s*\\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex AuthorizationRegex();
-
-    [GeneratedRegex("\\b(?:ghp|github_pat|sk)-[A-Za-z0-9_-]{12,}\\b", RegexOptions.CultureInvariant)]
-    private static partial Regex TokenRegex();
-}
-
-/// <summary>
-/// In-memory diagnostic sink for scenario tests.  It applies the same redactor
-/// before retaining Activity-like messages or JSONL-like records.
-/// </summary>
-public sealed class ScenarioDiagnosticRecorder(IRedactor redactor) : IDiagnosticSink
+public sealed class ScenarioDiagnosticRecorder : ISanitizedDiagnosticSink
 {
     private readonly List<StructuredDiagnosticEvent> events = [];
     private readonly Lock sync = new();
@@ -85,15 +26,13 @@ public sealed class ScenarioDiagnosticRecorder(IRedactor redactor) : IDiagnostic
 
     public IReadOnlyList<string> ActivityMessages => Events.Select(diagnosticEvent => diagnosticEvent.Message).ToArray();
 
-    public async Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+    public async Task WriteSanitizedAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(diagnosticEvent);
         cancellationToken.ThrowIfCancellationRequested();
-        var safeMessage = redactor.Redact(diagnosticEvent.Message);
-        var safeEvent = diagnosticEvent with { Message = safeMessage.SafeText };
         lock (sync)
         {
-            events.Add(safeEvent);
+            events.Add(diagnosticEvent);
         }
 
         await Task.CompletedTask.ConfigureAwait(false);
@@ -141,17 +80,20 @@ public sealed class ScenarioOperationRunner
 {
     private readonly ScenarioHostState state;
     private readonly ScenarioFaultPlan faults;
-    private readonly ScenarioDiagnosticRecorder diagnostics;
+    private readonly ScenarioDiagnosticRecorder recorder;
+    private readonly IDiagnosticSink diagnostics;
     private readonly string runId;
 
     public ScenarioOperationRunner(
         ScenarioHostState state,
         ScenarioFaultPlan faults,
-        ScenarioDiagnosticRecorder diagnostics,
+        ScenarioDiagnosticRecorder recorder,
+        IDiagnosticSink diagnostics,
         string? runId = null)
     {
         this.state = state ?? throw new ArgumentNullException(nameof(state));
         this.faults = faults ?? throw new ArgumentNullException(nameof(faults));
+        this.recorder = recorder ?? throw new ArgumentNullException(nameof(recorder));
         this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         this.runId = string.IsNullOrWhiteSpace(runId) ? $"run-{state.ScenarioId}" : runId;
     }
@@ -171,7 +113,7 @@ public sealed class ScenarioOperationRunner
             throw new ArgumentException("A stable operation ID is required.", nameof(operationId));
         }
 
-        var context = new ScenarioOperationContext(state.ScenarioId, runId, operationId, state, faults, diagnostics);
+        var context = new ScenarioOperationContext(state.ScenarioId, runId, operationId, state, faults, recorder);
         var steps = new (DiagnosticPhase Phase, Func<ScenarioOperationContext, CancellationToken, Task>? Action)[]
         {
             (DiagnosticPhase.Validate, validate),
@@ -215,7 +157,7 @@ public sealed class ScenarioOperationRunner
             VerificationCompleted: verificationCompleted,
             RecoveryAttempted: false,
             RecoverySucceeded: false,
-            Events: diagnostics.Events);
+            Events: recorder.Events);
     }
 
     private async Task<Exception?> RunPhaseAsync(
@@ -294,7 +236,7 @@ public sealed class ScenarioOperationRunner
             VerificationCompleted: verificationCompleted,
             RecoveryAttempted: recoveryAttempted,
             RecoverySucceeded: recoverySucceeded,
-            Events: diagnostics.Events);
+            Events: recorder.Events);
     }
 
     private Task WriteEventAsync(
@@ -312,7 +254,7 @@ public sealed class ScenarioOperationRunner
             phase.ToString().ToLowerInvariant());
         return diagnostics.WriteAsync(
             new StructuredDiagnosticEvent(
-                $"scenario.operation.{phase.ToString().ToLowerInvariant()}",
+                EventIdFor(status),
                 "Scenario",
                 level,
                 correlation,
@@ -321,6 +263,18 @@ public sealed class ScenarioOperationRunner
                 message),
             cancellationToken);
     }
+
+    private static string EventIdFor(DiagnosticStatus status) => status switch
+    {
+        DiagnosticStatus.Started => DiagnosticEventCatalog.OperationStarted,
+        DiagnosticStatus.Running => DiagnosticEventCatalog.OperationRunning,
+        DiagnosticStatus.Succeeded => DiagnosticEventCatalog.OperationSucceeded,
+        DiagnosticStatus.Warning => DiagnosticEventCatalog.OperationWarning,
+        DiagnosticStatus.Failed => DiagnosticEventCatalog.OperationFailed,
+        DiagnosticStatus.Cancelled => DiagnosticEventCatalog.OperationCancelled,
+        DiagnosticStatus.RecoveryRequired => DiagnosticEventCatalog.OperationRecoveryRequired,
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown diagnostic status."),
+    };
 
     private static string SafeExceptionMessage(Exception exception)
     {

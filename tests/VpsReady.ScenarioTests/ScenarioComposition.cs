@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Diagnostics;
 
 namespace VpsReady.ScenarioTests;
 
@@ -27,9 +28,10 @@ public static class ScenarioComposition
         services.AddSingleton<IClock, ScenarioClock>();
         services.AddSingleton<ScenarioProcessRunner>();
         services.AddSingleton<IProcessRunner>(provider => provider.GetRequiredService<ScenarioProcessRunner>());
-        services.AddSingleton<IRedactor, ScenarioRedactor>();
+        services.AddSingleton<IRedactor, FailClosedRedactor>();
         services.AddSingleton<ScenarioDiagnosticRecorder>();
-        services.AddSingleton<IDiagnosticSink>(provider => provider.GetRequiredService<ScenarioDiagnosticRecorder>());
+        services.AddSingleton<ISanitizedDiagnosticSink>(provider => provider.GetRequiredService<ScenarioDiagnosticRecorder>());
+        services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
         services.AddSingleton<ScenarioOperationRunner>();
         return services.BuildServiceProvider(validateScopes: true);
     }

@@ -20,6 +20,7 @@ public static class DesktopComposition
         services.AddSingleton<ILocalFileStore, AtomicFileStore>();
         services.AddSingleton<IProcessRunner, SystemProcessRunner>();
         services.AddSingleton<IRedactor, FailClosedRedactor>();
+        services.AddSingleton<ISanitizedDiagnosticSink, NullSanitizedDiagnosticSink>();
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
         services.AddSingleton<IRemoteTransport, SshNetRemoteTransport>();
         return services.BuildServiceProvider(validateScopes: true);
