@@ -106,7 +106,7 @@ public sealed class ExistingOpenSshKeySelectorTests
     }
 
     [Fact]
-    public async Task WindowsFailsClosedUntilAPlatformNoFollowBoundaryExists()
+    public async Task WindowsSafeOpenRejectsPostValidationDirectoryReplacement()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -114,10 +114,9 @@ public sealed class ExistingOpenSshKeySelectorTests
         }
 
         await using var workspace = new KeyWorkspace();
-        var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
-        Assert.True((await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None)).Succeeded);
+        await File.WriteAllTextAsync(workspace.PrivateKeyPath, "validated-placeholder");
 
-        var result = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink()).SelectAsync(
+        var result = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink(), new DirectoryReplacementSelectionObserver()).SelectAsync(
             new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
 
         Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
@@ -133,4 +132,13 @@ public sealed class ExistingOpenSshKeySelectorTests
 internal sealed class ThrowingSelectionObserver(Exception exception) : IExistingSshKeySelectionObserver
 {
     public void BeforeRead(string path) => throw exception;
+}
+
+internal sealed class DirectoryReplacementSelectionObserver : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path)
+    {
+        File.Delete(path);
+        Directory.CreateDirectory(path);
+    }
 }

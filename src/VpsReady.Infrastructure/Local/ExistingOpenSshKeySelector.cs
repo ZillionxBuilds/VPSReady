@@ -119,9 +119,17 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Missing, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
         }
-        catch (NativeOpenException exception) when (exception.IsNoFollowViolation)
+        catch (NativeOpenException exception) when (exception.IsUnsafeTarget)
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.InvalidTarget, OperationErrorCode.Validation, OperationVerification.NotRun).ConfigureAwait(false);
+        }
+        catch (WindowsOpenException exception) when (exception.IsAccessDenied)
+        {
+            return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Permission, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
+        }
+        catch (WindowsOpenException exception) when (exception.IsMissing)
+        {
+            return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Missing, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
         }
         catch (UnsafeKeySelectionPathException)
         {
@@ -233,7 +241,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     {
         if (OperatingSystem.IsWindows())
         {
-            throw new UnsafeKeySelectionPathException();
+            return OpenWindowsSafeReadStream(path);
         }
 
         var segments = path.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
@@ -242,12 +250,12 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             for (var index = 0; index < segments.Length - 1; index++)
             {
-                var next = OpenUnixAt(directoryHandle, segments[index], UnixOpenFlags.ReadOnly | UnixOpenFlags.Directory | UnixOpenFlags.NoFollow);
+                var next = OpenUnixAt(directoryHandle, segments[index], UnixOpenFlags.ReadOnly | UnixOpenFlags.Directory | UnixOpenFlags.NoFollow, requiredDirectory: true);
                 directoryHandle.Dispose();
                 directoryHandle = next;
             }
 
-            var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow | UnixOpenFlags.NonBlocking);
+            var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow | UnixOpenFlags.NonBlocking, requiredDirectory: false);
             try
             {
                 VerifyRegularUnixFile(fileHandle);
@@ -268,20 +276,20 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     private static SafeFileHandle OpenUnix(string path, UnixOpenFlags flags)
     {
         var descriptor = OperatingSystem.IsMacOS() ? OpenMac(path, TranslateUnixFlags(flags)) : OpenLinux(path, TranslateUnixFlags(flags));
-        return CreateUnixHandle(descriptor);
+        return CreateUnixHandle(descriptor, requiredDirectory: false);
     }
 
-    private static SafeFileHandle OpenUnixAt(SafeFileHandle directory, string name, UnixOpenFlags flags)
+    private static SafeFileHandle OpenUnixAt(SafeFileHandle directory, string name, UnixOpenFlags flags, bool requiredDirectory)
     {
         var descriptor = OperatingSystem.IsMacOS() ? OpenAtMac(directory.DangerousGetHandle().ToInt32(), name, TranslateUnixFlags(flags)) : OpenAtLinux(directory.DangerousGetHandle().ToInt32(), name, TranslateUnixFlags(flags));
-        return CreateUnixHandle(descriptor);
+        return CreateUnixHandle(descriptor, requiredDirectory);
     }
 
-    private static SafeFileHandle CreateUnixHandle(int descriptor)
+    private static SafeFileHandle CreateUnixHandle(int descriptor, bool requiredDirectory)
     {
         if (descriptor < 0)
         {
-            throw new NativeOpenException(Marshal.GetLastPInvokeError());
+            throw new NativeOpenException(Marshal.GetLastPInvokeError(), requiredDirectory);
         }
 
         return new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
@@ -316,7 +324,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
                 : FStatLinux(handle.DangerousGetHandle().ToInt32(), statBuffer);
             if (status != 0)
             {
-                throw new NativeOpenException(Marshal.GetLastPInvokeError());
+                throw new NativeOpenException(Marshal.GetLastPInvokeError(), requiredDirectory: false);
             }
 
             // Darwin places st_mode after the 32-bit device field. Linux lays it out
@@ -340,6 +348,93 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             Marshal.FreeHGlobal(statBuffer);
         }
+    }
+
+    private static FileStream OpenWindowsSafeReadStream(string path)
+    {
+        var handle = CreateWindowsHandle(path);
+        try
+        {
+            VerifyRegularWindowsFile(handle, path);
+            return new FileStream(handle, FileAccess.Read, 4096, isAsync: false);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
+    }
+
+    private static SafeFileHandle CreateWindowsHandle(string path)
+    {
+        const uint genericRead = 0x80000000;
+        const uint fileShareRead = 0x00000001;
+        const uint openExisting = 3;
+        const uint fileFlagSequentialScan = 0x08000000;
+        const uint fileFlagOpenReparsePoint = 0x00200000;
+        const uint fileFlagBackupSemantics = 0x02000000;
+        var handle = CreateFileWindows(path, genericRead, fileShareRead, IntPtr.Zero, openExisting, fileFlagSequentialScan | fileFlagOpenReparsePoint | fileFlagBackupSemantics, IntPtr.Zero);
+        if (handle.IsInvalid)
+        {
+            handle.Dispose();
+            throw new WindowsOpenException(Marshal.GetLastPInvokeError());
+        }
+
+        return handle;
+    }
+
+    private static void VerifyRegularWindowsFile(SafeFileHandle handle, string expectedPath)
+    {
+        const uint fileTypeDisk = 1;
+        if (GetFileTypeWindows(handle) != fileTypeDisk)
+        {
+            throw new UnsafeKeySelectionPathException();
+        }
+
+        if (!GetFileInformationByHandleWindows(handle, out var information))
+        {
+            throw new WindowsOpenException(Marshal.GetLastPInvokeError());
+        }
+
+        if ((information.FileAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
+            || !WindowsPathsMatch(expectedPath, GetFinalWindowsPath(handle)))
+        {
+            throw new UnsafeKeySelectionPathException();
+        }
+    }
+
+    private static string GetFinalWindowsPath(SafeFileHandle handle)
+    {
+        var length = GetFinalPathNameByHandleWindows(handle, null, 0, 0);
+        if (length == 0)
+        {
+            throw new WindowsOpenException(Marshal.GetLastPInvokeError());
+        }
+
+        var buffer = new char[checked((int)length + 1)];
+        var copied = GetFinalPathNameByHandleWindows(handle, buffer, (uint)buffer.Length, 0);
+        if (copied == 0 || copied >= buffer.Length)
+        {
+            throw new WindowsOpenException(Marshal.GetLastPInvokeError());
+        }
+
+        return new string(buffer, 0, checked((int)copied));
+    }
+
+    private static bool WindowsPathsMatch(string expectedPath, string openedPath)
+    {
+        const string extendedPrefix = @"\\?\";
+        const string extendedUncPrefix = @"\\?\UNC\";
+        if (openedPath.StartsWith(extendedUncPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            openedPath = @"\\" + openedPath[extendedUncPrefix.Length..];
+        }
+        else if (openedPath.StartsWith(extendedPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            openedPath = openedPath[extendedPrefix.Length..];
+        }
+
+        return string.Equals(Path.GetFullPath(expectedPath), Path.GetFullPath(openedPath), StringComparison.OrdinalIgnoreCase);
     }
 
     private static void RejectReparsePointHierarchy(string path)
@@ -394,17 +489,47 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
 
     private sealed class UnsafeKeySelectionPathException : IOException;
 
-    private sealed class NativeOpenException(int error) : IOException
+    private sealed class NativeOpenException(int error, bool requiredDirectory) : IOException
     {
         private const int PermissionDenied = 13;
         private const int PermissionNotPermitted = 1;
         private const int NoEntry = 2;
+        private const int NotDirectory = 20;
         private const int LinuxTooManySymbolicLinks = 40;
         private const int DarwinTooManySymbolicLinks = 62;
 
         public bool IsAccessDenied => error is PermissionDenied or PermissionNotPermitted;
         public bool IsMissing => error == NoEntry;
-        public bool IsNoFollowViolation => error is LinuxTooManySymbolicLinks or DarwinTooManySymbolicLinks;
+        public bool IsUnsafeTarget => error is LinuxTooManySymbolicLinks or DarwinTooManySymbolicLinks
+            || requiredDirectory && error == NotDirectory;
+    }
+
+    private sealed class WindowsOpenException(int error) : IOException
+    {
+        private const int AccessDenied = 5;
+        private const int FileNotFound = 2;
+        private const int PathNotFound = 3;
+
+        public bool IsAccessDenied => error == AccessDenied;
+        public bool IsMissing => error is FileNotFound or PathNotFound;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsByHandleFileInformation
+    {
+        public FileAttributes FileAttributes;
+        public uint CreationTimeLow;
+        public uint CreationTimeHigh;
+        public uint LastAccessTimeLow;
+        public uint LastAccessTimeHigh;
+        public uint LastWriteTimeLow;
+        public uint LastWriteTimeHigh;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
     }
 
 #pragma warning disable CA2101 // Unix open/openat paths are explicitly ANSI UTF-8 marshalled below.
@@ -421,6 +546,15 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "fstat", SetLastError = true)]
     private static extern int FStatMac(int descriptor, IntPtr statBuffer);
 #pragma warning restore CA2101
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileWindows(string path, uint desiredAccess, uint shareMode, IntPtr securityAttributes, uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
+    [DllImport("kernel32.dll", EntryPoint = "GetFileInformationByHandle", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleWindows(SafeFileHandle handle, out WindowsByHandleFileInformation information);
+    [DllImport("kernel32.dll", EntryPoint = "GetFileType", SetLastError = true)]
+    private static extern uint GetFileTypeWindows(SafeFileHandle handle);
+    [DllImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern uint GetFinalPathNameByHandleWindows(SafeFileHandle handle, char[]? path, uint length, uint flags);
 }
 
 internal interface IExistingSshKeySelectionObserver { void BeforeRead(string path); }
