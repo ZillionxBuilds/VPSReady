@@ -39,6 +39,7 @@ public static class DesktopComposition
         services.AddSingleton<IFirewallManagement, FirewallManagement>();
         services.AddSingleton<IPrivilegePreflight, PrivilegePreflightWorkflow>();
         services.AddSingleton<IPackageIndexUpdater, PackageIndexUpdateWorkflow>();
+        services.AddSingleton<ITimezoneChanger, TimezoneChangeWorkflow>();
         services.AddSingleton<ILocalEd25519KeyGenerator, Ed25519OpenSshKeyPairGenerator>();
         services.AddSingleton<IExistingSshKeySelector, ExistingOpenSshKeySelector>();
         services.AddSingleton<PublicKeyDeploymentWorkflow>();

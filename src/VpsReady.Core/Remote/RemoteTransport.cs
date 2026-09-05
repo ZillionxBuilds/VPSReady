@@ -72,6 +72,10 @@ public static class RemoteCommandCatalog
     public const string UbuntuHostnameChangeRead = DiagnosticCommandCatalog.UbuntuHostnameChangeRead;
     public const string UbuntuHostnameChangeApply = DiagnosticCommandCatalog.UbuntuHostnameChangeApply;
     public const string UbuntuHostnameChangeVerify = DiagnosticCommandCatalog.UbuntuHostnameChangeVerify;
+    public const string UbuntuTimezoneCurrentRead = DiagnosticCommandCatalog.UbuntuTimezoneCurrentRead;
+    public const string UbuntuTimezoneAvailableList = DiagnosticCommandCatalog.UbuntuTimezoneAvailableList;
+    public const string UbuntuTimezoneApply = DiagnosticCommandCatalog.UbuntuTimezoneApply;
+    public const string UbuntuTimezoneVerifyRead = DiagnosticCommandCatalog.UbuntuTimezoneVerifyRead;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -111,6 +115,10 @@ public static class RemoteCommandCatalog
         UbuntuHostnameChangeRead,
         UbuntuHostnameChangeApply,
         UbuntuHostnameChangeVerify,
+        UbuntuTimezoneCurrentRead,
+        UbuntuTimezoneAvailableList,
+        UbuntuTimezoneApply,
+        UbuntuTimezoneVerifyRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

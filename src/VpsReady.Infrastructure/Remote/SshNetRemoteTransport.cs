@@ -312,6 +312,8 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
                 ? UbuntuHostnameCommandCatalog.RequireShellCommand(command)
                 : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead or RemoteCommandCatalog.UbuntuRebootApply or RemoteCommandCatalog.SshReconnectVerify or RemoteCommandCatalog.UbuntuBootIdentityRead
                     ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
+                : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuTimezoneCurrentRead or RemoteCommandCatalog.UbuntuTimezoneAvailableList or RemoteCommandCatalog.UbuntuTimezoneApply or RemoteCommandCatalog.UbuntuTimezoneVerifyRead
+                    ? UbuntuTimezoneCommandCatalog.RequireShellCommand(command)
                     : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
 
         using var timeoutCancellation = new CancellationTokenSource(command.Timeout);

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Remote;
 
 namespace VpsReady.ScenarioTests;
 
@@ -197,6 +198,10 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuRebootApply => RebootProduction(),
             RemoteCommandCatalog.SshReconnectVerify => State.Ssh.IsConnected ? Result("reconnect=verified") : Failure(25, "Reconnect verification requires an authenticated session."),
             RemoteCommandCatalog.UbuntuBootIdentityRead => Result(State.Reboot.BootIdentity),
+            RemoteCommandCatalog.UbuntuTimezoneCurrentRead => Result(State.Timezone),
+            RemoteCommandCatalog.UbuntuTimezoneAvailableList => Result(string.Join('\n', State.Ubuntu.AvailableTimezones)),
+            RemoteCommandCatalog.UbuntuTimezoneApply => SetTimezone(command),
+            RemoteCommandCatalog.UbuntuTimezoneVerifyRead => Result(State.Timezone),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -434,7 +439,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
     private RemoteCommandResult SetTimezone(RemoteCommand command)
     {
         var timezone = GetArgument(command, "timezone");
-        if (string.IsNullOrWhiteSpace(timezone) || timezone.Any(char.IsControl))
+        if (timezone is null || !UbuntuTimezoneCommandCatalog.IsIanaIdentifier(timezone) || !State.Ubuntu.AvailableTimezones.Contains(timezone, StringComparer.Ordinal))
         {
             return Failure(2, "Timezone is invalid.");
         }
@@ -933,6 +938,16 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
 
     private static DiagnosticPhase InferPhase(string commandId)
     {
+        if (commandId is RemoteCommandCatalog.UbuntuTimezoneCurrentRead or RemoteCommandCatalog.UbuntuTimezoneAvailableList)
+        {
+            return DiagnosticPhase.Plan;
+        }
+
+        if (commandId == RemoteCommandCatalog.UbuntuTimezoneVerifyRead)
+        {
+            return DiagnosticPhase.Verify;
+        }
+
         if (commandId == RemoteCommandCatalog.UbuntuAptUpgradePlan)
         {
             return DiagnosticPhase.Plan;
@@ -960,6 +975,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             || commandId.Equals(ScenarioCommandIds.AptUpgrade, StringComparison.Ordinal)
             || commandId.Equals(RemoteCommandCatalog.UbuntuAptIndexUpdate, StringComparison.Ordinal)
             || commandId.Equals(RemoteCommandCatalog.UbuntuAptUpgradeApply, StringComparison.Ordinal)
+            || commandId.Equals(RemoteCommandCatalog.UbuntuTimezoneApply, StringComparison.Ordinal)
             || commandId.Equals(RemoteCommandCatalog.UbuntuRebootApply, StringComparison.Ordinal))
         {
             return DiagnosticPhase.Apply;

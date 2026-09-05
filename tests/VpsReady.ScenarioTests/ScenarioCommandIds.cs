@@ -115,6 +115,10 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuHostnameChangeRead,
         RemoteCommandCatalog.UbuntuHostnameChangeApply,
         RemoteCommandCatalog.UbuntuHostnameChangeVerify,
+        RemoteCommandCatalog.UbuntuTimezoneCurrentRead,
+        RemoteCommandCatalog.UbuntuTimezoneAvailableList,
+        RemoteCommandCatalog.UbuntuTimezoneApply,
+        RemoteCommandCatalog.UbuntuTimezoneVerifyRead,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 
