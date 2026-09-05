@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
 
 namespace VpsReady.Core.Diagnostics;
 
@@ -129,6 +130,10 @@ public static class DiagnosticEventCatalog
     public const string PublicKeyDeploymentSucceeded = "ssh.public_key_deployment.succeeded";
     public const string PublicKeyDeploymentFailed = "ssh.public_key_deployment.failed";
     public const string PublicKeyDeploymentCancelled = "ssh.public_key_deployment.cancelled";
+    public const string KeyAuthenticationVerificationStarted = "ssh.key_auth_verification.started";
+    public const string KeyAuthenticationVerificationSucceeded = "ssh.key_auth_verification.succeeded";
+    public const string KeyAuthenticationVerificationFailed = "ssh.key_auth_verification.failed";
+    public const string KeyAuthenticationVerificationCancelled = "ssh.key_auth_verification.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -138,6 +143,7 @@ public static class DiagnosticEventCatalog
         LocalKeyGenerationFailed, LocalKeyGenerationCancelled, LocalKeyGenerationRecoveryRequired,
         ExistingKeySelectionStarted, ExistingKeySelectionSucceeded, ExistingKeySelectionFailed, ExistingKeySelectionCancelled,
         PublicKeyDeploymentStarted, PublicKeyDeploymentSucceeded, PublicKeyDeploymentFailed, PublicKeyDeploymentCancelled,
+        KeyAuthenticationVerificationStarted, KeyAuthenticationVerificationSucceeded, KeyAuthenticationVerificationFailed, KeyAuthenticationVerificationCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -212,6 +218,7 @@ public static class DiagnosticErrorCatalog
         .Select(errorCode => errorCode.ToStableCode())
         .Concat(LocalEd25519KeyGenerationErrorCatalog.All)
         .Concat(ExistingSshKeySelectionErrorCatalog.All)
+        .Concat(KeyAuthenticationVerificationErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

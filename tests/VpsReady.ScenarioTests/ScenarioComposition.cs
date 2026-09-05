@@ -59,6 +59,7 @@ public static class ScenarioComposition
         services.AddSingleton<ISanitizedDiagnosticSink>(provider => provider.GetRequiredService<ScenarioDiagnosticRecorder>());
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
         services.AddSingleton<PublicKeyDeploymentWorkflow>();
+        services.AddSingleton<KeyAuthenticationVerificationWorkflow>();
         services.AddSingleton<ScenarioOperationRunner>();
         return services.BuildServiceProvider(validateScopes: true);
     }
@@ -75,7 +76,7 @@ internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost h
 /// remains available for a replacement connection identity and its state stays
 /// observable to every scenario transport.
 /// </summary>
-internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport
 {
     private bool disposed;
 
@@ -97,13 +98,66 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
         return host.ExecutePublicKeyDeploymentAsync(command, canonicalPublicKey, phase, cancellationToken);
     }
 
-    public KnownHostTrustAssessment? LastHostTrustAssessment => null;
+    public KnownHostTrustAssessment? LastHostTrustAssessment { get; private set; }
 
     public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         var authentication = new RemoteCommand(new RemoteCommandId(ScenarioCommandIds.SshAuthenticate), string.Empty, timeout);
-        var result = await host.ExecuteAsync(authentication, cancellationToken).ConfigureAwait(false);
+        RemoteCommandResult result;
+        try
+        {
+            result = await host.ExecuteAsync(authentication, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        if (!result.Succeeded)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Authentication);
+        }
+    }
+
+    public async Task ConnectWithPrivateKeyAsync(
+        RemoteEndpoint endpoint,
+        KnownHostIdentity trustedHost,
+        ExistingSshKeyLocation privateKey,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(trustedHost);
+        ArgumentNullException.ThrowIfNull(privateKey);
+        if (!Equals(new KnownHostIdentity(endpoint.Host, endpoint.Port), trustedHost))
+        {
+            throw new ArgumentException("Scenario key authentication requires the matching trusted host identity.", nameof(trustedHost));
+        }
+
+        if (host.State.Ssh.HostKey != ScenarioHostKeyState.Matching)
+        {
+            LastHostTrustAssessment = new KnownHostTrustAssessment(
+                KnownHostTrustState.Unknown,
+                new KnownHostTrustChallenge(
+                    trustedHost,
+                    new HostKeyFingerprint(host.State.Ssh.HostKeyFingerprint),
+                    KnownHostTrustState.Unknown),
+                recoveredCorruptStore: false);
+            throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+        }
+
+        LastHostTrustAssessment = new KnownHostTrustAssessment(KnownHostTrustState.Matching, challenge: null, recoveredCorruptStore: false);
+        var authentication = new RemoteCommand(new RemoteCommandId(ScenarioCommandIds.SshKeyAuthenticate), string.Empty, timeout);
+        RemoteCommandResult result;
+        try
+        {
+            result = await host.ExecuteAsync(authentication, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
         if (!result.Succeeded)
         {
             throw new RemoteTransportException(RemoteTransportFailureKind.Authentication);
