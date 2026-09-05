@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using VpsReady.Application;
 using VpsReady.Core.Remote;
 using VpsReady.Desktop;
 using VpsReady.Infrastructure.Remote;
@@ -9,13 +10,17 @@ namespace VpsReady.UnitTests;
 public sealed class ProductionCompositionSafetyTests
 {
     [Fact]
-    public async Task ProductionCompositionUsesRealTransportBoundaryAndHasNoScenarioSuccessRoute()
+    public async Task ProductionCompositionUsesRealTransportFactoryAndHasNoScenarioSuccessRoute()
     {
         await using var services = DesktopComposition.CreateProductionServices();
 
-        var transport = services.GetRequiredService<IRemoteTransport>();
+        var transportFactory = services.GetRequiredService<IRemoteTransportFactory>();
+        var applicationSession = services.GetRequiredService<IApplicationSession>();
+        await using var transport = transportFactory.Create();
 
         Assert.IsType<SshNetRemoteTransport>(transport);
+        Assert.IsType<SshNetRemoteTransportFactory>(transportFactory);
+        Assert.IsType<ApplicationSession>(applicationSession);
         Assert.DoesNotContain("Scenario", transport.GetType().Assembly.GetName().Name, StringComparison.Ordinal);
     }
 }

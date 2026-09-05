@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
@@ -23,6 +24,8 @@ public static class ScenarioComposition
         services.AddSingleton(faults);
         services.AddSingleton<IRemoteTransport>(host);
         services.AddSingleton(host);
+        services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(provider.GetRequiredService<DeterministicScenarioHost>()));
+        services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<ILocalFileStore, ScenarioLocalFileStore>();
         services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(scenarioId));
         services.AddSingleton<IClock, ScenarioClock>();
@@ -34,5 +37,35 @@ public static class ScenarioComposition
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
         services.AddSingleton<ScenarioOperationRunner>();
         return services.BuildServiceProvider(validateScopes: true);
+    }
+}
+
+internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost host) : IRemoteTransportFactory
+{
+    public IRemoteTransport Create() => new ScenarioSessionTransport(host);
+}
+
+/// <summary>
+/// A disposable, session-owned view over the shared mutable deterministic host.
+/// Disposing one session transport makes only that session unusable; the host
+/// remains available for a replacement connection identity and its state stays
+/// observable to every scenario transport.
+/// </summary>
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IRemoteTransport
+{
+    private bool disposed;
+
+    internal bool IsDisposed => disposed;
+
+    public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return host.ExecuteAsync(command, cancellationToken);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        disposed = true;
+        return ValueTask.CompletedTask;
     }
 }

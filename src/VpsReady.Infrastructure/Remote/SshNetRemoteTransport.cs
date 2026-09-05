@@ -16,3 +16,8 @@ public sealed class SshNetRemoteTransport : IRemoteTransport
 
     private static Type LibraryBoundaryType => typeof(SshClient);
 }
+
+public sealed class SshNetRemoteTransportFactory : IRemoteTransportFactory
+{
+    public IRemoteTransport Create() => new SshNetRemoteTransport();
+}

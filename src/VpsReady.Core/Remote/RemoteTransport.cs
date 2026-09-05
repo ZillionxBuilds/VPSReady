@@ -25,3 +25,13 @@ public interface IRemoteTransport : IAsyncDisposable
 {
     Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Creates a transport for one application connection session. A session owns
+/// and disposes the returned transport when it disconnects; callers must not
+/// share a created transport between connection identities.
+/// </summary>
+public interface IRemoteTransportFactory
+{
+    IRemoteTransport Create();
+}
