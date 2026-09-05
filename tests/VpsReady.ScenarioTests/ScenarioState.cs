@@ -320,7 +320,13 @@ public sealed class ScenarioAptState
 
     public bool IndexVerificationSucceeds { get; set; } = true;
 
+    public bool UpgradeVerificationSucceeds { get; set; } = true;
+
     public int IndexGeneration { get; set; }
+
+    public int UpgradeGeneration { get; set; }
+
+    public int PlannedUpgradePackageCount { get; set; } = 2;
 
     public string RefreshOutput { get; set; } = "Scenario package index refreshed.";
 

@@ -105,6 +105,10 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuAuthorizedKeysVerify,
         RemoteCommandCatalog.UbuntuAptIndexUpdate,
         RemoteCommandCatalog.UbuntuAptIndexVerify,
+        RemoteCommandCatalog.UbuntuAptUpgradePlan,
+        RemoteCommandCatalog.UbuntuAptUpgradeApply,
+        RemoteCommandCatalog.UbuntuAptUpgradeVerify,
+        RemoteCommandCatalog.UbuntuRebootRequiredRead,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 

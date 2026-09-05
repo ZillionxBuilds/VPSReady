@@ -62,6 +62,10 @@ public static class RemoteCommandCatalog
     public const string UbuntuAuthorizedKeysVerify = DiagnosticCommandCatalog.UbuntuAuthorizedKeysVerify;
     public const string UbuntuAptIndexUpdate = DiagnosticCommandCatalog.UbuntuAptIndexUpdate;
     public const string UbuntuAptIndexVerify = DiagnosticCommandCatalog.UbuntuAptIndexVerify;
+    public const string UbuntuAptUpgradePlan = DiagnosticCommandCatalog.UbuntuAptUpgradePlan;
+    public const string UbuntuAptUpgradeApply = DiagnosticCommandCatalog.UbuntuAptUpgradeApply;
+    public const string UbuntuAptUpgradeVerify = DiagnosticCommandCatalog.UbuntuAptUpgradeVerify;
+    public const string UbuntuRebootRequiredRead = DiagnosticCommandCatalog.UbuntuRebootRequiredRead;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -91,6 +95,10 @@ public static class RemoteCommandCatalog
         UbuntuAuthorizedKeysVerify,
         UbuntuAptIndexUpdate,
         UbuntuAptIndexVerify,
+        UbuntuAptUpgradePlan,
+        UbuntuAptUpgradeApply,
+        UbuntuAptUpgradeVerify,
+        UbuntuRebootRequiredRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

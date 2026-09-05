@@ -145,6 +145,11 @@ public static class DiagnosticEventCatalog
     public const string PackageIndexUpdateSucceeded = "apt.index_update.succeeded";
     public const string PackageIndexUpdateFailed = "apt.index_update.failed";
     public const string PackageIndexUpdateCancelled = "apt.index_update.cancelled";
+    public const string PackageUpgradeStarted = "apt.upgrade.started";
+    public const string PackageUpgradePlanned = "apt.upgrade.planned";
+    public const string PackageUpgradeSucceeded = "apt.upgrade.succeeded";
+    public const string PackageUpgradeFailed = "apt.upgrade.failed";
+    public const string PackageUpgradeCancelled = "apt.upgrade.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -158,6 +163,7 @@ public static class DiagnosticEventCatalog
         OpenSshConfigEditStarted, OpenSshConfigEditSucceeded, OpenSshConfigEditFailed, OpenSshConfigEditCancelled,
         PrivilegePreflightStarted, PrivilegePreflightSucceeded, PrivilegePreflightFailed,
         PackageIndexUpdateStarted, PackageIndexUpdateSucceeded, PackageIndexUpdateFailed, PackageIndexUpdateCancelled,
+        PackageUpgradeStarted, PackageUpgradePlanned, PackageUpgradeSucceeded, PackageUpgradeFailed, PackageUpgradeCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -195,6 +201,10 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuUfwDisable = "ubuntu.ufw.disable";
     public const string UbuntuAptIndexUpdate = "ubuntu.apt.index.update";
     public const string UbuntuAptIndexVerify = "ubuntu.apt.index.verify";
+    public const string UbuntuAptUpgradePlan = "ubuntu.apt.upgrade.plan";
+    public const string UbuntuAptUpgradeApply = "ubuntu.apt.upgrade.apply";
+    public const string UbuntuAptUpgradeVerify = "ubuntu.apt.upgrade.verify";
+    public const string UbuntuRebootRequiredRead = "ubuntu.reboot-required.read";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -224,6 +234,10 @@ public static class DiagnosticCommandCatalog
         UbuntuUfwDisable,
         UbuntuAptIndexUpdate,
         UbuntuAptIndexVerify,
+        UbuntuAptUpgradePlan,
+        UbuntuAptUpgradeApply,
+        UbuntuAptUpgradeVerify,
+        UbuntuRebootRequiredRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -240,6 +254,7 @@ public static class DiagnosticErrorCatalog
         .Concat(OpenSshConfigEditErrorCatalog.All)
         .Concat(PrivilegePreflightErrorCatalog.All)
         .Concat(PackageIndexUpdateErrorCatalog.All)
+        .Concat(PackageUpgradeErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);
