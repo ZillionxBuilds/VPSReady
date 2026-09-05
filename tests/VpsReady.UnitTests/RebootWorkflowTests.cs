@@ -122,6 +122,68 @@ public sealed class RebootWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterBootProbeOrVerificationNeverReportsSuccess()
+    {
+        using var probeCancellation = new CancellationTokenSource();
+        var probeTransport = new RebootTransport(Ok("reboot=started"))
+        {
+            OnBootIdentityRead = read =>
+            {
+                if (read == 2)
+                {
+                    probeCancellation.Cancel();
+                }
+            },
+        };
+        var cancelledAfterProbe = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(probeTransport, confirmed: true, probeCancellation.Token);
+
+        using var verifyCancellation = new CancellationTokenSource();
+        var verifyTransport = new RebootTransport(Ok("reboot=started"), Ok("reconnect=verified"))
+        {
+            OnCommand = command =>
+            {
+                if (command.Id.Value == RemoteCommandCatalog.SshReconnectVerify)
+                {
+                    verifyCancellation.Cancel();
+                }
+            },
+        };
+        var cancelledAfterVerify = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(verifyTransport, confirmed: true, verifyCancellation.Token);
+
+        Assert.True(cancelledAfterProbe.Result.Cancelled);
+        Assert.Equal(RebootReconnectOutcome.Cancelled, cancelledAfterProbe.ReconnectOutcome);
+        Assert.True(cancelledAfterVerify.Result.Cancelled);
+        Assert.Equal(RebootReconnectOutcome.Cancelled, cancelledAfterVerify.ReconnectOutcome);
+        Assert.False(cancelledAfterProbe.Result.Succeeded);
+        Assert.False(cancelledAfterVerify.Result.Succeeded);
+    }
+
+    [Fact]
+    public async Task AuthenticationFailureAndUntrustedRemoteOutputFailClosedWithoutDiagnosticLeakage()
+    {
+        var authenticationTransport = new RebootTransport(Ok("reboot=started"));
+        authenticationTransport.ReconnectFailures.Enqueue(new RemoteTransportException(RemoteTransportFailureKind.Authentication));
+        var authentication = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(authenticationTransport, confirmed: true);
+
+        const string marker = "c504-redaction-marker";
+        var sink = new Sink();
+        var outputTransport = new RebootTransport(Ok("reboot=started"), Ok($"reconnect=verified\\n{marker}"));
+        var output = await CreateWorkflow(new AllowedPreflight(), sink).RebootAsync(outputTransport, confirmed: true);
+
+        Assert.False(authentication.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Authentication, authentication.Result.ErrorCode);
+        Assert.Equal(RebootErrorCatalog.Reconnect, authentication.ErrorCode);
+        Assert.False(output.Result.Succeeded);
+        Assert.Equal(RebootErrorCatalog.Verification, output.ErrorCode);
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.DoesNotContain(marker, entry.Message, StringComparison.Ordinal);
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+        });
+    }
+
+    [Fact]
     public async Task UnexpectedRecoveryExceptionRetainsRecoveryPhaseAndFailedRecoveryState()
     {
         var sink = new Sink();
@@ -261,11 +323,14 @@ public sealed class RebootWorkflowTests
         public int ReconnectCalls { get; private set; }
         private int bootIdentityReads;
         public Action? OnReconnect { get; init; }
+        public Action<int>? OnBootIdentityRead { get; init; }
+        public Action<RemoteCommand>? OnCommand { get; init; }
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
+            OnCommand?.Invoke(command);
             if (responses.Count == 0)
             {
                 throw new InvalidOperationException("Unexpected remote command.");
@@ -291,9 +356,11 @@ public sealed class RebootWorkflowTests
         public Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var read = ++bootIdentityReads;
+            OnBootIdentityRead?.Invoke(read);
             var value = BootIdentities.Count > 0
                 ? BootIdentities.Dequeue()
-                : bootIdentityReads++ == 0 ? "11111111-1111-1111-1111-111111111111" : "22222222-2222-2222-2222-222222222222";
+                : read == 1 ? "11111111-1111-1111-1111-111111111111" : "22222222-2222-2222-2222-222222222222";
             BootIdentityToken.TryCreate(value, out var token);
             return Task.FromResult(new BootIdentityReadResult(token, true));
         }
