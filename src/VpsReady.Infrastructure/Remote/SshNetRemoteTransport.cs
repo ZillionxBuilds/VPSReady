@@ -82,10 +82,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport
                     throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
                 }
 
-                if (LastHostTrustAssessment is { IsTrusted: false })
-                {
-                    throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
-                }
+                RequireExplicitTrustedHost(LastHostTrustAssessment);
 
                 if (!candidate.IsConnected)
                 {
@@ -243,6 +240,19 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport
         SocketException or SshConnectionException or ProxyException => new RemoteTransportException(RemoteTransportFailureKind.Network),
         _ => new RemoteTransportException(RemoteTransportFailureKind.Network),
     };
+
+    /// <summary>
+    /// SSH.NET callback timing is not a security invariant. A successful
+    /// handshake is usable only after this process has received a matching
+    /// persisted host-trust assessment for the exact endpoint fingerprint.
+    /// </summary>
+    internal static void RequireExplicitTrustedHost(KnownHostTrustAssessment? assessment)
+    {
+        if (assessment is not { IsTrusted: true })
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+        }
+    }
 
     internal KnownHostTrustAssessment AssessHostKey(RemoteEndpoint target, string sha256Fingerprint)
     {

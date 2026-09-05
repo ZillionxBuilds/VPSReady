@@ -14,17 +14,17 @@ public sealed class PasswordSshTransportTests
     [Fact]
     public void PasswordCredentialCopiesOnlyIntoCallerBufferAndClearsSynchronously()
     {
-        var credential = new PasswordSessionSecret(['v', 'a', 'l', 'u', 'e']);
-        var copy = new char[credential.Length];
-        credential.CopyTo(copy);
+        var sessionBuffer = new PasswordSessionSecret(['v', 'a', 'l', 'u', 'e']);
+        var copy = new char[sessionBuffer.Length];
+        sessionBuffer.CopyTo(copy);
         Assert.Equal(['v', 'a', 'l', 'u', 'e'], copy);
         Array.Clear(copy);
-        Assert.DoesNotContain("value", credential.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("value", sessionBuffer.ToString(), StringComparison.Ordinal);
 
-        credential.Clear();
+        sessionBuffer.Clear();
 
-        Assert.True(credential.IsCleared);
-        Assert.Throws<InvalidOperationException>(() => _ = credential.Length);
+        Assert.True(sessionBuffer.IsCleared);
+        Assert.Throws<InvalidOperationException>(() => _ = sessionBuffer.Length);
     }
 
     [Fact]
@@ -103,6 +103,16 @@ public sealed class PasswordSshTransportTests
         Assert.False(unknown.IsTrusted);
         Assert.Equal(KnownHostTrustState.Unknown, unknownTransport.LastHostTrustAssessment!.State);
         Assert.DoesNotContain("private-host", unknown.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MissingHostKeyAssessmentCannotEstablishAUsableTransport()
+    {
+        Assert.Throws<RemoteTransportException>(() =>
+            SshNetRemoteTransport.RequireExplicitTrustedHost(null));
+
+        var matching = new KnownHostTrustAssessment(KnownHostTrustState.Matching, null, false);
+        SshNetRemoteTransport.RequireExplicitTrustedHost(matching);
     }
 
     private sealed class FixedTrustStore(KnownHostTrustState state) : IKnownHostTrustStore
