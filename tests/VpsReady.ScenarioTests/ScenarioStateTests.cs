@@ -401,6 +401,22 @@ public sealed class ScenarioStateTests
     }
 
     [Fact]
+    public void ScenarioPlatformPathsUseCurrentPlatformQualifiedRootsForEveryStorageArea()
+    {
+        var paths = new ScenarioPlatformPaths("scenario.e2.platform-paths");
+
+        foreach (var area in Enum.GetValues<LocalStorageArea>())
+        {
+            var root = paths.GetDirectory(area);
+            var resolved = paths.ResolvePath(area, "runs/run.json");
+
+            Assert.True(Path.IsPathFullyQualified(root));
+            Assert.Equal(Path.Combine(root, "runs", "run.json"), resolved);
+            Assert.Throws<ArgumentException>(() => paths.ResolvePath(area, "../escape.json"));
+        }
+    }
+
+    [Fact]
     public async Task ProcessBoundaryIsScriptedAndCannotStartAnUnregisteredNetworkTool()
     {
         await using var services = ScenarioComposition.Create("scenario.e2.process-boundary");
