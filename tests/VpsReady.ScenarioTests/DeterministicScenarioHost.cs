@@ -133,6 +133,10 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuUfwDisable => DisableUfwProduction(),
             RemoteCommandCatalog.UbuntuAptIndexUpdate => AptIndexUpdate(),
             RemoteCommandCatalog.UbuntuAptIndexVerify => AptIndexVerify(),
+            RemoteCommandCatalog.UbuntuAptUpgradePlan => Result($"upgrade_plan_packages={State.Apt.PlannedUpgradePackageCount}"),
+            RemoteCommandCatalog.UbuntuAptUpgradeApply => AptUpgradeProduction(),
+            RemoteCommandCatalog.UbuntuAptUpgradeVerify => AptUpgradeVerify(),
+            RemoteCommandCatalog.UbuntuRebootRequiredRead => Result($"reboot_required={State.Apt.RebootRequired.ToString().ToLowerInvariant()}"),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -712,7 +716,12 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             return Failure(100, "Could not get lock /var/lib/dpkg/lock (scenario apt lock). ");
         }
 
-        if (State.Apt.InteractiveBlocker || !State.Apt.UpgradeSucceeds)
+        if (State.Apt.InteractiveBlocker)
+        {
+            return Failure(30, "Package upgrade requires interactive input in the deterministic scenario.");
+        }
+
+        if (!State.Apt.UpgradeSucceeds)
         {
             return Failure(1, "Package upgrade failed in the deterministic scenario.");
         }
@@ -734,6 +743,21 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
     private RemoteCommandResult AptIndexVerify() => State.Apt.IndexGeneration > 0 && State.Apt.IndexVerificationSucceeds
         ? Result("apt_index=refreshed")
         : Failure(4, "Package index verification failed in the deterministic scenario.");
+
+    private RemoteCommandResult AptUpgradeProduction()
+    {
+        var result = AptUpgrade();
+        if (result.Succeeded)
+        {
+            State.Apt.UpgradeGeneration++;
+        }
+
+        return result;
+    }
+
+    private RemoteCommandResult AptUpgradeVerify() => State.Apt.UpgradeGeneration > 0 && State.Apt.UpgradeVerificationSucceeds
+        ? Result("package_upgrade=verified")
+        : Failure(4, "Package upgrade verification failed in the deterministic scenario.");
 
     private RemoteCommandResult Reboot(RemoteCommand command)
     {
@@ -819,6 +843,16 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
 
     private static DiagnosticPhase InferPhase(string commandId)
     {
+        if (commandId == RemoteCommandCatalog.UbuntuAptUpgradePlan)
+        {
+            return DiagnosticPhase.Plan;
+        }
+
+        if (commandId is RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead)
+        {
+            return DiagnosticPhase.Verify;
+        }
+
         if (commandId.Contains("reconnect", StringComparison.Ordinal))
         {
             return DiagnosticPhase.Recovery;
@@ -834,7 +868,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             || commandId.Equals(ScenarioCommandIds.Reboot, StringComparison.Ordinal)
             || commandId.Equals(ScenarioCommandIds.AptUpdate, StringComparison.Ordinal)
             || commandId.Equals(ScenarioCommandIds.AptUpgrade, StringComparison.Ordinal)
-            || commandId.Equals(RemoteCommandCatalog.UbuntuAptIndexUpdate, StringComparison.Ordinal))
+            || commandId.Equals(RemoteCommandCatalog.UbuntuAptIndexUpdate, StringComparison.Ordinal)
+            || commandId.Equals(RemoteCommandCatalog.UbuntuAptUpgradeApply, StringComparison.Ordinal))
         {
             return DiagnosticPhase.Apply;
         }

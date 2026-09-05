@@ -1,0 +1,201 @@
+using System.Globalization;
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+
+namespace VpsReady.Infrastructure.Remote;
+
+/// <summary>Plans and applies only a confirmed normal package upgrade, then verifies package and reboot-required state.</summary>
+public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagnosticSink diagnostics) : IPackageUpgrader
+{
+    private const string ActionName = "UpgradePackages";
+
+    public async Task<PackageUpgradePlan> PlanAsync(IRemoteTransport transport, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var correlation = CorrelationIds.Create("apt_upgrade_plan");
+        var command = UbuntuPackageCommandCatalog.CreateUpgradePlanRequest();
+        try
+        {
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, command.Id.Value, null).ConfigureAwait(false);
+            var planned = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            if (!planned.Succeeded || !TryParsePlan(planned.StandardOutput, out var count))
+            {
+                return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+            }
+
+            var result = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradePlanned, DiagnosticPhase.Plan, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
+            return new PackageUpgradePlan(result, count);
+        }
+        catch (OperationCanceledException)
+        {
+            return await PlanCancelledAsync(correlation).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return await PlanFailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout).ConfigureAwait(false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            return await PlanFailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await PlanFailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<PackageUpgradeResult> UpgradeAsync(IRemoteTransport transport, PackageUpgradePlan? plan, bool confirmed, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var correlation = CorrelationIds.Create("apt_upgrade");
+        var apply = UbuntuPackageCommandCatalog.CreateUpgradeApplyRequest();
+        var applyAttempted = false;
+        try
+        {
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
+            if (plan is not { IsReady: true } || !confirmed)
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Validation, PackageUpgradeErrorCatalog.Confirmation, DiagnosticPhase.Validate, null, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
+            if (!privilege.Result.Succeeded)
+            {
+                return await PreflightFailureAsync(correlation, privilege.Result).ConfigureAwait(false);
+            }
+
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
+            applyAttempted = true;
+            var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
+            if (!applied.Succeeded)
+            {
+                var (error, code) = applied.ExitCode switch
+                {
+                    100 => (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Locked),
+                    30 => (OperationErrorCode.Command, PackageUpgradeErrorCatalog.Interactive),
+                    13 or 77 => (OperationErrorCode.Privilege, PackageUpgradeErrorCatalog.Privilege),
+                    _ => (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Command),
+                };
+                return await FailureAsync(correlation, error, code, DiagnosticPhase.Apply, apply.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            }
+
+            var verify = UbuntuPackageCommandCatalog.CreateUpgradeVerifyRequest();
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+            if (!verified.Succeeded || !string.Equals(verified.StandardOutput.Trim(), "package_upgrade=verified", StringComparison.Ordinal))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
+            }
+
+            var reboot = UbuntuPackageCommandCatalog.CreateRebootRequiredRequest();
+            var rebootState = await transport.ExecuteAsync(reboot, cancellationToken).ConfigureAwait(false);
+            if (!rebootState.Succeeded || !TryParseRebootRequired(rebootState.StandardOutput, out var rebootRequired))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, reboot.Id.Value, OperationState.Applied).ConfigureAwait(false);
+            }
+
+            var success = OperationResult.Success(correlation.OperationId, OperationState.Applied);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, reboot.Id.Value, null).ConfigureAwait(false);
+            return new PackageUpgradeResult(success, null, rebootRequired);
+        }
+        catch (OperationCanceledException)
+        {
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, applyAttempted ? apply.Id.Value : null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            return new PackageUpgradeResult(cancelled, PackageUpgradeErrorCatalog.Cancelled, null);
+        }
+        catch (TimeoutException)
+        {
+            return await FailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            return await FailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await FailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<PackageUpgradeResult> PreflightFailureAsync(CorrelationIds correlation, OperationResult preflight)
+    {
+        if (preflight.Cancelled)
+        {
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            return new PackageUpgradeResult(cancelled, PackageUpgradeErrorCatalog.Cancelled, null);
+        }
+
+        var error = preflight.ErrorCode ?? OperationErrorCode.Unexpected;
+        var code = error == OperationErrorCode.Timeout ? PackageUpgradeErrorCatalog.Timeout
+            : error == OperationErrorCode.Privilege ? PackageUpgradeErrorCatalog.Privilege
+            : PackageUpgradeErrorCatalog.Command;
+        return await FailureAsync(correlation, error, code, DiagnosticPhase.Preflight, null, OperationState.Unchanged).ConfigureAwait(false);
+    }
+
+    private async Task<PackageUpgradePlan> PlanCancelledAsync(CorrelationIds correlation)
+    {
+        var result = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
+        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, DiagnosticPhase.Plan, DiagnosticStatus.Cancelled, null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+        return new PackageUpgradePlan(result, 0);
+    }
+
+    private async Task<PackageUpgradePlan> PlanFailureAsync(CorrelationIds correlation, OperationErrorCode error, string code)
+    {
+        var result = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
+        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, null, error).ConfigureAwait(false);
+        return new PackageUpgradePlan(result, 0);
+    }
+
+    private async Task<PackageUpgradeResult> FailureAsync(CorrelationIds correlation, OperationErrorCode error, string code, DiagnosticPhase phase, string? commandId, OperationState state)
+    {
+        var result = OperationResult.Failure(correlation.OperationId, error, state, error == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun);
+        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeFailed, phase, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
+        return new PackageUpgradeResult(result, code, null);
+    }
+
+    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string? commandId, OperationErrorCode? error)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Package upgrade", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Package upgrade progress was recorded without remote output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false); } catch { }
+    }
+
+    private static bool TryParsePlan(string output, out int count)
+    {
+        count = 0;
+        return TryReadSingleRecord(output, "upgrade_plan_packages=", out var value)
+            && int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out count)
+            && count >= 0;
+    }
+
+    private static bool TryParseRebootRequired(string output, out bool required)
+    {
+        required = false;
+        return TryReadSingleRecord(output, "reboot_required=", out var value)
+            && (value == "true" || value == "false")
+            && bool.TryParse(value, out required);
+    }
+
+    private static bool TryReadSingleRecord(string output, string prefix, out string value)
+    {
+        value = string.Empty;
+        if (string.IsNullOrEmpty(output))
+        {
+            return false;
+        }
+
+        var line = output.EndsWith("\r\n", StringComparison.Ordinal) ? output[..^2]
+            : output.EndsWith('\n') ? output[..^1]
+            : output;
+        if (line.Contains('\r') || line.Contains('\n') || !line.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        value = line[prefix.Length..];
+        return !string.IsNullOrEmpty(value);
+    }
+}

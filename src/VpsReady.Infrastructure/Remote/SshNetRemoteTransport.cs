@@ -273,7 +273,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
 
         var shellCommand = factDefinition is not null
             ? factDefinition.ShellCommand!
-            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify
+            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead
                 ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
                 : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
 
