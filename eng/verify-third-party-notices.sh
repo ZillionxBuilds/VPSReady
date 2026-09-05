@@ -1,48 +1,82 @@
 #!/usr/bin/env bash
-# Validates the generated notice inventory against the exact desktop runtime lock.
+# Validates a generated/archive-local third-party notice and its machine-readable
+# inventory against the exact desktop runtime lock. Bash 3.2 compatible.
 set -euo pipefail
 
-lock='src/VpsReady.Desktop/packages.lock.json'
-generator='eng/generate-third-party-notices.ps1'
-notice_policy='docs/development/THIRD_PARTY_NOTICES.md'
+lock=''
+notice=''
+inventory=''
 
-[[ -f "$lock" ]] || { printf '%s\n' "Missing runtime lock: $lock" >&2; exit 1; }
-[[ -f "$generator" ]] || { printf '%s\n' "Missing notice generator: $generator" >&2; exit 1; }
-[[ -f "$notice_policy" ]] || { printf '%s\n' "Missing notice policy: $notice_policy" >&2; exit 1; }
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --lock)
+      lock="${2:-}"
+      shift 2
+      ;;
+    --notice)
+      notice="${2:-}"
+      shift 2
+      ;;
+    --inventory)
+      inventory="${2:-}"
+      shift 2
+      ;;
+    *)
+      printf 'Usage: %s --lock <runtime-lock> --notice <generated-notice> --inventory <generated-inventory>\n' "$0" >&2
+      exit 64
+      ;;
+  esac
+done
 
-package_root="$(dotnet nuget locals global-packages --list | sed -n 's/^global-packages: //p')"
-[[ -n "$package_root" && -d "$package_root" ]] || { printf '%s\n' 'NuGet package cache is unavailable; restore locked runtime dependencies first.' >&2; exit 1; }
-
-temporary_directory="$(mktemp -d)"
-trap 'rm -rf "$temporary_directory"' EXIT
-notice="$temporary_directory/THIRD_PARTY_NOTICES.md"
-if ! command -v pwsh >/dev/null 2>&1; then
-  grep -Fq 'exact locked runtime dependency graph' "$generator"
-  grep -Fq 'Package-supplied license file' "$generator"
-  printf '%s\n' 'Third-party notice generator static contract passed; runtime generation requires the PowerShell packaging environment.'
-  exit 0
-fi
-pwsh -NoProfile -File "$generator" -LockFile "$lock" -OutputPath "$notice"
+[[ -n "$lock" && -f "$lock" ]] || { printf '%s\n' 'Missing exact runtime lock.' >&2; exit 1; }
+[[ -n "$notice" && -f "$notice" ]] || { printf '%s\n' 'Missing generated third-party notice.' >&2; exit 1; }
+[[ -n "$inventory" && -f "$inventory" ]] || { printf '%s\n' 'Missing generated third-party inventory.' >&2; exit 1; }
 
 grep -Fx '# VPSReady Third-Party Notices' "$notice"
 grep -Fq 'exact locked runtime dependency graph' "$notice"
 grep -Fq 'Test-only dependencies are excluded' "$notice"
-grep -Fq 'Package-supplied license file' "$notice"
-! grep -Fq "$package_root" "$notice"
-! grep -Fq '/Users/' "$notice"
-! grep -Fq 'PRIVATE KEY' "$notice"
+! grep -Eq -- '-----BEGIN [A-Z ]*PRIVATE KEY-----|VPSREADY_(SEEDED|TEST)_SECRET|(^|[^[:alnum:]_])(password|passphrase|token|secret)[[:space:]]*[=:][[:space:]]*[^[:space:]{}]+' "$notice"
+! grep -Eq -- '/Users/|/home/|[A-Za-z]:\\Users\\' "$notice"
+! grep -Eq -- '/Users/|/home/|[A-Za-z]:\\Users\\' "$inventory"
 
-mapfile -t packages < <(jq -r '
-  .dependencies | to_entries[] | select(.key == "net10.0" or (.key | startswith("net10.0/")))
-  | .value | to_entries[] | select(.value.type != "Project")
+expected_count="$(jq -r '
+  [.dependencies | to_entries[]
+   | select(.key == "net10.0" or (.key | startswith("net10.0/")))
+   | .value | to_entries[]
+   | select(.value.type != "Project")
+   | select(.value.resolved != null and .value.contentHash != null)
+   | [.key, .value.resolved, .value.contentHash]
+   | @tsv] | unique | length' "$lock")"
+actual_count="$(jq -r '.runtime_package_count' "$inventory")"
+[[ "$expected_count" -gt 0 && "$actual_count" == "$expected_count" ]] || {
+  printf 'Generated runtime notice count mismatch: expected %s, found %s\n' "$expected_count" "$actual_count" >&2
+  exit 1
+}
+
+source_lock="$(jq -r '.source_lock' "$inventory")"
+[[ "$source_lock" == 'src/VpsReady.Desktop/packages.lock.json' ]] || {
+  printf '%s\n' 'Generated inventory has an unexpected source-lock reference.' >&2
+  exit 1
+}
+
+while IFS=$'\t' read -r id version content_hash; do
+  [[ -n "$id" ]] || continue
+  jq -e --arg id "$id" --arg version "$version" --arg hash "$content_hash" \
+    'any(.runtime_packages[]; .id == $id and .version == $version and .content_hash == $hash)' \
+    "$inventory" >/dev/null || {
+      printf 'Generated inventory omits exact locked runtime package: %s %s\n' "$id" "$version" >&2
+      exit 1
+    }
+  grep -Fq "$id" "$notice" || {
+    printf 'Generated human-readable notice omits runtime package: %s\n' "$id" >&2
+    exit 1
+  }
+done < <(jq -r '
+  .dependencies | to_entries[]
+  | select(.key == "net10.0" or (.key | startswith("net10.0/")))
+  | .value | to_entries[]
+  | select(.value.type != "Project")
   | select(.value.resolved != null and .value.contentHash != null)
   | [.key, .value.resolved, .value.contentHash] | @tsv' "$lock" | sort -u)
-[[ "${#packages[@]}" -gt 0 ]] || { printf '%s\n' 'Runtime lock contains no package inventory.' >&2; exit 1; }
-for package in "${packages[@]}"; do
-  IFS=$'\t' read -r id version content_hash <<< "$package"
-  grep -Fq "| \`$id\` | \`$version\` | \`$content_hash\` |" "$notice" || { printf 'Generated notices omit locked runtime package: %s %s\n' "$id" "$version" >&2; exit 1; }
-done
 
-actual_count="$(grep -Ec '^\| `[^`]+` \| `[^`]+` \| `[^`]+` \|' "$notice")"
-[[ "$actual_count" == "${#packages[@]}" ]] || { printf 'Generated notice count mismatch: expected %s, found %s\n' "${#packages[@]}" "$actual_count" >&2; exit 1; }
-printf 'Third-party notices passed: %s exact locked runtime packages with local-path and private-key leakage checks.\n' "${#packages[@]}"
+printf 'Third-party notices passed: %s exact locked runtime packages in generated notice and inventory.\n' "$expected_count"

@@ -18,11 +18,14 @@ The generator:
 - fails closed when a locked package, `.nuspec`, license declaration, or
   declared license file cannot be resolved from the restored cache.
 
-`eng/verify-third-party-notices.sh` regenerates the inventory, compares every
-locked runtime package to its notice entry, and rejects developer cache paths
-and private-key material. The artifact manifest records the generated notice
-filename, SHA-256, source-lock path, and runtime package count so package
-inspection can verify archive alignment.
+The package also includes `THIRD_PARTY_NOTICE_INVENTORY.json`, a
+machine-readable projection of the same exact package IDs, versions, content
+hashes, and license metadata. `eng/verify-third-party-notices.sh` compares a
+generated/archive-local notice and inventory to every locked runtime package,
+then rejects developer cache paths and private-key/credential-like material.
+The artifact manifest records the generated paths, SHA-256 values, source-lock
+path, and runtime package count so package inspection can verify archive
+alignment.
 
 This policy records package metadata and notice handling; it is not legal
 advice and does not change VPSReady's Apache-2.0 license.

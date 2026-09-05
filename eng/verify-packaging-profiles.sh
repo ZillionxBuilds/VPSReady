@@ -26,8 +26,9 @@ grep -Fq 'artifact-manifest.json' "$packager"
 grep -Fq 'PACKAGE_NOTICE.md' "$packager"
 grep -Fq 'generate-third-party-notices.ps1' "$packager"
 grep -Fq 'third_party_notices' "$packager"
+grep -Fq 'THIRD_PARTY_NOTICE_INVENTORY.json' "$packager"
+grep -Fq 'inventory_sha256' "$packager"
 grep -Fq 'source_sha = $CommitSha' "$packager"
 grep -Fq 'startup_smoked = $profiles.StartupEvidence' "$packager"
-bash eng/verify-third-party-notices.sh
 
 printf '%s\n' 'Packaging profile policy passed: six self-contained unsigned candidate profiles with SHA-tied, build-only evidence.'

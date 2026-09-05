@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
 
+    [string]$InventoryOutputPath,
+
     [string]$PackagesRoot,
 
     [switch]$PassThru
@@ -164,6 +166,43 @@ if ([string]::IsNullOrWhiteSpace($outputDirectory)) { throw 'The notice output p
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 [IO.File]::WriteAllText($resolvedOutput, ($lines -join [Environment]::NewLine) + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 
+$inventorySha256 = $null
+if (-not [string]::IsNullOrWhiteSpace($InventoryOutputPath)) {
+    $resolvedInventoryOutput = [IO.Path]::GetFullPath($InventoryOutputPath)
+    $inventoryDirectory = Split-Path -Parent $resolvedInventoryOutput
+    if ([string]::IsNullOrWhiteSpace($inventoryDirectory)) { throw 'The inventory output path must have a parent directory.' }
+    New-Item -ItemType Directory -Force -Path $inventoryDirectory | Out-Null
+    $inventoryDocument = [ordered]@{
+        schema_version = 1
+        source_lock = 'src/VpsReady.Desktop/packages.lock.json'
+        runtime_package_count = $inventory.Count
+        runtime_packages = @($inventory | ForEach-Object {
+            [ordered]@{
+                id = $_.Id
+                version = $_.Version
+                content_hash = $_.ContentHash
+                license = [ordered]@{
+                    type = $_.LicenseType
+                    value = $_.LicenseValue
+                    url = $_.LicenseUrl
+                }
+                copyright = $_.Copyright
+                project_url = $_.ProjectUrl
+            }
+        })
+    }
+    $inventoryJson = $inventoryDocument | ConvertTo-Json -Depth 5
+    if ($inventoryJson.Contains($resolvedPackagesRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Third-party notice inventory must not contain a developer package-cache path.'
+    }
+    [IO.File]::WriteAllText($resolvedInventoryOutput, $inventoryJson + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+    $inventorySha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedInventoryOutput).Hash.ToLowerInvariant()
+}
+
 if ($PassThru) {
-    [pscustomobject]@{ RuntimePackageCount = $inventory.Count; Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedOutput).Hash.ToLowerInvariant() }
+    [pscustomobject]@{
+        RuntimePackageCount = $inventory.Count
+        Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedOutput).Hash.ToLowerInvariant()
+        InventorySha256 = $inventorySha256
+    }
 }
