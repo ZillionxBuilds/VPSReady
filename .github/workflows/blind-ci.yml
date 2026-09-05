@@ -343,7 +343,15 @@ jobs:
               *-"$EXPECTED_VALIDATION_SHA".zip) ;;
               *) printf 'Package does not use resolved validation identity: %s\n' "$archive" >&2; exit 1 ;;
             esac
-            unzip -p "$archive" artifact-manifest.json | jq -e --arg expected "$EXPECTED_VALIDATION_SHA" '.source_sha == $expected' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICES.md' >/dev/null
+            notice_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er --arg expected "$EXPECTED_VALIDATION_SHA" '
+              select(.source_sha == $expected
+                and .third_party_notices.path == "THIRD_PARTY_NOTICES.md"
+                and (.third_party_notices.runtime_package_count > 0)
+                and .third_party_notices.source_lock == "src/VpsReady.Desktop/packages.lock.json")
+              | .third_party_notices.sha256')"
+            actual_notice_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICES.md | sha256sum | awk '{print $1}')"
+            test "$actual_notice_sha" = "$notice_sha"
           done
 
   required:

@@ -56,7 +56,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $publishDirectory 'LICENSE') -Force
-Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs/development/THIRD_PARTY_NOTICES.md') -Destination (Join-Path $publishDirectory 'THIRD_PARTY_NOTICES.md') -Force
+$thirdPartyNoticePath = Join-Path $publishDirectory 'THIRD_PARTY_NOTICES.md'
+$thirdPartyNotice = & (Join-Path $PSScriptRoot 'generate-third-party-notices.ps1') `
+    -LockFile (Join-Path $repositoryRoot 'src/VpsReady.Desktop/packages.lock.json') `
+    -OutputPath $thirdPartyNoticePath `
+    -PassThru
+if ($LASTEXITCODE -ne 0 -or $null -eq $thirdPartyNotice -or $thirdPartyNotice.RuntimePackageCount -lt 1) {
+    throw 'Could not generate the exact locked runtime third-party notice inventory.'
+}
 Get-ChildItem -LiteralPath $publishDirectory -Filter '*.pdb' -File -Recurse | Remove-Item -Force
 
 $noticePath = Join-Path $publishDirectory 'PACKAGE_NOTICE.md'
@@ -90,6 +97,12 @@ $manifest = [ordered]@{
     signing = [ordered]@{
         status = $profiles.Signing.Status
         warning = $profiles.Signing.Warning
+    }
+    third_party_notices = [ordered]@{
+        path = 'THIRD_PARTY_NOTICES.md'
+        sha256 = $thirdPartyNotice.Sha256
+        runtime_package_count = $thirdPartyNotice.RuntimePackageCount
+        source_lock = 'src/VpsReady.Desktop/packages.lock.json'
     }
     evidence = [ordered]@{
         built = 'PASS'
