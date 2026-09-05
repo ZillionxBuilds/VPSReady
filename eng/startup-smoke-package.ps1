@@ -138,6 +138,34 @@ function Stop-SmokeProcess([Diagnostics.Process]$Process, [int]$TimeoutSeconds) 
     throw 'Startup-smoke process tree did not terminate during bounded cleanup.'
 }
 
+function New-NoDotnetShim([string]$Path, [bool]$IsWindows) {
+    if ($IsWindows) {
+        [IO.File]::WriteAllText($Path, "@echo off`r`nexit /b 77`r`n", [Text.UTF8Encoding]::new($false))
+        return
+    }
+
+    [IO.File]::WriteAllText($Path, "#!/bin/sh`nexit 77`n", [Text.UTF8Encoding]::new($false))
+    & /bin/chmod 700 $Path
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not create the no-dotnet startup guard.'
+    }
+}
+
+function Confirm-NoDotnetGuardExit([string]$Shim) {
+    & $Shim
+    $guardExitCode = $LASTEXITCODE
+    if ($guardExitCode -ne 77) {
+        throw 'The no-dotnet startup guard did not fail closed.'
+    }
+
+    # The shim intentionally returns 77. Clear that expected native-command
+    # status so a later successful managed Process API smoke exits 0.
+    $global:LASTEXITCODE = 0
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Startup-smoke no-dotnet guard did not reset process exit state.'
+    }
+}
+
 if ($SelfTest) {
     $linux = Get-RidTarget 'linux-x64'
     $windows = Get-RidTarget 'win-arm64'
@@ -147,6 +175,21 @@ if ($SelfTest) {
 
     if ((Get-Variable -Name Host).Options -notmatch 'ReadOnly|Constant') {
         throw 'Startup-smoke reserved Host variable self-test failed.'
+    }
+
+    $selfTestDirectory = Join-Path ([IO.Path]::GetTempPath()) ("vpsready-startup-smoke-" + [Guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $selfTestDirectory | Out-Null
+        $selfTestShim = if ([System.OperatingSystem]::IsWindows()) { Join-Path $selfTestDirectory 'dotnet.cmd' } else { Join-Path $selfTestDirectory 'dotnet' }
+        New-NoDotnetShim $selfTestShim ([System.OperatingSystem]::IsWindows())
+        Confirm-NoDotnetGuardExit $selfTestShim
+        if ($LASTEXITCODE -ne 0) {
+            throw 'No-dotnet guard exit-state self-test failed.'
+        }
+    } finally {
+        if (Test-Path -LiteralPath $selfTestDirectory) {
+            Remove-Item -LiteralPath $selfTestDirectory -Recurse -Force
+        }
     }
 
     $safeFixture = [ordered]@{ status = 'NOT_RUN'; result_reason = 'RUNNER_ARCHITECTURE_MISMATCH'; error_code = 'NONE' } | ConvertTo-Json
@@ -235,18 +278,8 @@ try {
     $shimDirectory = Assert-ChildPath $ridDirectory (Join-Path $ridDirectory 'no-dotnet')
     New-Item -ItemType Directory -Force -Path $shimDirectory | Out-Null
     $shim = if ($target.Os -eq 'Windows') { Join-Path $shimDirectory 'dotnet.cmd' } else { Join-Path $shimDirectory 'dotnet' }
-    if ($target.Os -eq 'Windows') {
-        [IO.File]::WriteAllText($shim, "@echo off`r`nexit /b 77`r`n", [Text.UTF8Encoding]::new($false))
-    } else {
-        [IO.File]::WriteAllText($shim, "#!/bin/sh`nexit 77`n", [Text.UTF8Encoding]::new($false))
-        & /bin/chmod 700 $shim
-        if ($LASTEXITCODE -ne 0) { throw 'Could not create the no-dotnet startup guard.' }
-    }
-
-    & $shim
-    if ($LASTEXITCODE -ne 77) {
-        throw 'The no-dotnet startup guard did not fail closed.'
-    }
+    New-NoDotnetShim $shim ($target.Os -eq 'Windows')
+    Confirm-NoDotnetGuardExit $shim
 
     $report.direct_apphost_no_dotnet_guard = 'PASS'
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
