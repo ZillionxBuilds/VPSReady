@@ -31,6 +31,16 @@ public sealed class ScenarioClock : IClock
 public sealed class ScenarioPlatformPaths(string scenarioId) : IPlatformPaths
 {
     public string GetStateDirectory() => $"/scenario-state/{scenarioId}";
+
+    public string GetDirectory(LocalStorageArea area) => area switch
+    {
+        LocalStorageArea.State => GetStateDirectory(),
+        LocalStorageArea.Configuration => $"/scenario-config/{scenarioId}",
+        LocalStorageArea.Ssh => $"/scenario-ssh/{scenarioId}",
+        _ => throw new ArgumentOutOfRangeException(nameof(area), area, "Unknown scenario storage area.")
+    };
+
+    public string ResolvePath(LocalStorageArea area, string relativePath) => LocalPathPolicy.ResolveUnder(GetDirectory(area), relativePath);
 }
 
 /// <summary>
@@ -41,7 +51,21 @@ public sealed class ScenarioLocalFileStore(ScenarioHostState state) : ILocalFile
 {
     public async Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken)
     {
+        await WriteAtomicallyAsync(
+            path,
+            contents,
+            new AtomicWriteOptions(LocalFileCollisionPolicy.ReplaceWithBackup, CreateBackup: false),
+            cancellationToken);
+    }
+
+    public async Task<AtomicWriteResult> WriteAtomicallyAsync(
+        string path,
+        ReadOnlyMemory<byte> contents,
+        AtomicWriteOptions options,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
         await Task.Yield();
         cancellationToken.ThrowIfCancellationRequested();
@@ -56,14 +80,30 @@ public sealed class ScenarioLocalFileStore(ScenarioHostState state) : ILocalFile
             throw new IOException("Scenario interrupted the atomic write before replacement.");
         }
 
-        if (state.LocalFiles.FailOnExistingPath && state.LocalFiles.Files.ContainsKey(path))
+        var exists = state.LocalFiles.Files.ContainsKey(path);
+        if ((state.LocalFiles.FailOnExistingPath || options.CollisionPolicy == LocalFileCollisionPolicy.Reject) && exists)
         {
             throw new IOException("Scenario refused to overwrite an existing local file.");
         }
 
+        string? backupPath = null;
+        if (exists && options.CreateBackup)
+        {
+            backupPath = path + ".bak";
+            state.LocalFiles.Files[backupPath] = state.LocalFiles.Files[path].ToArray();
+            state.LocalFiles.Permissions[backupPath] = "0600";
+            state.LocalFiles.LastWriteUtc[backupPath] = state.LocalFiles.Now;
+        }
+
         state.LocalFiles.Files[path] = contents.ToArray();
         state.LocalFiles.AtomicWriteCount++;
-        state.LocalFiles.Permissions.TryAdd(path, "0600");
+        if (options.RestrictPermissions)
+        {
+            state.LocalFiles.Permissions[path] = "0600";
+        }
+
+        state.LocalFiles.LastWriteUtc[path] = state.LocalFiles.Now;
+        return new AtomicWriteResult(path, backupPath, exists);
     }
 
     public async Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken)
@@ -84,6 +124,45 @@ public sealed class ScenarioLocalFileStore(ScenarioHostState state) : ILocalFile
         }
 
         return contents.ToArray();
+    }
+
+    public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(directory);
+        ArgumentNullException.ThrowIfNull(policy);
+        policy.Validate();
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var prefix = directory.EndsWith('/') ? directory : directory + "/";
+        var retained = state.LocalFiles.Files
+            .Where(entry => entry.Key.StartsWith(prefix, StringComparison.Ordinal) && !entry.Key[prefix.Length..].Contains('/'))
+            .OrderByDescending(entry => state.LocalFiles.LastWriteUtc.GetValueOrDefault(entry.Key, DateTimeOffset.MinValue))
+            .ToList();
+        var deletedCount = 0;
+        long deletedBytes = 0;
+
+        DeleteWhenSafe(retained.OrderBy(entry => state.LocalFiles.LastWriteUtc.GetValueOrDefault(entry.Key, DateTimeOffset.MinValue)).ToList(), entry => state.LocalFiles.Now - state.LocalFiles.LastWriteUtc.GetValueOrDefault(entry.Key, DateTimeOffset.MinValue) > policy.MaximumAge);
+        DeleteWhenSafe(retained.OrderBy(entry => state.LocalFiles.LastWriteUtc.GetValueOrDefault(entry.Key, DateTimeOffset.MinValue)).ToList(), _ => retained.Sum(entry => (long)entry.Value.Length) > policy.MaximumTotalBytes);
+        return Task.FromResult(new RetentionCleanupResult(deletedCount, deletedBytes, retained.Count, retained.Sum(entry => (long)entry.Value.Length)));
+
+        void DeleteWhenSafe(IEnumerable<KeyValuePair<string, byte[]>> candidates, Func<KeyValuePair<string, byte[]>, bool> shouldDelete)
+        {
+            foreach (var entry in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (retained.Count <= policy.MinimumRetainedFiles || !shouldDelete(entry))
+                {
+                    continue;
+                }
+
+                state.LocalFiles.Files.Remove(entry.Key);
+                state.LocalFiles.Permissions.Remove(entry.Key);
+                state.LocalFiles.LastWriteUtc.Remove(entry.Key);
+                retained.Remove(entry);
+                deletedCount++;
+                deletedBytes += entry.Value.Length;
+            }
+        }
     }
 }
 

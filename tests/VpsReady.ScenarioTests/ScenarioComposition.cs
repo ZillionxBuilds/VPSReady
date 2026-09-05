@@ -4,6 +4,7 @@ using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Diagnostics;
+using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.ScenarioTests;
 
@@ -28,6 +29,7 @@ public static class ScenarioComposition
         services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<ILocalFileStore, ScenarioLocalFileStore>();
         services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(scenarioId));
+        services.AddSingleton<ISecureLocalStorage, SecureLocalStorage>();
         services.AddSingleton<IClock, ScenarioClock>();
         services.AddSingleton<ScenarioProcessRunner>();
         services.AddSingleton<IProcessRunner>(provider => provider.GetRequiredService<ScenarioProcessRunner>());

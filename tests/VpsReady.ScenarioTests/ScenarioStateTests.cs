@@ -363,6 +363,44 @@ public sealed class ScenarioStateTests
     }
 
     [Fact]
+    public async Task SecureLocalStorageScenarioRejectsTraversalAndRetainsOriginalOnInjectedInterruption()
+    {
+        await using var services = ScenarioComposition.Create("scenario.e2.secure-local-storage");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var storage = services.GetRequiredService<ISecureLocalStorage>();
+        var original = Encoding.UTF8.GetBytes("safe original");
+        var replacement = Encoding.UTF8.GetBytes("replacement");
+
+        var first = await storage.WriteAsync(LocalStorageArea.State, "runs/run.json", original, new AtomicWriteOptions(), CancellationToken.None);
+        Assert.Throws<ArgumentException>(() => storage.ResolvePath(LocalStorageArea.State, "../escape.json"));
+        await Assert.ThrowsAsync<IOException>(() => storage.WriteAsync(
+            LocalStorageArea.State,
+            "runs/run.json",
+            replacement,
+            new AtomicWriteOptions(),
+            CancellationToken.None));
+
+        state.LocalFiles.InterruptAtomicWrite = true;
+        await Assert.ThrowsAsync<IOException>(() => storage.WriteAsync(
+            LocalStorageArea.State,
+            "runs/run.json",
+            replacement,
+            new AtomicWriteOptions(LocalFileCollisionPolicy.ReplaceWithBackup),
+            CancellationToken.None));
+        Assert.Equal(original, (await services.GetRequiredService<ILocalFileStore>().ReadAsync(first.TargetPath, CancellationToken.None)).ToArray());
+
+        state.LocalFiles.InterruptAtomicWrite = false;
+        var replaced = await storage.WriteAsync(
+            LocalStorageArea.State,
+            "runs/run.json",
+            replacement,
+            new AtomicWriteOptions(LocalFileCollisionPolicy.ReplaceWithBackup),
+            CancellationToken.None);
+        Assert.Equal(original, state.LocalFiles.Files[replaced.BackupPath!]);
+        Assert.Equal("0600", state.LocalFiles.Permissions[replaced.TargetPath]);
+    }
+
+    [Fact]
     public async Task ProcessBoundaryIsScriptedAndCannotStartAnUnregisteredNetworkTool()
     {
         await using var services = ScenarioComposition.Create("scenario.e2.process-boundary");
