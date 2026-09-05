@@ -49,6 +49,7 @@ public static class RemoteCommandCatalog
     public const string SshSessionPortRead = DiagnosticCommandCatalog.SshSessionPortRead;
     public const string UbuntuUfwAvailabilityRead = DiagnosticCommandCatalog.UbuntuUfwAvailabilityRead;
     public const string UbuntuUfwStatusRead = DiagnosticCommandCatalog.UbuntuUfwStatusRead;
+    public const string UbuntuUfwDetectionRead = DiagnosticCommandCatalog.UbuntuUfwDetectionRead;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -65,6 +66,7 @@ public static class RemoteCommandCatalog
         SshSessionPortRead,
         UbuntuUfwAvailabilityRead,
         UbuntuUfwStatusRead,
+        UbuntuUfwDetectionRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

@@ -92,6 +92,7 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.SshSessionPortRead,
         RemoteCommandCatalog.UbuntuUfwAvailabilityRead,
         RemoteCommandCatalog.UbuntuUfwStatusRead,
+        RemoteCommandCatalog.UbuntuUfwDetectionRead,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 
