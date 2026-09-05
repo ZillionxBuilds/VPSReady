@@ -76,6 +76,14 @@ public sealed record KeyAuthenticationVerificationResult(OperationResult Result,
     public override string ToString() => "KeyAuthenticationVerificationResult [safe summary only]";
 }
 
+/// <summary>Application-facing boundary for the accepted separate key-auth check.</summary>
+public interface IKeyAuthenticationVerifier
+{
+    Task<KeyAuthenticationVerificationResult> VerifyAsync(
+        KeyAuthenticationVerificationRequest request,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// A newly created transport that can authenticate with an already validated
 /// local key. It must assess the SSH handshake against the exact supplied

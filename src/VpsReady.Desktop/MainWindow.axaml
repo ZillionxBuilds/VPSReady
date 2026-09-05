@@ -99,6 +99,39 @@
               <TextBlock Text="The normal flow blocks removal of any TCP rule on the active SSH port. Use Activity &amp; Diagnostics and the operation ID for a Safe Issue Report; no raw remote command or secret is shown." TextWrapping="Wrap" />
             </StackPanel>
           </Border>
+          <Border IsVisible="{Binding SelectedPage.IsSshManagementPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Safe SSH key management" />
+              <TextBlock Text="Private keys, public-key text, local paths, raw commands, server addresses, and credentials are never shown in Activity or this summary." TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SshManagement.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SshManagement.State}" />
+              <TextBlock Text="{Binding SshManagement.TrustedHostStatus}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SshManagement.OperationId}" FontFamily="Consolas" Text="{Binding SshManagement.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SshManagement.ErrorCode}" FontFamily="Consolas" Text="{Binding SshManagement.ErrorCode}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="GenerateSshKeyAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Generate local Ed25519 key" />
+                <Button Click="SelectSshKeyAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Select existing local key" />
+                <Button Command="{Binding SshManagement.CancelCommand}" IsEnabled="{Binding SshManagement.CanCancel}" Content="Cancel operation" />
+              </StackPanel>
+              <TextBlock Text="{Binding SshManagement.SelectedKeyMetadata.Algorithm}" />
+              <TextBlock Text="{Binding SshManagement.SelectedKeyMetadata.Fingerprint}" FontFamily="Consolas" TextWrapping="Wrap" />
+              <TextBlock FontWeight="SemiBold" Text="Deploy and verify" />
+              <CheckBox IsChecked="{Binding SshManagement.IsDeploymentConfirmed, Mode=TwoWay}" Content="I confirm deployment of the selected public key to the current verified session." />
+              <TextBlock AutomationProperties.Name="SSH key deployment eligibility" Text="{Binding SshManagement.DeploymentEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="DeploySshKeyAsync" IsEnabled="{Binding SshManagement.CanDeploy}" Content="Deploy and verify public key" />
+              <TextBlock AutomationProperties.Name="SSH key-authentication eligibility" Text="{Binding SshManagement.KeyAuthenticationEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="VerifySshKeyAuthenticationAsync" IsEnabled="{Binding SshManagement.CanVerifyKeyAuthentication}" Content="Test separate key authentication" />
+              <TextBlock Text="Key-authentication success is only shown after a new connection to the same trusted host completes its minimum verification. This screen never disables password access." TextWrapping="Wrap" />
+              <TextBlock FontWeight="SemiBold" Text="Local OpenSSH alias" />
+              <TextBox Watermark="Alias" Text="{Binding SshManagement.Alias, Mode=TwoWay}" />
+              <TextBox Watermark="Host name" Text="{Binding SshManagement.HostName, Mode=TwoWay}" />
+              <TextBox Watermark="User name" Text="{Binding SshManagement.UserName, Mode=TwoWay}" />
+              <TextBox Watermark="SSH port" Text="{Binding SshManagement.Port, Mode=TwoWay}" />
+              <CheckBox IsChecked="{Binding SshManagement.IsConfigConfirmed, Mode=TwoWay}" Content="I confirm saving this local OpenSSH alias." />
+              <Button Click="SaveSshConfigAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Save verified local alias" />
+              <TextBlock Text="Use Activity &amp; Diagnostics and the operation ID to Copy a Safe Issue Report or export a sanitized support bundle. Nothing is uploaded automatically." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
           <Border IsVisible="{Binding SelectedPage.IsConnectionSurfacePage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="8">
               <TextBlock FontWeight="SemiBold" Text="Connection and overview" />

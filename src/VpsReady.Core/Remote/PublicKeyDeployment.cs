@@ -89,3 +89,15 @@ public sealed record PublicKeyDeploymentOperationResult(
 {
     public override string ToString() => "PublicKeyDeploymentOperationResult [safe summary only]";
 }
+
+/// <summary>
+/// Application-facing boundary for the accepted deployment workflow. It keeps
+/// desktop composition independent from the concrete remote adapter.
+/// </summary>
+public interface IPublicKeyDeployment
+{
+    Task<PublicKeyDeploymentOperationResult> DeployAsync(
+        IRemoteTransport transport,
+        PublicKeyDeploymentMaterial material,
+        CancellationToken cancellationToken = default);
+}

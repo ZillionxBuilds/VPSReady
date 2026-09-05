@@ -8,7 +8,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// Deploys one locally validated ED25519 public key over an already trusted,
 /// authenticated session. C405 alone owns separate key-authentication proof.
 /// </summary>
-public sealed class PublicKeyDeploymentWorkflow
+public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
 {
     private const string ActionName = "DeployPublicKey";
     private readonly IDiagnosticSink diagnostics;
