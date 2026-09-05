@@ -90,6 +90,9 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             ScenarioCommandIds.CounterRead => Result(State.Counter.ToString(CultureInfo.InvariantCulture)),
             ScenarioCommandIds.CounterIncrement => Result((++State.Counter).ToString(CultureInfo.InvariantCulture)),
             ScenarioCommandIds.SshAuthenticate => Authenticate(),
+            RemoteCommandCatalog.SshConnectionTest => State.Ssh.IsConnected
+                ? Result("authenticated=true")
+                : Failure(25, "Connection verification requires an authenticated session."),
             ScenarioCommandIds.SshTrustInspect => TrustInspect(),
             ScenarioCommandIds.SshTrustAccept => TrustAccept(command),
             ScenarioCommandIds.SshPermissions => Permissions(),

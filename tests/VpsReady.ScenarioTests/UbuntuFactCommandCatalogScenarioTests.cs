@@ -12,6 +12,7 @@ public sealed class UbuntuFactCommandCatalogScenarioTests
     {
         var state = ScenarioHostState.CreateDefault("scenario.c205.read-only-fact-catalog");
         state.Ssh.ActiveSshPort = 2202;
+        state.Ssh.IsConnected = true;
         state.Ssh.RootAvailable = true;
         state.Ufw.Status = ScenarioUfwStatus.Active;
         var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());

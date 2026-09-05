@@ -139,6 +139,18 @@ public interface IApplicationSession : IAsyncDisposable
         TimeSpan timeout,
         Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs an operation only when the session identity observed by the caller
+    /// is still current. A mismatch is a stale-session failure and the
+    /// operation delegate is not invoked.
+    /// </summary>
+    Task<OperationResult> RunOperationForSessionAsync(
+        string operationId,
+        TimeSpan timeout,
+        Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
+        string expectedSessionId,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -238,7 +250,23 @@ public sealed class ApplicationSession : IApplicationSession
         string operationId,
         TimeSpan timeout,
         Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
+        CancellationToken cancellationToken = default) =>
+        await RunOperationCoreAsync(operationId, timeout, operation, null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<OperationResult> RunOperationForSessionAsync(
+        string operationId,
+        TimeSpan timeout,
+        Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
+        string expectedSessionId,
         CancellationToken cancellationToken = default)
+        => await RunOperationCoreAsync(operationId, timeout, operation, expectedSessionId, cancellationToken).ConfigureAwait(false);
+
+    private async Task<OperationResult> RunOperationCoreAsync(
+        string operationId,
+        TimeSpan timeout,
+        Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
+        string? expectedSessionId,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(operationId))
         {
@@ -276,6 +304,12 @@ public sealed class ApplicationSession : IApplicationSession
         {
             operationGate.Release();
             return OperationResult.Failure(operationId, OperationErrorCode.Network, OperationState.Unknown);
+        }
+
+        if (expectedSessionId is not null && !string.Equals(session.SessionId, expectedSessionId, StringComparison.Ordinal))
+        {
+            operationGate.Release();
+            return OperationResult.Failure(operationId, OperationErrorCode.Reconnect, OperationState.Unknown);
         }
 
         RaiseStateChanged();

@@ -73,7 +73,7 @@ internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost h
 /// remains available for a replacement connection identity and its state stays
 /// observable to every scenario transport.
 /// </summary>
-internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IRemoteTransport
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport
 {
     private bool disposed;
 
@@ -83,6 +83,19 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         return host.ExecuteAsync(command, cancellationToken);
+    }
+
+    public KnownHostTrustAssessment? LastHostTrustAssessment => null;
+
+    public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        var authentication = new RemoteCommand(new RemoteCommandId(ScenarioCommandIds.SshAuthenticate), string.Empty, timeout);
+        var result = await host.ExecuteAsync(authentication, cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Authentication);
+        }
     }
 
     public ValueTask DisposeAsync()
