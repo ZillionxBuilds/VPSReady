@@ -65,6 +65,12 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         OnPropertyChanged(nameof(SecretDisplay));
     }
 
+    public void RejectSecretCharacter()
+    {
+        State = ConnectionScreenState.Failed;
+        Status = "This password input character is not supported by the secure input boundary.";
+    }
+
     /// <summary>Accepts transient characters only; it never stores a password string.</summary>
     public async Task TestAsync(string? host, string? port, string? user, TimeSpan? timeout, CancellationToken cancellationToken = default)
     {

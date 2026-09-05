@@ -109,6 +109,11 @@ public partial class MainWindow : Window
             connection.AppendSecretCharacter(value);
             e.Handled = true;
         }
+        else
+        {
+            connection.RejectSecretCharacter();
+            e.Handled = true;
+        }
     }
 
     private static bool TryMapAsciiKey(Avalonia.Input.Key key, out char value)
