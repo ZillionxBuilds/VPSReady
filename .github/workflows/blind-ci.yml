@@ -262,6 +262,10 @@ jobs:
       - name: Restore locked declared runtime dependencies for publish
         run: dotnet restore src/VpsReady.Desktop/VpsReady.Desktop.csproj --locked-mode
 
+      - name: Verify C601 packaging profiles
+        shell: bash
+        run: bash eng/verify-packaging-profiles.sh
+
       - name: Publish and package E4 artifact
         shell: pwsh
         run: >

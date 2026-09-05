@@ -43,12 +43,18 @@ result. E3 remains protocol evidence, not real VPS evidence.
 The package matrix begins only after every E0-E2 matrix job has passed. It
 publishes self-contained desktop payloads for `win-x64`, `win-arm64`,
 `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`, on the corresponding
-Windows, Linux, or macOS host. Each ZIP and its SHA-256 sidecar include the
-exact commit SHA in the filename. The archive's `artifact-manifest.json`
-records the source SHA, RID, runner host OS/architecture, file checksums, and
-separate evidence values for `built`, `package_inspected`, and
-`startup_smoked`. Each package job performs its own locked restore against the
-desktop project's declared runtime identifiers before publishing.
+Windows, Linux, or macOS host. Each ZIP and its SHA-256 sidecar include the app
+version, exact commit SHA, and RID in the filename. C601's
+`eng/packaging-profiles.psd1` defines the six candidate self-contained
+packaging profiles and their unsigned-candidate warning. The archive's
+`artifact-manifest.json` records the version, source SHA, RID, runner host
+OS/architecture, file checksums, signing status, and separate evidence values
+for `built`, `package_inspected`, and `startup_smoked`. `PACKAGE_NOTICE.md`
+inside each archive repeats the source SHA and unsigned warning. The package
+script passes the source SHA into desktop build metadata, emits no PDB, and
+rejects a manifest containing the build workspace path. Each package job
+performs its own locked restore against the desktop project's declared runtime
+identifiers before publishing.
 
 For a pull request, the source SHA is the immutable reviewed PR head commit;
 this deliberately avoids GitHub Actions' synthetic merge commit exposed as
