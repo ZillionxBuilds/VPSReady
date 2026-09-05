@@ -131,6 +131,11 @@ jobs:
         run: |
           bash eng/verify-ci-source-sha.sh
           bash eng/verify-release-candidate-ci.sh
+          bash eng/verify-startup-smoke-suite.sh
+
+      - name: E0 startup-smoke script self-test
+        shell: pwsh
+        run: ./eng/startup-smoke-package.ps1 -SelfTest
 
       - name: E1 unit tests
         run: dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
@@ -285,6 +290,30 @@ jobs:
           --notice artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICES.md
           --inventory artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICE_INVENTORY.json
 
+      - name: E4 bounded matching-host startup smoke
+        shell: pwsh
+        run: >
+          ./eng/startup-smoke-package.ps1
+          -Rid '${{ matrix.rid }}'
+          -ExpectedCommitSha $env:VALIDATION_SHA
+          -RunnerOs '${{ runner.os }}'
+          -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Reject unsafe retained startup-smoke report
+        id: startup_smoke_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh artifacts/startup-smoke
+
+      - name: Upload safe startup-smoke report
+        if: always() && steps.startup_smoke_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-smoke-${{ matrix.rid }}-${{ env.VALIDATION_SHA }}
+          path: artifacts/startup-smoke/${{ matrix.rid }}/startup-smoke-report.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Reject unsafe retained package material
         shell: bash
         run: bash eng/verify-artifact-safety.sh artifacts/publish
@@ -337,6 +366,35 @@ jobs:
         with:
           pattern: "vpsready-*"
           path: package-evidence
+
+      - name: Download all matching-host startup-smoke evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "startup-smoke-*"
+          path: startup-smoke-evidence
+
+      - name: Assert every startup-smoke report has exact identity and truthful result
+        shell: bash
+        env:
+          EXPECTED_VALIDATION_SHA: ${{ needs.resolve-validation.outputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find startup-smoke-evidence -name startup-smoke-report.json -type f | sort)
+          test "${#reports[@]}" -eq 6
+          passing=0
+          for report in "${reports[@]}"; do
+            jq -e --arg sha "$EXPECTED_VALIDATION_SHA" '
+              .schema_version == 1
+              and .evidence_class == "E4 Packaging/actual matching CI host"
+              and .source_sha == $sha
+              and .self_contained == true
+              and (.archive_sha256 | test("^[0-9a-f]{64}$"))
+              and (.app_version | test("^[0-9]+\\.[0-9]+\\.[0-9]+"))
+              and ((.status == "PASS" and .matching_host == true and .direct_apphost_no_dotnet_guard == "PASS" and .startup_observation == "PROCESS_RUNNING_AFTER_BOUNDED_WAIT" and (.cleanup == "PROCESS_EXITED_AFTER_BOUNDED_SHUTDOWN" or .cleanup == "PROCESS_TREE_CLEANED_AFTER_BOUNDED_SHUTDOWN"))
+                   or (.status == "NOT_RUN" and (.result_reason == "RUNNER_OS_MISMATCH" or .result_reason == "RUNNER_ARCHITECTURE_MISMATCH" or .result_reason == "HEADLESS_DISPLAY_UNAVAILABLE")))' "$report" >/dev/null
+            if jq -e '.status == "PASS"' "$report" >/dev/null; then passing=$((passing + 1)); fi
+          done
+          test "$passing" -ge 2
 
       - name: Assert every package has the resolved validation identity
         shell: bash
