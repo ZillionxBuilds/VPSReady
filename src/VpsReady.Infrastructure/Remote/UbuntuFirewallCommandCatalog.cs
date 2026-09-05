@@ -48,6 +48,28 @@ public static class UbuntuFirewallCommandCatalog
             maximumOutputBytes: 0);
     }
 
+    public static RemoteCommand CreateActiveSshAllowEnsureRequest(int port, UfwIpFamily family)
+    {
+        if (!UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(UfwRuleProtocol.Tcp, port, "Anywhere", family), out var request, out _))
+        {
+            throw new ArgumentOutOfRangeException(nameof(port), "A valid active SSH port and IP family are required.");
+        }
+
+        return RemoteCommand.Create(
+            RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure),
+            [new("family", family.ToString().ToLowerInvariant()), new("port", port.ToString(CultureInfo.InvariantCulture))],
+            DefaultTimeout,
+            OutputCapturePolicy.MetadataOnly,
+            maximumOutputBytes: 0);
+    }
+
+    public static RemoteCommand CreateToggleRequest(bool enable) => RemoteCommand.Create(
+        RemoteCommandCatalog.RequireKnown(enable ? RemoteCommandCatalog.UbuntuUfwEnable : RemoteCommandCatalog.UbuntuUfwDisable),
+        [new("confirmed", "true")],
+        DefaultTimeout,
+        OutputCapturePolicy.MetadataOnly,
+        maximumOutputBytes: 0);
+
     /// <summary>
     /// Resolves only the C303 allow-rule command from validated compact metadata.
     /// This is the sole production shell construction path for the card.
@@ -58,6 +80,16 @@ public static class UbuntuFirewallCommandCatalog
         if (string.Equals(command.Id.Value, RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove, StringComparison.Ordinal))
         {
             return RequireSelectedRuleRemovalShellCommand(command);
+        }
+
+        if (string.Equals(command.Id.Value, RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure, StringComparison.Ordinal))
+        {
+            return RequireActiveSshAllowEnsureShellCommand(command);
+        }
+
+        if (command.Id.Value is RemoteCommandCatalog.UbuntuUfwEnable or RemoteCommandCatalog.UbuntuUfwDisable)
+        {
+            return RequireToggleShellCommand(command);
         }
 
         if (!string.Equals(command.Id.Value, RemoteCommandCatalog.UbuntuUfwAllowRuleAdd, StringComparison.Ordinal))
@@ -99,6 +131,34 @@ public static class UbuntuFirewallCommandCatalog
             + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw --force delete " + action + " from " + source + " to any port " + port + " proto " + protocol + "; "
             + "else exit 77; fi";
     }
+
+    private static string RequireActiveSshAllowEnsureShellCommand(RemoteCommand command)
+    {
+        if (!TryParseActiveSshAllow(command.SafeArgumentSummary, out var port, out var family))
+        {
+            throw new ArgumentException("Firewall command metadata is not a validated active SSH allow request.", nameof(command));
+        }
+
+        var source = RemoteCommandArguments.QuotePosixArgument(family == UfwIpFamily.Ipv4 ? "0.0.0.0/0" : "::/0");
+        var quotedPort = RemoteCommandArguments.QuotePosixArgument(port.ToString(CultureInfo.InvariantCulture));
+        return PrivilegedUfw("allow from " + source + " to any port " + quotedPort + " proto 'tcp'");
+    }
+
+    private static string RequireToggleShellCommand(RemoteCommand command)
+    {
+        if (!string.Equals(command.SafeArgumentSummary, "confirmed=true", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("A confirmed firewall toggle is required.", nameof(command));
+        }
+
+        return PrivilegedUfw(command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable ? "--force enable" : "--force disable");
+    }
+
+    private static string PrivilegedUfw(string arguments) => PredictableLocalePrefix
+        + "if ! command -v ufw >/dev/null 2>&1; then exit 127; "
+        + "elif [ \"$(id -u)\" -eq 0 ]; then ufw " + arguments + "; "
+        + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw " + arguments + "; "
+        + "else exit 77; fi";
 
     private static bool TryParseRequest(string safeSummary, out UfwAllowRuleRequest? request)
     {
@@ -168,5 +228,22 @@ public static class UbuntuFirewallCommandCatalog
             action,
             family);
         return UfwRuleRemovalRequest.TryCreate(synthetic, out request);
+    }
+
+    private static bool TryParseActiveSshAllow(string safeSummary, out int port, out UfwIpFamily family)
+    {
+        port = 0;
+        family = default;
+        var parts = safeSummary.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2
+            || !parts[0].StartsWith("family=", StringComparison.Ordinal)
+            || !parts[1].StartsWith("port=", StringComparison.Ordinal)
+            || !Enum.TryParse(parts[0]["family=".Length..], true, out family)
+            || !int.TryParse(parts[1]["port=".Length..], NumberStyles.None, CultureInfo.InvariantCulture, out port))
+        {
+            return false;
+        }
+
+        return UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(UfwRuleProtocol.Tcp, port, "Anywhere", family), out _, out _);
     }
 }

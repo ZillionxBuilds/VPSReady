@@ -111,6 +111,31 @@ public static partial class UbuntuServerFactParser
         return new UfwRuleListRead(new UfwSnapshot(UfwFirewallState.Active, rules), UfwRuleListReadStatus.Complete);
     }
 
+    /// <summary>
+    /// C305's inactive-firewall pre-enable check. <c>ufw status numbered</c>
+    /// does not list stored rules while inactive, so accept only the two exact
+    /// C-locale full-rule forms that C305 itself ensures through UFW's
+    /// documented <c>show added</c> report. Unknown/normalized alternatives
+    /// fail closed instead of inferring SSH access safety.
+    /// </summary>
+    public static bool HasActiveSshAllowsInAddedRules(RemoteCommandResult result, int port)
+    {
+        if (!result.Succeeded || port is < 1 or > 65535 || Encoding.UTF8.GetByteCount(result.StandardOutput) > UbuntuFactCommandCatalog.MaximumOutputBytes)
+        {
+            return false;
+        }
+
+        var lines = Lines(result.StandardOutput);
+        if (lines.Length < 3 || !lines[0].StartsWith("Added user rules", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var portText = port.ToString(CultureInfo.InvariantCulture);
+        return lines.Skip(1).Contains($"ufw allow from 0.0.0.0/0 to any port {portText} proto tcp", StringComparer.Ordinal)
+            && lines.Skip(1).Contains($"ufw allow from ::/0 to any port {portText} proto tcp", StringComparer.Ordinal);
+    }
+
     public static ServerFact<UbuntuOperatingSystem> ParseOperatingSystem(string output)
     {
         var values = ParseKeyValues(output);
