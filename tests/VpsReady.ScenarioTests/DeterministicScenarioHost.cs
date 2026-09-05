@@ -101,6 +101,18 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             ScenarioCommandIds.UbuntuHostnameSet => SetHostname(command),
             ScenarioCommandIds.UbuntuTimezoneRead => Result(State.Timezone),
             ScenarioCommandIds.UbuntuTimezoneSet => SetTimezone(command),
+            RemoteCommandCatalog.UbuntuOsReleaseRead => Result($"ID={State.Ubuntu.Distribution.ToLowerInvariant()}\nVERSION={State.Ubuntu.Version}"),
+            RemoteCommandCatalog.UbuntuKernelArchitectureRead => Result($"Linux {State.Ubuntu.Kernel} {State.Ubuntu.Architecture}"),
+            RemoteCommandCatalog.UbuntuHostnameRead => Result(State.Hostname),
+            RemoteCommandCatalog.UbuntuUptimeRead => Result(State.Ubuntu.Uptime),
+            RemoteCommandCatalog.UbuntuCurrentUserRead => Result(State.Ssh.UserName),
+            RemoteCommandCatalog.UbuntuPrivilegeRead => PrivilegeFacts(),
+            RemoteCommandCatalog.UbuntuCpuRead => Result(State.Ubuntu.CpuSummary),
+            RemoteCommandCatalog.UbuntuMemoryRead => Result(State.Ubuntu.MemorySummary),
+            RemoteCommandCatalog.UbuntuRootDiskRead => Result(State.Ubuntu.DiskSummary),
+            RemoteCommandCatalog.SshSessionPortRead => Result(State.Ssh.ActiveSshPort.ToString(CultureInfo.InvariantCulture)),
+            RemoteCommandCatalog.UbuntuUfwAvailabilityRead => Result($"ufw={(State.Ufw.Status == ScenarioUfwStatus.Absent ? "unavailable" : "available")}"),
+            RemoteCommandCatalog.UbuntuUfwStatusRead => FactUfwStatus(),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -266,6 +278,25 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         return State.Ufw.Status switch
         {
             ScenarioUfwStatus.Absent => Failure(127, "ufw is unavailable in this scenario."),
+            ScenarioUfwStatus.Error => Failure(1, State.Ufw.ErrorMessage),
+            _ => Result($"status={State.Ufw.Status.ToString().ToLowerInvariant()}"),
+        };
+    }
+
+    private RemoteCommandResult PrivilegeFacts()
+    {
+        var root = State.Ssh.RootAvailable.ToString().ToLowerInvariant();
+        var sudo = State.Ssh.RootAvailable
+            ? "not_required"
+            : State.Ssh.SudoAvailable ? "available" : "unavailable";
+        return Result($"root={root}\nsudo={sudo}");
+    }
+
+    private RemoteCommandResult FactUfwStatus()
+    {
+        return State.Ufw.Status switch
+        {
+            ScenarioUfwStatus.Absent => Result("ufw=unavailable"),
             ScenarioUfwStatus.Error => Failure(1, State.Ufw.ErrorMessage),
             _ => Result($"status={State.Ufw.Status.ToString().ToLowerInvariant()}"),
         };

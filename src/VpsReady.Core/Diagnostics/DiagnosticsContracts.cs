@@ -133,8 +133,35 @@ public static class DiagnosticEventCatalog
 public static class DiagnosticCommandCatalog
 {
     public const string SshConnectionTest = "ssh.connection.test";
+    public const string UbuntuOsReleaseRead = "ubuntu.facts.os-release.read";
+    public const string UbuntuKernelArchitectureRead = "ubuntu.facts.kernel-architecture.read";
+    public const string UbuntuHostnameRead = "ubuntu.facts.hostname.read";
+    public const string UbuntuUptimeRead = "ubuntu.facts.uptime.read";
+    public const string UbuntuCurrentUserRead = "ubuntu.facts.current-user.read";
+    public const string UbuntuPrivilegeRead = "ubuntu.facts.privilege.read";
+    public const string UbuntuCpuRead = "ubuntu.facts.cpu.read";
+    public const string UbuntuMemoryRead = "ubuntu.facts.memory.read";
+    public const string UbuntuRootDiskRead = "ubuntu.facts.root-disk.read";
+    public const string SshSessionPortRead = "ssh.session.port.read";
+    public const string UbuntuUfwAvailabilityRead = "ubuntu.facts.ufw-availability.read";
+    public const string UbuntuUfwStatusRead = "ubuntu.facts.ufw-status.read";
 
-    private static readonly HashSet<string> Known = new(StringComparer.Ordinal) { SshConnectionTest };
+    private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
+    {
+        SshConnectionTest,
+        UbuntuOsReleaseRead,
+        UbuntuKernelArchitectureRead,
+        UbuntuHostnameRead,
+        UbuntuUptimeRead,
+        UbuntuCurrentUserRead,
+        UbuntuPrivilegeRead,
+        UbuntuCpuRead,
+        UbuntuMemoryRead,
+        UbuntuRootDiskRead,
+        SshSessionPortRead,
+        UbuntuUfwAvailabilityRead,
+        UbuntuUfwStatusRead,
+    };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
 }

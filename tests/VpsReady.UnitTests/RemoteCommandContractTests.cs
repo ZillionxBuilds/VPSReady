@@ -1,6 +1,7 @@
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Remote;
 
 namespace VpsReady.UnitTests;
 
@@ -19,6 +20,7 @@ public sealed class RemoteCommandContractTests
         Assert.Equal("action=probe port=22", command.SafeArgumentSummary);
         Assert.Equal(TimeSpan.FromSeconds(15), command.Timeout);
         Assert.Equal(OutputCapturePolicy.SanitizedTruncated, command.OutputCapturePolicy);
+        Assert.Equal(RemoteCommand.DefaultMaximumOutputBytes, command.MaximumOutputBytes);
         Assert.True(RemoteCommandCatalog.IsKnown(command.Id.Value));
         Assert.True(DiagnosticCommandCatalog.IsKnown(command.Id.Value));
     }
@@ -65,5 +67,57 @@ public sealed class RemoteCommandContractTests
         Assert.True(commandResult.Succeeded);
         Assert.False(operation.Succeeded);
         Assert.Equal(OperationVerification.Failed, operation.Verification);
+    }
+
+    [Fact]
+    public void UbuntuFactCatalogHasStableKnownReadOnlyCommandsWithBoundedOutput()
+    {
+        Assert.Equal(12, UbuntuFactCommandCatalog.All.Count);
+
+        foreach (var definition in UbuntuFactCommandCatalog.All)
+        {
+            Assert.True(RemoteCommandCatalog.IsKnown(definition.Id.Value));
+            Assert.True(DiagnosticCommandCatalog.IsKnown(definition.Id.Value));
+            Assert.True(definition.IsReadOnly);
+            Assert.True(definition.Timeout > TimeSpan.Zero);
+            Assert.DoesNotContain("password", definition.Source, StringComparison.OrdinalIgnoreCase);
+
+            var request = definition.CreateRequest();
+            Assert.Equal(definition.Id, request.Id);
+            Assert.Equal(definition.Timeout, request.Timeout);
+            Assert.Equal(definition.OutputCapturePolicy, request.OutputCapturePolicy);
+            Assert.Equal(definition.MaximumOutputBytes, request.MaximumOutputBytes);
+            Assert.DoesNotContain("password", request.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
+
+            if (definition.Execution == UbuntuFactCommandExecution.Remote)
+            {
+                Assert.StartsWith("LC_ALL=C LANG=C; export LC_ALL LANG; ", definition.ShellCommand, StringComparison.Ordinal);
+                Assert.Equal(OutputCapturePolicy.SanitizedTruncated, definition.OutputCapturePolicy);
+                Assert.Equal(UbuntuFactCommandCatalog.MaximumOutputBytes, definition.MaximumOutputBytes);
+            }
+            else
+            {
+                Assert.Null(definition.ShellCommand);
+                Assert.Equal(OutputCapturePolicy.MetadataOnly, definition.OutputCapturePolicy);
+                Assert.Equal(0, definition.MaximumOutputBytes);
+            }
+        }
+    }
+
+    [Fact]
+    public void UbuntuFactCatalogFailsClosedForUnknownCommand()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => UbuntuFactCommandCatalog.RequireKnown("ubuntu.facts.not-a-command"));
+    }
+
+    [Fact]
+    public void SanitizedCaptureCannotRequestUnboundedOrZeroOutput()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RemoteCommand(
+            RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuCpuRead),
+            "source=proc-cpuinfo",
+            TimeSpan.FromSeconds(1),
+            OutputCapturePolicy.SanitizedTruncated,
+            maximumOutputBytes: 0));
     }
 }
