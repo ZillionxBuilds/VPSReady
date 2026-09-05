@@ -150,6 +150,12 @@ public sealed class OperationJournalWorkspaceTests
 
             var trustPayload = string.Concat("known", "_hosts");
             var serverValue = string.Concat("c108", "-server", ".example", ".test");
+            var configPayload = string.Join(
+                Environment.NewLine,
+                "Host c108-alias",
+                "  User c108-admin",
+                "  Port 2202",
+                "  IdentitiesOnly yes");
             var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
             var pipeline = new RedactingDiagnosticSink(redactor, workspace);
             await pipeline.WriteAsync(
@@ -160,11 +166,12 @@ public sealed class OperationJournalWorkspaceTests
                     correlation,
                     DiagnosticPhase.Verify,
                     DiagnosticStatus.Failed,
-                    $"{trustPayload} entry references {serverValue}",
-                    Action: $"Inspect {trustPayload}",
+                    $"{trustPayload} entry references {serverValue}{Environment.NewLine}{configPayload}",
+                    Action: $"Inspect {trustPayload}{Environment.NewLine}{configPayload}",
                     Context: new Dictionary<string, DiagnosticValue>
                     {
                         ["trusted_host"] = new(DiagnosticDataClassification.PublicSafe, serverValue),
+                        ["ssh_profile"] = new(DiagnosticDataClassification.PublicSafe, configPayload),
                     }),
                 CancellationToken.None);
 
@@ -172,14 +179,14 @@ public sealed class OperationJournalWorkspaceTests
             var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
             var report = workspace.CreateSafeIssueReport(correlation.RunId);
             var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exports, CancellationToken.None);
-            AssertNoUnsafeData(activity.Message, trustPayload, serverValue);
-            AssertNoUnsafeData(await File.ReadAllTextAsync(journalPath), trustPayload, serverValue);
-            AssertNoUnsafeData(report, trustPayload, serverValue);
+            AssertNoUnsafeData(activity.Message, trustPayload, serverValue, configPayload);
+            AssertNoUnsafeData(await File.ReadAllTextAsync(journalPath), trustPayload, serverValue, configPayload);
+            AssertNoUnsafeData(report, trustPayload, serverValue, configPayload);
             using var archive = ZipFile.OpenRead(bundle.BundlePath);
             foreach (var entry in archive.Entries)
             {
                 using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
-                AssertNoUnsafeData(reader.ReadToEnd(), trustPayload, serverValue);
+                AssertNoUnsafeData(reader.ReadToEnd(), trustPayload, serverValue, configPayload);
             }
         }
         finally

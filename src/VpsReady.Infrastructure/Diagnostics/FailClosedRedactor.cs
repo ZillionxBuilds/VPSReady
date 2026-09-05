@@ -211,7 +211,7 @@ public sealed partial class FailClosedRedactor : IRedactor
     [GeneratedRegex("[\"']?(?:password|passphrase|token|secret|credential|private[_ -]?key)[\"']?\\s*:\\s*[\"']?[^,\\s}\"]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex JsonSensitiveKeyRegex();
 
-    [GeneratedRegex("known[_ -]?hosts|authorized[_ -]?keys|host[_ -]?key|hostkey|fingerprint|identityfile|identitiesonly|(?:^|\\s)HostName?\\s+|/\\.ssh(?:/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex("known[_ -]?hosts|authorized[_ -]?keys|host[_ -]?key|hostkey|fingerprint|identityfile|identitiesonly|strictHostKeyChecking|(?:^|\\r?\\n)\\s*(?:Host(?:Name)?|User|Port|Include)\\s+|/\\.ssh(?:/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex TrustOrConfigRegex();
 
     [GeneratedRegex("\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b|\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
