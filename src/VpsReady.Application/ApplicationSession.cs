@@ -42,8 +42,9 @@ public interface ISensitiveSessionReference
 /// the supplied value so its own character buffer can be zeroed on disconnect.
 /// The value is intentionally not readable from the application session API.
 /// </summary>
-public sealed class PasswordSessionSecret : ISensitiveSessionReference
+public sealed class PasswordSessionSecret : ISensitiveSessionReference, IPasswordCredential
 {
+    private readonly object gate = new();
     private char[]? characters;
 
     public PasswordSessionSecret(ReadOnlySpan<char> password)
@@ -56,14 +57,52 @@ public sealed class PasswordSessionSecret : ISensitiveSessionReference
         characters = password.ToArray();
     }
 
-    public bool IsCleared => characters is null;
+    public bool IsCleared
+    {
+        get
+        {
+            lock (gate)
+            {
+                return characters is null;
+            }
+        }
+    }
+
+    public int Length
+    {
+        get
+        {
+            lock (gate)
+            {
+                return characters?.Length ?? throw new InvalidOperationException("The credential has been cleared.");
+            }
+        }
+    }
+
+    public void CopyTo(Span<char> destination)
+    {
+        lock (gate)
+        {
+            var value = characters ?? throw new InvalidOperationException("The credential has been cleared.");
+            if (destination.Length != value.Length)
+            {
+                throw new ArgumentException("The destination must exactly match the credential length.", nameof(destination));
+            }
+
+            value.CopyTo(destination);
+        }
+    }
 
     public void Clear()
     {
-        var value = Interlocked.Exchange(ref characters, null);
-        if (value is not null)
+        lock (gate)
         {
-            Array.Clear(value);
+            var value = characters;
+            characters = null;
+            if (value is not null)
+            {
+                Array.Clear(value);
+            }
         }
     }
 
