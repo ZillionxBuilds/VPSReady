@@ -14,6 +14,7 @@ public static class DesktopComposition
     public static ServiceProvider CreateProductionServices()
     {
         var services = new ServiceCollection();
+        services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<AppViewModel>();
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IPlatformPaths, SystemPlatformPaths>();
@@ -21,7 +22,7 @@ public static class DesktopComposition
         services.AddSingleton<IProcessRunner, SystemProcessRunner>();
         services.AddSingleton<IRedactor, FailClosedRedactor>();
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
-        services.AddSingleton<IRemoteTransport, SshNetRemoteTransport>();
+        services.AddSingleton<IRemoteTransportFactory, SshNetRemoteTransportFactory>();
         return services.BuildServiceProvider(validateScopes: true);
     }
 }

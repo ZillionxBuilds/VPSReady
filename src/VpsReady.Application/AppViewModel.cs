@@ -13,17 +13,29 @@ public sealed class AppViewModel : ObservableObject
     private const string DisconnectedStatus = "No server is connected.";
     private readonly string title = "VPSReady";
     private readonly List<ShellNavigationItem> navigationItems;
+    private readonly IApplicationSession? applicationSession;
     private ShellPageViewModel selectedPage;
 
     public AppViewModel()
-        : this(false, null)
+        : this(null, false, null)
     {
     }
 
-    private AppViewModel(bool hasStartupFailure, string? startupErrorId)
+    public AppViewModel(IApplicationSession applicationSession)
+        : this(applicationSession, false, null)
     {
+    }
+
+    private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId)
+    {
+        this.applicationSession = applicationSession;
         HasStartupFailure = hasStartupFailure;
         StartupErrorId = startupErrorId;
+
+        if (applicationSession is not null)
+        {
+            applicationSession.StateChanged += OnSessionStateChanged;
+        }
 
         navigationItems =
         [
@@ -43,7 +55,9 @@ public sealed class AppViewModel : ObservableObject
 
     public string Status => HasStartupFailure
         ? "VPSReady started in a safe limited state. Remote actions are unavailable."
-        : DisconnectedStatus;
+        : applicationSession?.Snapshot.IsConnected == true
+            ? "A server session is connected."
+            : DisconnectedStatus;
 
     public bool HasStartupFailure { get; }
 
@@ -63,7 +77,7 @@ public sealed class AppViewModel : ObservableObject
     public static AppViewModel CreateSafeStartupFailure(Exception startupException)
     {
         ArgumentNullException.ThrowIfNull(startupException);
-        return new AppViewModel(true, $"startup-{Guid.NewGuid():N}");
+        return new AppViewModel(null, true, $"startup-{Guid.NewGuid():N}");
     }
 
     private ShellNavigationItem CreateItem(ShellPage page)
@@ -86,6 +100,8 @@ public sealed class AppViewModel : ObservableObject
 
         SelectedPage = page;
     }
+
+    private void OnSessionStateChanged(object? sender, EventArgs e) => OnPropertyChanged(nameof(Status));
 }
 
 public enum ShellPage
@@ -195,6 +211,9 @@ public abstract class ObservableObject : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+
+    protected void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 internal sealed class DelegateCommand(Action execute) : ICommand

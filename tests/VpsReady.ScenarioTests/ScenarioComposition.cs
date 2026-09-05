@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
@@ -22,6 +23,8 @@ public static class ScenarioComposition
         services.AddSingleton(faults);
         services.AddSingleton<IRemoteTransport>(host);
         services.AddSingleton(host);
+        services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(provider.GetRequiredService<IRemoteTransport>()));
+        services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<ILocalFileStore, ScenarioLocalFileStore>();
         services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(scenarioId));
         services.AddSingleton<IClock, ScenarioClock>();
@@ -33,4 +36,9 @@ public static class ScenarioComposition
         services.AddSingleton<ScenarioOperationRunner>();
         return services.BuildServiceProvider(validateScopes: true);
     }
+}
+
+internal sealed class ScenarioRemoteTransportFactory(IRemoteTransport transport) : IRemoteTransportFactory
+{
+    public IRemoteTransport Create() => transport;
 }
