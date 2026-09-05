@@ -115,6 +115,8 @@ jobs:
           bash eng/verify-tracked-secrets.sh
           bash eng/verify-packaging-profiles.sh
           bash eng/verify-release-candidate-ci.sh
+          bash eng/verify-startup-smoke-suite.sh
+          pwsh -NoProfile -Command '$tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("eng/startup-smoke-package.ps1", [ref]$tokens, [ref]$errors); if ($errors.Count -ne 0) { throw "Startup-smoke script has PowerShell parser errors." }; ./eng/startup-smoke-package.ps1 -SelfTest'
           dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
           dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build --logger "trx;LogFileName=scenario.trx" --results-directory TestResults/scenario
 
@@ -183,6 +185,30 @@ jobs:
           --notice artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICES.md
           --inventory artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICE_INVENTORY.json
 
+      - name: E4 bounded matching-host startup smoke
+        shell: pwsh
+        run: >
+          ./eng/startup-smoke-package.ps1
+          -Rid '${{ matrix.rid }}'
+          -ExpectedCommitSha '${{ needs.identity.outputs.source_sha }}'
+          -RunnerOs '${{ runner.os }}'
+          -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Reject unsafe retained startup-smoke report
+        id: startup_smoke_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh artifacts/startup-smoke
+
+      - name: Upload safe startup-smoke report
+        if: always() && steps.startup_smoke_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-startup-smoke-${{ matrix.rid }}-${{ needs.identity.outputs.source_sha }}
+          path: artifacts/startup-smoke/${{ matrix.rid }}/startup-smoke-report.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Reject unsafe retained package material
         shell: bash
         run: |
@@ -216,6 +242,32 @@ jobs:
         with:
           name: release-provenance-${{ needs.identity.outputs.source_sha }}
           path: release-evidence
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-startup-smoke-*-${{ needs.identity.outputs.source_sha }}
+          path: startup-smoke-evidence
+
+      - name: Verify matching-host startup-smoke evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find startup-smoke-evidence -name startup-smoke-report.json -type f | sort)
+          test "${#reports[@]}" -eq 6
+          passing=0
+          for report in "${reports[@]}"; do
+            jq -e --arg sha '${{ needs.identity.outputs.source_sha }}' '
+              .schema_version == 1
+              and .evidence_class == "E4 Packaging/actual matching CI host"
+              and .source_sha == $sha
+              and .self_contained == true
+              and (.archive_sha256 | test("^[0-9a-f]{64}$"))
+              and (.app_version | test("^[0-9]+\\.[0-9]+\\.[0-9]+"))
+              and ((.status == "PASS" and .matching_host == true and .direct_apphost_no_dotnet_guard == "PASS" and .startup_observation == "PROCESS_RUNNING_AFTER_BOUNDED_WAIT" and (.cleanup == "PROCESS_EXITED_AFTER_BOUNDED_SHUTDOWN" or .cleanup == "PROCESS_TREE_CLEANED_AFTER_BOUNDED_SHUTDOWN"))
+                   or (.status == "NOT_RUN" and (.result_reason == "RUNNER_OS_MISMATCH" or .result_reason == "RUNNER_ARCHITECTURE_MISMATCH" or .result_reason == "HEADLESS_DISPLAY_UNAVAILABLE")))' "$report" >/dev/null
+            if jq -e '.status == "PASS"' "$report" >/dev/null; then passing=$((passing + 1)); fi
+          done
+          test "$passing" -ge 2
 
       - name: Verify all immutable package checksums and manifests
         shell: bash
