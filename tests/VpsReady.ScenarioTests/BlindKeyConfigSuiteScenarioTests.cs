@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -25,7 +26,8 @@ public sealed class BlindKeyConfigSuiteScenarioTests
         var host = services.GetRequiredService<DeterministicScenarioHost>();
         var diagnostics = services.GetRequiredService<ScenarioDiagnosticRecorder>();
         var authorizedKeys = $"/home/{state.Ssh.UserName}/.ssh/authorized_keys";
-        state.RemoteFiles.Files[authorizedKeys] = state.RemoteFiles.Files[authorizedKeys] with { Contents = "legacy-entry\n", Owner = "wrong", Permissions = "0644" };
+        const string legacyAuthorizedKeys = "legacy-entry\n";
+        state.RemoteFiles.Files[authorizedKeys] = state.RemoteFiles.Files[authorizedKeys] with { Contents = legacyAuthorizedKeys, Owner = "wrong", Permissions = "0644" };
 
         using var firstKey = new PublicKeyDeploymentMaterial(PublicKey.AsSpan());
         var first = await services.GetRequiredService<PublicKeyDeploymentWorkflow>().DeployAsync(host, firstKey);
@@ -37,9 +39,20 @@ public sealed class BlindKeyConfigSuiteScenarioTests
         Assert.True(duplicate.Result.Succeeded);
         Assert.True(duplicate.AlreadyPresent);
         Assert.True(verification.Result.Succeeded);
+        Assert.StartsWith(legacyAuthorizedKeys, state.RemoteFiles.Files[authorizedKeys].Contents, StringComparison.Ordinal);
         Assert.Equal("0600", state.RemoteFiles.Files[authorizedKeys].Permissions);
+        Assert.Equal(state.Ssh.UserName, state.RemoteFiles.Files[authorizedKeys].Owner);
         Assert.Single(state.Ssh.AuthorizedKeyFingerprints);
-        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("ssh-ed25519", StringComparison.Ordinal));
+        var diagnosticSurfaces = string.Concat(
+            string.Join("\n", diagnostics.ActivityMessages),
+            "\n",
+            diagnostics.ToJsonLines(),
+            "\n",
+            JsonSerializer.Serialize(diagnostics.Events),
+            "\n",
+            JsonSerializer.Serialize(diagnostics.Events.Select(item => item.ToActivityEntry())));
+        Assert.DoesNotContain(PublicKey, diagnosticSurfaces, StringComparison.Ordinal);
+        Assert.DoesNotContain("ssh-ed25519", diagnosticSurfaces, StringComparison.Ordinal);
         Assert.All(diagnostics.Events, item => Assert.False(string.IsNullOrWhiteSpace(item.Correlation.OperationId)));
     }
 
