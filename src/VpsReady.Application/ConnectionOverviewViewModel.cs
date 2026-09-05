@@ -11,6 +11,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private readonly IConnectionSessionLifecycle lifecycle;
     private readonly IApplicationSession session;
     private string status = "No server is connected.";
+    private string overviewStatus = "Unknown — remote facts have not been refreshed.";
     private string? operationId;
     private ConnectionScreenState state = ConnectionScreenState.Disconnected;
 
@@ -39,6 +40,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public ConnectionScreenState State { get => state; private set => SetProperty(ref state, value); }
     public string Status { get => status; private set => SetProperty(ref status, value); }
     public string? OperationId { get => operationId; private set => SetProperty(ref operationId, value); }
+    public string OverviewStatus { get => overviewStatus; private set => SetProperty(ref overviewStatus, value); }
     public bool HasConnectedSession => session.Snapshot.IsConnected;
 
     /// <summary>Accepts transient characters only; it never stores a password string.</summary>
@@ -57,6 +59,9 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         OperationId = result.OperationId;
         State = result.Result.Succeeded ? ConnectionScreenState.Connected : result.Result.ErrorCode == OperationErrorCode.HostTrust ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
         Status = result.Result.UserMessage;
+        OverviewStatus = result.Result.Succeeded
+            ? "Unknown — the verified session has no refreshed remote facts yet."
+            : "Unknown — no remote facts are available after an unsuccessful connection test.";
         OnPropertyChanged(nameof(HasConnectedSession));
     }
 
@@ -66,11 +71,13 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         {
             State = ConnectionScreenState.Disconnected;
             Status = "No server is connected.";
+            OverviewStatus = "Unknown — remote facts require a verified session and refresh.";
         }
         else if (State != ConnectionScreenState.Testing)
         {
             State = ConnectionScreenState.Connected;
             Status = "A verified server session is available. Overview values remain Unknown until refreshed.";
+            OverviewStatus = "Unknown — remote facts have not been refreshed.";
         }
         OnPropertyChanged(nameof(HasConnectedSession));
     }
