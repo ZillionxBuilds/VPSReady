@@ -100,11 +100,11 @@ public static class ConnectionInputValidator
 
         // The password is copied only after every non-sensitive field is
         // accepted. No validation error, endpoint, or result exposes it.
-        var secret = new PasswordSessionSecret(password);
+        var sessionReference = new PasswordSessionSecret(password);
         return new ConnectionInputValidationResult(
             new ValidatedConnectionInput(
                 new RemoteEndpoint(normalizedHost!, port!.Value, normalizedUserName!),
-                secret,
+                sessionReference,
                 resolvedTimeout!.Value),
             Array.Empty<ConnectionInputValidationError>());
     }

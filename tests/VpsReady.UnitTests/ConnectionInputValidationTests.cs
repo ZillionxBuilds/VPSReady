@@ -8,13 +8,13 @@ public sealed class ConnectionInputValidationTests
     [Fact]
     public void ValidInputUsesDefaultPortAndTimeoutWithoutStringifyingCredential()
     {
-        var credential = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
+        var inputBuffer = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
 
         var result = ConnectionInputValidator.Validate(
             "2001:db8::48",
             null,
             "ubuntu",
-            credential);
+            inputBuffer);
 
         var connection = Assert.IsType<ValidatedConnectionInput>(result.Connection);
         using (connection)
@@ -48,9 +48,9 @@ public sealed class ConnectionInputValidationTests
         string user,
         ConnectionInputValidationError expectedError)
     {
-        var credential = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
+        var inputBuffer = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
 
-        var result = ConnectionInputValidator.Validate(host, port, user, credential);
+        var result = ConnectionInputValidator.Validate(host, port, user, inputBuffer);
 
         Assert.False(result.IsValid);
         Assert.Null(result.Connection);
@@ -75,11 +75,11 @@ public sealed class ConnectionInputValidationTests
     [Fact]
     public void NonPositiveOrInfiniteTimeoutFailsClosed()
     {
-        var credential = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
+        var inputBuffer = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
 
-        var zero = ConnectionInputValidator.Validate("server.example", "22", "ubuntu", credential, TimeSpan.Zero);
-        var negative = ConnectionInputValidator.Validate("server.example", "22", "ubuntu", credential, TimeSpan.FromSeconds(-1));
-        var infinite = ConnectionInputValidator.Validate("server.example", "22", "ubuntu", credential, Timeout.InfiniteTimeSpan);
+        var zero = ConnectionInputValidator.Validate("server.example", "22", "ubuntu", inputBuffer, TimeSpan.Zero);
+        var negative = ConnectionInputValidator.Validate("server.example", "22", "ubuntu", inputBuffer, TimeSpan.FromSeconds(-1));
+        var infinite = ConnectionInputValidator.Validate("server.example", "22", "ubuntu", inputBuffer, Timeout.InfiniteTimeSpan);
 
         Assert.All(new[] { zero, negative, infinite }, result =>
         {

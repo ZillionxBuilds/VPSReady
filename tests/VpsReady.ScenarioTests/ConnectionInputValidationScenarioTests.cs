@@ -16,12 +16,12 @@ public sealed class ConnectionInputValidationScenarioTests
     [Fact]
     public async Task ValidatedInputComposesWithTheStatefulSessionAndClearsItsCredentialOnDisconnect()
     {
-        var credential = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
+        var inputBuffer = new[] { 's', 'a', 'f', 'e', '-', '4', '8' };
         var validation = ConnectionInputValidator.Validate(
             "scenario-host",
             "22",
             "scenario-user",
-            credential,
+            inputBuffer,
             TimeSpan.FromSeconds(2));
         var connection = Assert.IsType<ValidatedConnectionInput>(validation.Connection);
         using (connection)
