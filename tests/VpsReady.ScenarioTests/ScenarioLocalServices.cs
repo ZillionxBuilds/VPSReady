@@ -28,15 +28,28 @@ public sealed class ScenarioClock : IClock
 /// In-memory platform state path.  The path is deliberately under a scenario
 /// namespace and is never used by the production path service.
 /// </summary>
-public sealed class ScenarioPlatformPaths(string scenarioId) : IPlatformPaths
+public sealed class ScenarioPlatformPaths : IPlatformPaths
 {
-    public string GetStateDirectory() => $"/scenario-state/{scenarioId}";
+    private readonly string scenarioRoot;
+
+    public ScenarioPlatformPaths(string scenarioId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scenarioId);
+
+        // The scenario file store is in-memory, but SecureLocalStorage applies
+        // the same absolute-root policy as production.  Build a deterministic
+        // namespace from the current OS temp root so Windows receives a drive-
+        // qualified path rather than a Unix-shaped test pseudo-path.
+        scenarioRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "VpsReady.ScenarioTests", scenarioId));
+    }
+
+    public string GetStateDirectory() => Path.Combine(scenarioRoot, "state");
 
     public string GetDirectory(LocalStorageArea area) => area switch
     {
         LocalStorageArea.State => GetStateDirectory(),
-        LocalStorageArea.Configuration => $"/scenario-config/{scenarioId}",
-        LocalStorageArea.Ssh => $"/scenario-ssh/{scenarioId}",
+        LocalStorageArea.Configuration => Path.Combine(scenarioRoot, "configuration"),
+        LocalStorageArea.Ssh => Path.Combine(scenarioRoot, "ssh"),
         _ => throw new ArgumentOutOfRangeException(nameof(area), area, "Unknown scenario storage area.")
     };
 
