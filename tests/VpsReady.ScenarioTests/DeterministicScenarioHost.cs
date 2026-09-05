@@ -10,7 +10,7 @@ namespace VpsReady.ScenarioTests;
 /// It never creates a socket or invokes a shell.  Every supported command reads
 /// or mutates <see cref="ScenarioHostState"/> and every other command fails.
 /// </summary>
-public sealed partial class DeterministicScenarioHost : IRemoteTransport
+public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTransport
 {
     public DeterministicScenarioHost(string scenarioId)
         : this(ScenarioHostState.CreateDefault(scenarioId), new ScenarioFaultPlan())
@@ -99,6 +99,9 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             ScenarioCommandIds.SshKeyAuthenticate => KeyAuthenticate(),
             ScenarioCommandIds.SshAuthorizedKeysList => AuthorizedKeysList(),
             ScenarioCommandIds.SshAuthorizedKeysInstall => AuthorizedKeysInstall(command),
+            RemoteCommandCatalog.UbuntuAuthorizedKeysInspect => AuthorizedKeysInspect(command),
+            RemoteCommandCatalog.UbuntuAuthorizedKeysInstall => AuthorizedKeysInstall(command),
+            RemoteCommandCatalog.UbuntuAuthorizedKeysVerify => AuthorizedKeysVerify(command),
             ScenarioCommandIds.UbuntuFactsRead => Result(State.Ubuntu.RenderFacts()),
             ScenarioCommandIds.UbuntuHostnameRead => Result(State.Hostname),
             ScenarioCommandIds.UbuntuHostnameSet => SetHostname(command),
@@ -154,6 +157,25 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    public Task<RemoteCommandResult> ExecutePublicKeyDeploymentAsync(
+        RemoteCommand command,
+        ReadOnlyMemory<char> canonicalPublicKey,
+        DiagnosticPhase phase,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var fingerprint = GetArgument(command, "fingerprint");
+        if (string.IsNullOrWhiteSpace(fingerprint) || canonicalPublicKey.IsEmpty)
+        {
+            return Task.FromResult(Failure(2, "Validated public-key metadata is required."));
+        }
+
+        // Scenario-only mutable host state models the same narrow payload
+        // boundary. It never makes this payload a RemoteCommand argument.
+        State.Ssh.StagePublicKey(fingerprint, new string(canonicalPublicKey.Span));
+        return ExecuteAsync(command, phase, cancellationToken);
+    }
 
     private RemoteCommandResult Authenticate()
     {
@@ -237,6 +259,23 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         return Result(output);
     }
 
+    private RemoteCommandResult AuthorizedKeysInspect(RemoteCommand command)
+    {
+        var fingerprint = GetArgument(command, "fingerprint");
+        if (string.IsNullOrWhiteSpace(fingerprint))
+        {
+            return Failure(2, "A public-key fingerprint is required.");
+        }
+
+        var path = $"/home/{State.Ssh.UserName}/.ssh/authorized_keys";
+        if (!State.RemoteFiles.Files.TryGetValue(path, out var entry) || entry.IsDirectory)
+        {
+            return Failure(2, "Authorized-keys target is unsafe.");
+        }
+
+        return Result($"present={State.Ssh.AuthorizedKeyFingerprints.Contains(fingerprint).ToString().ToLowerInvariant()}");
+    }
+
     private RemoteCommandResult AuthorizedKeysInstall(RemoteCommand command)
     {
         var fingerprint = GetArgument(command, "fingerprint");
@@ -251,8 +290,22 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         }
 
         var changed = State.Ssh.AuthorizedKeyFingerprints.Add(fingerprint);
+        var directory = $"/home/{State.Ssh.UserName}/.ssh";
         var path = $"/home/{State.Ssh.UserName}/.ssh/authorized_keys";
         var entry = State.RemoteFiles.Files[path];
+        State.RemoteFiles.Files[directory] = State.RemoteFiles.Files[directory] with
+        {
+            Owner = State.Ssh.UserName,
+            Group = State.Ssh.UserName,
+            Permissions = "0700",
+        };
+        State.RemoteFiles.Files[path] = entry with
+        {
+            Owner = State.Ssh.UserName,
+            Group = State.Ssh.UserName,
+            Permissions = "0600",
+        };
+        entry = State.RemoteFiles.Files[path];
         if (changed && !entry.Contents.Contains(publicKey, StringComparison.Ordinal))
         {
             var newline = entry.Contents.Length == 0 || entry.Contents.EndsWith('\n') ? string.Empty : Environment.NewLine;
@@ -260,6 +313,31 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         }
 
         return Result($"changed={changed.ToString().ToLowerInvariant()} fingerprint={fingerprint}");
+    }
+
+    private RemoteCommandResult AuthorizedKeysVerify(RemoteCommand command)
+    {
+        var fingerprint = GetArgument(command, "fingerprint");
+        var home = $"/home/{State.Ssh.UserName}";
+        var directory = $"{home}/.ssh";
+        var path = $"{directory}/authorized_keys";
+        if (string.IsNullOrWhiteSpace(fingerprint)
+            || !State.Ssh.AuthorizedKeyFingerprints.Contains(fingerprint)
+            || !State.RemoteFiles.Files.TryGetValue(directory, out var sshDirectory)
+            || !State.RemoteFiles.Files.TryGetValue(path, out var keys)
+            || !sshDirectory.IsDirectory
+            || keys.IsDirectory
+            || sshDirectory.Owner != State.Ssh.UserName
+            || sshDirectory.Group != State.Ssh.UserName
+            || sshDirectory.Permissions != "0700"
+            || keys.Owner != State.Ssh.UserName
+            || keys.Group != State.Ssh.UserName
+            || keys.Permissions != "0600")
+        {
+            return Failure(4, "Authorized-keys state did not pass fresh verification.");
+        }
+
+        return Result("verified=true");
     }
 
     private RemoteCommandResult SetHostname(RemoteCommand command)

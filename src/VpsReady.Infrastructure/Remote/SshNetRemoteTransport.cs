@@ -13,7 +13,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// a connection is usable only after SSH.NET reports it connected and its host
 /// key has passed the persisted fail-closed trust assessment.
 /// </summary>
-public sealed class SshNetRemoteTransport : IPasswordSshTransport
+public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport
 {
     private readonly IKnownHostTrustStore trustStore;
     private readonly SemaphoreSlim connectionGate = new(1, 1);
@@ -201,6 +201,49 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport
         {
             throw ToSafeConnectionFailure(exception);
         }
+    }
+
+    /// <summary>
+    /// C404's only full-public-key path. The ordinary RemoteCommand remains
+    /// metadata-only; the canonical public key is never copied into command
+    /// summaries or diagnostic values and is used only while creating this SSH
+    /// command.
+    /// </summary>
+    public async Task<RemoteCommandResult> ExecutePublicKeyDeploymentAsync(
+        RemoteCommand command,
+        ReadOnlyMemory<char> canonicalPublicKey,
+        DiagnosticPhase phase,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        var connectedClient = client;
+        if (connectedClient is null || !connectedClient.IsConnected)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
+
+        var shellCommand = UbuntuAuthorizedKeysCommandCatalog.RequireShellCommand(command, canonicalPublicKey.Span);
+        using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            using var sshCommand = connectedClient.CreateCommand(shellCommand);
+            sshCommand.CommandTimeout = command.Timeout;
+            await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
+            var standardOutput = await SshNetBoundedOutputCapture.ReadAsync(sshCommand.OutputStream, command.OutputCapturePolicy, command.MaximumOutputBytes, linkedCancellation.Token).ConfigureAwait(false);
+            var standardError = await SshNetBoundedOutputCapture.ReadAsync(sshCommand.ExtendedOutputStream, command.OutputCapturePolicy, command.MaximumOutputBytes, linkedCancellation.Token).ConfigureAwait(false);
+            return new RemoteCommandResult(sshCommand.ExitStatus ?? 255, standardOutput, standardError, Stopwatch.GetElapsedTime(startedAt), command.OutputCapturePolicy);
+        }
+        catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (SshOperationTimeoutException) { throw new RemoteTransportException(RemoteTransportFailureKind.Timeout); }
+        catch (Exception exception) { throw ToSafeConnectionFailure(exception); }
     }
 
     public async ValueTask DisposeAsync()

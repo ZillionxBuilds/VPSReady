@@ -100,6 +100,9 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure,
         RemoteCommandCatalog.UbuntuUfwEnable,
         RemoteCommandCatalog.UbuntuUfwDisable,
+        RemoteCommandCatalog.UbuntuAuthorizedKeysInspect,
+        RemoteCommandCatalog.UbuntuAuthorizedKeysInstall,
+        RemoteCommandCatalog.UbuntuAuthorizedKeysVerify,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 

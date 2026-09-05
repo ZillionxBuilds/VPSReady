@@ -125,6 +125,10 @@ public static class DiagnosticEventCatalog
     public const string ExistingKeySelectionSucceeded = "ssh.key_selection.succeeded";
     public const string ExistingKeySelectionFailed = "ssh.key_selection.failed";
     public const string ExistingKeySelectionCancelled = "ssh.key_selection.cancelled";
+    public const string PublicKeyDeploymentStarted = "ssh.public_key_deployment.started";
+    public const string PublicKeyDeploymentSucceeded = "ssh.public_key_deployment.succeeded";
+    public const string PublicKeyDeploymentFailed = "ssh.public_key_deployment.failed";
+    public const string PublicKeyDeploymentCancelled = "ssh.public_key_deployment.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -133,6 +137,7 @@ public static class DiagnosticEventCatalog
         StartupFailed, UnhandledException, LocalKeyGenerationStarted, LocalKeyGenerationSucceeded,
         LocalKeyGenerationFailed, LocalKeyGenerationCancelled, LocalKeyGenerationRecoveryRequired,
         ExistingKeySelectionStarted, ExistingKeySelectionSucceeded, ExistingKeySelectionFailed, ExistingKeySelectionCancelled,
+        PublicKeyDeploymentStarted, PublicKeyDeploymentSucceeded, PublicKeyDeploymentFailed, PublicKeyDeploymentCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -157,6 +162,9 @@ public static class DiagnosticCommandCatalog
     public const string SshSessionPortRead = "ssh.session.port.read";
     public const string UbuntuUfwAvailabilityRead = "ubuntu.facts.ufw-availability.read";
     public const string UbuntuUfwStatusRead = "ubuntu.facts.ufw-status.read";
+    public const string UbuntuAuthorizedKeysInspect = "ubuntu.ssh.authorized-keys.inspect";
+    public const string UbuntuAuthorizedKeysInstall = "ubuntu.ssh.authorized-keys.install";
+    public const string UbuntuAuthorizedKeysVerify = "ubuntu.ssh.authorized-keys.verify";
     public const string UbuntuUfwDetectionRead = "ubuntu.ufw.detection.read";
     public const string UbuntuUfwRuleListRead = "ubuntu.ufw.rules.list.read";
     public const string UbuntuUfwAllowRuleAdd = "ubuntu.ufw.rule.allow.add";
