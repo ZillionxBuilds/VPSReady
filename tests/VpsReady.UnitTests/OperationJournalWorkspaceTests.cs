@@ -12,6 +12,71 @@ namespace VpsReady.UnitTests;
 public sealed class OperationJournalWorkspaceTests
 {
     [Fact]
+    public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
+    {
+        var root = CreateTemporaryDirectory();
+        var exportDirectory = Path.Combine(root, "user-selected-export");
+        var encodedKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("c607-public-key-redaction-regression-material"));
+        var publicKeyLine = $"ssh-ed25519 {encodedKey} c607-redaction-test";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            var safeSummary = redactor.Redact("ssh-ed25519 SHA256:c607-safe-summary");
+            Assert.False(safeSummary.WasOmitted);
+            Assert.Equal("ssh-ed25519 SHA256:c607-safe-summary", safeSummary.SafeText);
+
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c607build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("deploy_public_key");
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "SSH key deployment",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Apply,
+                    DiagnosticStatus.Failed,
+                    $"Unexpected key text: {publicKeyLine}",
+                    Action: $"Deploy {publicKeyLine}",
+                    StandardOutput: new BoundedOutput(OutputCapturePolicy.SanitizedTruncated, 0, publicKeyLine, WasTruncated: false, WasOmitted: false),
+                    StandardError: new BoundedOutput(OutputCapturePolicy.SanitizedTruncated, 0, publicKeyLine, WasTruncated: false, WasOmitted: false),
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["public_key"] = new(DiagnosticDataClassification.PublicSafe, publicKeyLine),
+                    }),
+                CancellationToken.None);
+
+            var activity = Assert.Single(workspace.GetActivity());
+            var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var journal = await File.ReadAllTextAsync(journalPath);
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exportDirectory, CancellationToken.None);
+
+            Assert.Equal("PAYLOAD_OMITTED_BY_REDACTION_POLICY", activity.Message);
+            AssertOmittedPublicKey(activity.Message, publicKeyLine, encodedKey);
+            AssertOmittedPublicKey(journal, publicKeyLine, encodedKey);
+            AssertOmittedPublicKey(report, publicKeyLine, encodedKey);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                var content = reader.ReadToEnd();
+                Assert.DoesNotContain(publicKeyLine, content, StringComparison.Ordinal);
+                Assert.DoesNotContain(encodedKey, content, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SupportBundleExportRejectsRelativeDestinationBeforeNormalizationWithoutCreatingAnExport()
     {
         var root = CreateTemporaryDirectory();
@@ -291,6 +356,13 @@ public sealed class OperationJournalWorkspaceTests
 
         Assert.DoesNotContain("authorized_keys", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("known_hosts", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AssertOmittedPublicKey(string content, string publicKeyLine, string encodedKey)
+    {
+        Assert.DoesNotContain(publicKeyLine, content, StringComparison.Ordinal);
+        Assert.DoesNotContain(encodedKey, content, StringComparison.Ordinal);
+        Assert.Contains("PAYLOAD_OMITTED_BY_REDACTION_POLICY", content, StringComparison.Ordinal);
     }
 
     private static string CalculateSha256(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
