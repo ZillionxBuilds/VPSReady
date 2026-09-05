@@ -31,6 +31,12 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "8.0.2"
         }
       },
+      "vpsready.application": {
+        "type": "Project",
+        "dependencies": {
+          "VpsReady.Core": "[0.1.0-dev, )"
+        }
+      },
       "vpsready.core": {
         "type": "Project"
       }

@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="../VpsReady.Core/VpsReady.Core.csproj" />
+    <ProjectReference Include="../VpsReady.Application/VpsReady.Application.csproj" />
     <PackageReference Include="BouncyCastle.Cryptography" />
     <PackageReference Include="SSH.NET" />
   </ItemGroup>
