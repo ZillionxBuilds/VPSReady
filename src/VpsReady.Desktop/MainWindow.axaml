@@ -146,6 +146,22 @@
               <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.State}" />
               <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
+              <Border IsVisible="{Binding ConnectionOverview.HasHostTrustReview}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}" BorderThickness="1" CornerRadius="4" Padding="12">
+                <StackPanel Spacing="6">
+                  <TextBlock FontWeight="SemiBold" Text="{Binding ConnectionOverview.TrustReviewTitle}" />
+                  <TextBlock Text="Review this observed SSH host key before any trust data is saved. This display is limited to this review; it is not copied into diagnostics or public reports." TextWrapping="Wrap" />
+                  <TextBlock AutomationProperties.Name="Host-key review host" Text="{Binding ConnectionOverview.TrustHost}" TextWrapping="Wrap" />
+                  <TextBlock AutomationProperties.Name="Host-key review port" Text="{Binding ConnectionOverview.TrustPort}" />
+                  <TextBlock AutomationProperties.Name="Host-key algorithm" Text="{Binding ConnectionOverview.TrustAlgorithm}" FontFamily="Consolas" TextWrapping="Wrap" />
+                  <TextBlock AutomationProperties.Name="Host-key fingerprint" Text="{Binding ConnectionOverview.TrustFingerprint}" FontFamily="Consolas" TextWrapping="Wrap" />
+                  <TextBlock IsVisible="{Binding ConnectionOverview.IsChangedHostKey}" Text="The previously trusted host key no longer matches. Do not replace it unless you have independently verified this change." TextWrapping="Wrap" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button IsVisible="{Binding ConnectionOverview.IsUnknownHostKey}" Click="AcceptUnknownHostKeyAsync" Content="Trust host key" />
+                    <Button IsVisible="{Binding ConnectionOverview.IsChangedHostKey}" Click="ReplaceChangedHostKeyAsync" Content="Replace trusted host key" />
+                  </StackPanel>
+                  <TextBlock Text="Saving this decision does not connect to the server. Re-enter the password and test the connection again; success is shown only after authentication and verification." TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
               <TextBlock Text="{Binding ConnectionOverview.OverviewStatus}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.OverviewState}" />
               <StackPanel Orientation="Horizontal" Spacing="8">

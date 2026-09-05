@@ -85,6 +85,22 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void AcceptUnknownHostKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            await connection.AcceptUnknownHostKeyAsync();
+        }
+    }
+
+    private async void ReplaceChangedHostKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            await connection.ReplaceChangedHostKeyAsync();
+        }
+    }
+
     private async void RefreshFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (viewModel?.Firewall is { } firewall)

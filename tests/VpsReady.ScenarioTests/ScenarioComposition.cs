@@ -46,7 +46,10 @@ public static class ScenarioComposition
         services.AddSingleton(faults);
         services.AddSingleton<IRemoteTransport>(host);
         services.AddSingleton(host);
-        services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(provider.GetRequiredService<DeterministicScenarioHost>()));
+        services.AddSingleton<IKnownHostTrustStore, ScenarioKnownHostTrustStore>();
+        services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(
+            provider.GetRequiredService<DeterministicScenarioHost>(),
+            provider.GetRequiredService<IKnownHostTrustStore>()));
         services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<ILocalFileStore, ScenarioLocalFileStore>();
         services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(state.ScenarioId));
@@ -65,9 +68,9 @@ public static class ScenarioComposition
     }
 }
 
-internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost host) : IRemoteTransportFactory
+internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost host, IKnownHostTrustStore trustStore) : IRemoteTransportFactory
 {
-    public IRemoteTransport Create() => new ScenarioSessionTransport(host);
+    public IRemoteTransport Create() => new ScenarioSessionTransport(host, trustStore);
 }
 
 /// <summary>
@@ -76,7 +79,7 @@ internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost h
 /// remains available for a replacement connection identity and its state stays
 /// observable to every scenario transport.
 /// </summary>
-internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport, IHostnameChangeTransport
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host, IKnownHostTrustStore trustStore) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport, IHostnameChangeTransport
 {
     private bool disposed;
 
@@ -171,6 +174,21 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
     public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        }
+
+        LastHostTrustAssessment = await trustStore.AssessAsync(
+            new KnownHostIdentity(endpoint.Host, endpoint.Port),
+            new HostKeyFingerprint(host.State.Ssh.HostKeyFingerprint, "ssh-ed25519"),
+            cancellationToken).ConfigureAwait(false);
+        if (!LastHostTrustAssessment.IsTrusted)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+        }
+
         var authentication = new RemoteCommand(new RemoteCommandId(ScenarioCommandIds.SshAuthenticate), string.Empty, timeout);
         RemoteCommandResult result;
         try

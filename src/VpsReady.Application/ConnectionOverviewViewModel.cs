@@ -15,6 +15,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private string? operationId;
     private ConnectionScreenState state = ConnectionScreenState.Disconnected;
     private ConnectionScreenState overviewState = ConnectionScreenState.Unknown;
+    private HostTrustReview? hostTrustReview;
 
     public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session)
     {
@@ -43,6 +44,16 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public string? OperationId { get => operationId; private set => SetProperty(ref operationId, value); }
     public string OverviewStatus { get => overviewStatus; private set => SetProperty(ref overviewStatus, value); }
     public ConnectionScreenState OverviewState { get => overviewState; private set => SetProperty(ref overviewState, value); }
+    public HostTrustReview? HostTrustReview { get => hostTrustReview; private set => SetProperty(ref hostTrustReview, value); }
+    public bool HasHostTrustReview => HostTrustReview is not null;
+    public bool IsChangedHostKey => HostTrustReview?.IsChanged == true;
+    public bool IsUnknownHostKey => HostTrustReview is { IsChanged: false };
+    public string TrustReviewTitle => IsChangedHostKey ? "Host key changed" : "Review host key";
+    public string TrustReviewAction => IsChangedHostKey ? "Replace trusted host key" : "Trust host key";
+    public string? TrustHost => HostTrustReview?.Host;
+    public int? TrustPort => HostTrustReview?.Port;
+    public string? TrustAlgorithm => HostTrustReview?.Algorithm;
+    public string? TrustFingerprint => HostTrustReview?.Fingerprint;
     public bool HasConnectedSession => session.Snapshot.IsConnected;
     public ConnectionSecretInput SecretInput { get; } = new();
     public string SecretDisplay => new('•', SecretInput.Length);
@@ -88,10 +99,57 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         var result = await lifecycle.TestConnectionAsync(input, cancellationToken).ConfigureAwait(false);
         OperationId = result.OperationId;
         State = result.Result.Succeeded ? ConnectionScreenState.Connected : result.Result.ErrorCode == OperationErrorCode.HostTrust ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
+        SetHostTrustReview(result.Result.ErrorCode == OperationErrorCode.HostTrust ? lifecycle.PendingHostTrustReview : null);
         Status = result.Result.UserMessage;
         OverviewStatus = result.Result.Succeeded
             ? "Unknown — the verified session has no refreshed remote facts yet."
             : "Unknown — no remote facts are available after an unsuccessful connection test.";
+        OverviewState = ConnectionScreenState.Unknown;
+        OnPropertyChanged(nameof(HasConnectedSession));
+    }
+
+    /// <summary>
+    /// Saves an explicit unknown-host decision only. It intentionally does not
+    /// retry or create a session: the user must re-enter the password and run
+    /// Test Connection, which still requires authentication plus verification.
+    /// </summary>
+    public Task AcceptUnknownHostKeyAsync(CancellationToken cancellationToken = default) =>
+        CompleteHostTrustReviewAsync(replaceChanged: false, cancellationToken);
+
+    /// <summary>
+    /// Saves an explicitly reviewed changed-host replacement only. This path
+    /// is unavailable for unknown-host decisions and never overwrites trust
+    /// before the lifecycle revalidates the stored review challenge.
+    /// </summary>
+    public Task ReplaceChangedHostKeyAsync(CancellationToken cancellationToken = default) =>
+        CompleteHostTrustReviewAsync(replaceChanged: true, cancellationToken);
+
+    private async Task CompleteHostTrustReviewAsync(bool replaceChanged, CancellationToken cancellationToken)
+    {
+        if (HostTrustReview is null || HostTrustReview.IsChanged != replaceChanged)
+        {
+            return;
+        }
+
+        State = ConnectionScreenState.Testing;
+        var result = replaceChanged
+            ? await lifecycle.ReplacePendingChangedHostKeyAsync(cancellationToken).ConfigureAwait(false)
+            : await lifecycle.AcceptPendingUnknownHostKeyAsync(cancellationToken).ConfigureAwait(false);
+        OperationId = result.OperationId;
+        if (result.Succeeded)
+        {
+            SetHostTrustReview(null);
+            State = ConnectionScreenState.Disconnected;
+            Status = "The reviewed host key was saved. Re-enter the password and test the connection; no session has been created yet.";
+        }
+        else
+        {
+            SetHostTrustReview(lifecycle.PendingHostTrustReview);
+            State = HasHostTrustReview ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
+            Status = result.UserMessage;
+        }
+
+        OverviewStatus = "Unknown — no remote facts are available until a later connection test is verified.";
         OverviewState = ConnectionScreenState.Unknown;
         OnPropertyChanged(nameof(HasConnectedSession));
     }
@@ -120,6 +178,20 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         ClearSecretInput();
         await lifecycle.DisconnectAsync().ConfigureAwait(false);
         Refresh();
+    }
+
+    private void SetHostTrustReview(HostTrustReview? value)
+    {
+        HostTrustReview = value;
+        OnPropertyChanged(nameof(HasHostTrustReview));
+        OnPropertyChanged(nameof(IsChangedHostKey));
+        OnPropertyChanged(nameof(IsUnknownHostKey));
+        OnPropertyChanged(nameof(TrustReviewTitle));
+        OnPropertyChanged(nameof(TrustReviewAction));
+        OnPropertyChanged(nameof(TrustHost));
+        OnPropertyChanged(nameof(TrustPort));
+        OnPropertyChanged(nameof(TrustAlgorithm));
+        OnPropertyChanged(nameof(TrustFingerprint));
     }
 }
 
