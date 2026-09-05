@@ -8,6 +8,21 @@ namespace VpsReady.ScenarioTests;
 public sealed class ExistingOpenSshKeySelectionScenarioTests
 {
     [Fact]
+    public async Task PostValidationLeafSwapToReparseFailsClosedWithoutMetadata()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        await using var workspace = new ScenarioKeyWorkspace();
+        await File.WriteAllTextAsync(workspace.PrivateKeyPath, "validated-placeholder");
+        var external = Path.Combine(workspace.Root, "external-private-material");
+        await File.WriteAllTextAsync(external, "external-must-not-be-read");
+        var selector = new ExistingOpenSshKeySelector(new ScenarioKeyDiagnosticSink(), new LeafSwapObserver(external));
+        var result = await selector.SelectAsync(new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.Equal("external-must-not-be-read", await File.ReadAllTextAsync(external));
+    }
+    [Fact]
     public async Task ReparseAndDeterministicReadFaultsFailClosedWithoutChangingTheSelectedFile()
     {
         await using var workspace = new ScenarioKeyWorkspace();
@@ -29,6 +44,15 @@ public sealed class ExistingOpenSshKeySelectionScenarioTests
         var result = await faulted.SelectAsync(new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
         Assert.Equal(ExistingSshKeySelectionErrorCatalog.LocalIo, result.SelectionErrorCode);
         Assert.Equal("ordinary-user-file", await File.ReadAllTextAsync(workspace.PrivateKeyPath));
+    }
+}
+
+internal sealed class LeafSwapObserver(string external) : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path)
+    {
+        File.Delete(path);
+        File.CreateSymbolicLink(path, external);
     }
 }
 
