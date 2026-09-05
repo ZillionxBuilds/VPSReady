@@ -1,6 +1,7 @@
 using System.Text;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
+using VpsReady.Core.Operations;
 using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.UnitTests;
@@ -76,7 +77,7 @@ public sealed class OpenSshConfigEditorTests
 
         Assert.Equal(OpenSshConfigEditDisposition.Created, created.Disposition);
         Assert.Equal(OpenSshConfigEditDisposition.Unchanged, idempotent.Disposition);
-        Assert.Contains($"IdentityFile \"{identityPath}\"", await File.ReadAllTextAsync(workspace.ConfigPath), StringComparison.Ordinal);
+        Assert.Contains($"IdentityFile \"{identityPath.Replace('\\', '/')}\"", await File.ReadAllTextAsync(workspace.ConfigPath), StringComparison.Ordinal);
         Assert.All(diagnostics.Events, item => Assert.DoesNotContain(identityPath, item.Message, StringComparison.Ordinal));
 
         var withComment = await File.ReadAllTextAsync(workspace.ConfigPath) + "Host comment-target # preserved inline comment\n    User comment-user # first value remains comment-user\n";
@@ -164,12 +165,103 @@ public sealed class OpenSshConfigEditorTests
         Assert.False(File.Exists(workspace.ConfigPath));
     }
 
+    [Fact]
+    public async Task PostCommitCancellationRestoresExactOriginalAndReportsRecoveredState()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var original = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetBytes("# retained\r\nHost *\r\n    User original\r\n");
+        await File.WriteAllBytesAsync(workspace.ConfigPath, original);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new CancelAfterFirstCommitStore(cancellation), diagnostics);
+
+        var result = await editor.AddAliasAsync(workspace.Request("work-vps"), DiagnosticRunContext.StartSession().StartOperation("config_alias"), cancellation.Token);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
+    public async Task PostCommitVerificationMismatchRestoresExactOriginalAndNeverReportsSuccess()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var original = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true).GetBytes("# retained\r\nHost *\r\n    User original\r\n");
+        await File.WriteAllBytesAsync(workspace.ConfigPath, original);
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new MismatchAfterFirstCommitStore(), diagnostics);
+
+        var result = await editor.AddAliasAsync(workspace.Request("work-vps"), DiagnosticRunContext.StartSession().StartOperation("config_alias"), CancellationToken.None);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.LocalIo, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
     private sealed class FailingWriteStore : ILocalFileStore
     {
         public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) => throw new IOException("injected atomic failure");
         public Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken) => throw new IOException("injected atomic failure");
         public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => Task.FromResult<ReadOnlyMemory<byte>>(File.ReadAllBytes(path));
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class CancelAfterFirstCommitStore(CancellationTokenSource cancellation) : IRecoverableLocalFileStore
+    {
+        private readonly AtomicFileStore inner = new();
+        private int writes;
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) => inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            var result = await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+            if (Interlocked.Increment(ref writes) == 1)
+            {
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class MismatchAfterFirstCommitStore : IRecoverableLocalFileStore
+    {
+        private readonly AtomicFileStore inner = new();
+        private bool returnMismatch;
+        private string? targetPath;
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) => inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            var result = await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+            if (targetPath is null)
+            {
+                targetPath = path;
+                returnMismatch = true;
+            }
+
+            return result;
+        }
+        public async Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken)
+        {
+            var actual = await inner.ReadAsync(path, cancellationToken);
+            if (returnMismatch && string.Equals(path, targetPath, StringComparison.Ordinal))
+            {
+                returnMismatch = false;
+                return "mismatch"u8.ToArray();
+            }
+
+            return actual;
+        }
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 }
 
