@@ -17,8 +17,25 @@ grep -Fq 'Activity itself does not display that code.' "$guide"
 grep -Fq 'originating operation surface' "$guide"
 ! grep -Fq 'capture its operation ID, stable error code, state, duration, and next safe action' "$guide"
 
+grep -Fq 'opens an explicit review' "$guide"
+grep -Fq 'panel with the observed host, port, algorithm, and fingerprint.' "$guide"
+grep -Fq '**Trust host key** only when' "$guide"
+grep -Fq '**Replace trusted host' "$guide"
+grep -Fq 'Saving a reviewed trust decision does not create a session.' "$guide"
+grep -Fq 'password and choose **Test Connection** again' "$guide"
+! grep -Fq 'does **not** expose a fingerprint-review/explicit-trust approval control' "$guide"
+
+grep -Fq 'The **System** page is available with a verified server session.' "$guide"
+grep -Fq 'read the current state, review the plan where applicable,' "$guide"
+grep -Fq '**Apply and verify package upgrade**' "$guide"
+grep -Fq 'Package actions never offer a distribution release upgrade.' "$guide"
+grep -Fq 'reboots silently; expected connection loss' "$guide"
+grep -Fq 'recovery-required status does not claim' "$guide"
+grep -Fq 'explicitly local sanitized' "$guide"
+! grep -Fq 'intentionally an unavailable-action surface' "$guide"
+
 grep -Fq 'REAL VPS: NOT TESTED' "$guide"
 grep -Fq 'never uploads diagnostics automatically' "$guide"
 ! grep -Eq -- '-----BEGIN [A-Z ]*PRIVATE KEY-----|VPSREADY_(SEEDED|TEST)_SECRET' "$guide"
 
-printf '%s\n' 'User troubleshooting guide contract passed: deployment/key-auth and Activity visibility claims are current and safe.'
+printf '%s\n' 'User troubleshooting guide contract passed: trust, System, deployment/key-auth, and Activity claims are current and safe.'
