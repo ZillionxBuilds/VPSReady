@@ -1,3 +1,4 @@
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 
 namespace VpsReady.Core.Remote;
@@ -33,5 +34,6 @@ public interface IPrivilegePreflight
     Task<PrivilegePreflightResult> CheckAsync(
         IRemoteTransport transport,
         PrivilegeOperationIntent intent,
+        CorrelationIds? correlation = null,
         CancellationToken cancellationToken = default);
 }

@@ -273,7 +273,9 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
 
         var shellCommand = factDefinition is not null
             ? factDefinition.ShellCommand!
-            : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
+            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify
+                ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
+                : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
 
         using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);

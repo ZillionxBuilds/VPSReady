@@ -131,6 +131,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             // continuity check before enable; privilege remains a remote
             // mutation concern for both toggle operations.
             RemoteCommandCatalog.UbuntuUfwDisable => DisableUfwProduction(),
+            RemoteCommandCatalog.UbuntuAptIndexUpdate => AptIndexUpdate(),
+            RemoteCommandCatalog.UbuntuAptIndexVerify => AptIndexVerify(),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -718,6 +720,21 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         return Result(State.Apt.UpgradeOutput);
     }
 
+    private RemoteCommandResult AptIndexUpdate()
+    {
+        var result = AptUpdate();
+        if (result.Succeeded)
+        {
+            State.Apt.IndexGeneration++;
+        }
+
+        return result;
+    }
+
+    private RemoteCommandResult AptIndexVerify() => State.Apt.IndexGeneration > 0 && State.Apt.IndexVerificationSucceeds
+        ? Result("apt_index=refreshed")
+        : Failure(4, "Package index verification failed in the deterministic scenario.");
+
     private RemoteCommandResult Reboot(RemoteCommand command)
     {
         if (!string.Equals(GetArgument(command, "confirm"), "yes", StringComparison.OrdinalIgnoreCase))
@@ -816,7 +833,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             || commandId.Contains("install", StringComparison.Ordinal)
             || commandId.Equals(ScenarioCommandIds.Reboot, StringComparison.Ordinal)
             || commandId.Equals(ScenarioCommandIds.AptUpdate, StringComparison.Ordinal)
-            || commandId.Equals(ScenarioCommandIds.AptUpgrade, StringComparison.Ordinal))
+            || commandId.Equals(ScenarioCommandIds.AptUpgrade, StringComparison.Ordinal)
+            || commandId.Equals(RemoteCommandCatalog.UbuntuAptIndexUpdate, StringComparison.Ordinal))
         {
             return DiagnosticPhase.Apply;
         }

@@ -318,6 +318,10 @@ public sealed class ScenarioAptState
 
     public bool RebootRequired { get; set; }
 
+    public bool IndexVerificationSucceeds { get; set; } = true;
+
+    public int IndexGeneration { get; set; }
+
     public string RefreshOutput { get; set; } = "Scenario package index refreshed.";
 
     public string UpgradeOutput { get; set; } = "Scenario packages upgraded.";
