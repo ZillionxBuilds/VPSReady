@@ -105,6 +105,21 @@ public sealed class TimezoneChangeWorkflowTests
         Assert.DoesNotContain("password", command.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("CET\n")]
+    [InlineData("CET\r\n")]
+    [InlineData(" CET")]
+    [InlineData("CET ")]
+    [InlineData("C ET")]
+    [InlineData("CET\t")]
+    [InlineData("CET;id")]
+    [InlineData("CET\0")]
+    public void CompactGrammarRejectsTerminalControlsWhitespaceAndShellSyntax(string value)
+    {
+        Assert.False(UbuntuTimezoneCommandCatalog.IsIanaIdentifier(value));
+        Assert.Throws<ArgumentException>(() => UbuntuTimezoneCommandCatalog.CreateApplyRequest(value));
+    }
+
     private static RemoteCommandResult Ok(string output) => new(0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class AllowedPreflight : IPrivilegePreflight

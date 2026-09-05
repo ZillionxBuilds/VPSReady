@@ -66,6 +66,6 @@ public static partial class UbuntuTimezoneCommandCatalog
     // Region/City names. Exact membership in the freshly read remote catalog
     // remains mandatory before apply; this grammar only rejects values that
     // cannot be made shell-safe.
-    [GeneratedRegex("^[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("\\A[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)*\\z", RegexOptions.CultureInvariant)]
     private static partial Regex TimezonePattern();
 }
