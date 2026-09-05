@@ -130,7 +130,7 @@ public sealed class OperationJournalWorkspaceTests
                 new FixedPlatformPaths(root),
                 redactor,
                 new FixedClock(),
-                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch"),
+                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch", "linux-x64"),
                 new RecordingFolderOpener());
             var pipeline = new RedactingDiagnosticSink(redactor, workspace);
             var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
@@ -184,7 +184,20 @@ public sealed class OperationJournalWorkspaceTests
             {
                 using var document = JsonDocument.Parse(reader.ReadToEnd());
                 Assert.Equal("c108build", document.RootElement.GetProperty("build_sha").GetString());
-                Assert.Equal(5, document.RootElement.GetProperty("files").GetArrayLength());
+                Assert.Equal("linux-x64", document.RootElement.GetProperty("artifact_rid").GetString());
+                var manifestFiles = document.RootElement.GetProperty("files").EnumerateArray().ToArray();
+                Assert.Equal(
+                    ["environment.json", "events.jsonl", "issue-report.md", "known-limitations.md", "run-summary.md"],
+                    manifestFiles.Select(file => file.GetProperty("path").GetString()));
+                foreach (var manifestFile in manifestFiles)
+                {
+                    var path = manifestFile.GetProperty("path").GetString();
+                    var expectedSha256 = manifestFile.GetProperty("sha256").GetString();
+                    var entry = archive.GetEntry(path!);
+                    Assert.NotNull(entry);
+                    using var entryStream = entry!.Open();
+                    Assert.Equal(expectedSha256, Convert.ToHexString(SHA256.HashData(entryStream)).ToLowerInvariant());
+                }
             }
 
             await workspace.ClearDiagnosticsAsync(CancellationToken.None);
