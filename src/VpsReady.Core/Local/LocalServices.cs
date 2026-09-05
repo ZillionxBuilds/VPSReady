@@ -141,6 +141,7 @@ public interface ISecureLocalStorage
         ReadOnlyMemory<byte> contents,
         AtomicWriteOptions options,
         CancellationToken cancellationToken);
+    Task<ReadOnlyMemory<byte>> ReadAsync(LocalStorageArea area, string relativePath, CancellationToken cancellationToken);
     Task<RetentionCleanupResult> CleanupAsync(LocalStorageArea area, RetentionPolicy policy, CancellationToken cancellationToken);
 }
 

@@ -82,6 +82,12 @@ public sealed class SecureLocalStorage(IPlatformPaths platformPaths, ILocalFileS
         CancellationToken cancellationToken) =>
         fileStore.WriteAtomicallyAsync(ResolvePath(area, relativePath), contents, options, cancellationToken);
 
+    public Task<ReadOnlyMemory<byte>> ReadAsync(
+        LocalStorageArea area,
+        string relativePath,
+        CancellationToken cancellationToken) =>
+        fileStore.ReadAsync(ResolvePath(area, relativePath), cancellationToken);
+
     public Task<RetentionCleanupResult> CleanupAsync(LocalStorageArea area, RetentionPolicy policy, CancellationToken cancellationToken)
     {
         if (area == LocalStorageArea.Ssh)
