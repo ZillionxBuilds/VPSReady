@@ -67,6 +67,14 @@ public sealed record RebootRecoveryPolicy(
     public TimeSpan DelayForAttempt(int attempt) => RetryDelays[Math.Min(Math.Max(attempt - 1, 0), RetryDelays.Count - 1)];
 }
 
+/// <summary>Monotonic recovery-time boundary; deterministic tests advance it without sleeping.</summary>
+public interface IRebootRecoveryTime
+{
+    TimeSpan Elapsed { get; }
+
+    Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken);
+}
+
 public enum RebootReconnectOutcome { NotStarted, Reconnected, TimedOut, Cancelled, HostTrustRejected, Failed }
 
 /// <summary>Safe result for an explicitly confirmed reboot; it never contains endpoint or credential data.</summary>
