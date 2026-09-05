@@ -127,7 +127,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.LocalIo, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
         }
-        catch (Exception) when (IsParserException())
+        catch (Exception)
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Corrupt, OperationErrorCode.Parse, OperationVerification.Failed).ConfigureAwait(false);
         }
@@ -191,6 +191,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         catch (FileNotFoundException) { error = ExistingSshKeySelectionErrorCatalog.Missing; return false; }
         catch (DirectoryNotFoundException) { error = ExistingSshKeySelectionErrorCatalog.Missing; return false; }
         catch (UnauthorizedAccessException) { error = ExistingSshKeySelectionErrorCatalog.Permission; return false; }
+        catch (UnsafeKeySelectionPathException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
         catch (IOException) { error = ExistingSshKeySelectionErrorCatalog.LocalIo; return false; }
     }
 
@@ -235,7 +236,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             }
 
             var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow);
-            return new FileStream(fileHandle, FileAccess.Read, 4096, isAsync: true);
+            return new FileStream(fileHandle, FileAccess.Read, 4096, isAsync: false);
         }
         finally
         {
@@ -317,8 +318,6 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         value = bytes.Slice(4, length);
         return true;
     }
-
-    private static bool IsParserException() => true;
 
     private enum OpenSshEnvelope { Unencrypted, Encrypted, Corrupt }
 

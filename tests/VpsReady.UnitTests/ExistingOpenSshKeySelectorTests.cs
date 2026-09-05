@@ -13,7 +13,8 @@ public sealed class ExistingOpenSshKeySelectorTests
     {
         await using var workspace = new KeyWorkspace();
         var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
-        Assert.True((await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None)).Succeeded);
+        var generated = await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None);
+        Assert.True(generated.Succeeded, generated.GenerationErrorCode);
         var original = await File.ReadAllBytesAsync(workspace.PrivateKeyPath);
         var diagnostics = new CollectingDiagnosticSink();
         var selector = new ExistingOpenSshKeySelector(diagnostics);
@@ -81,6 +82,47 @@ public sealed class ExistingOpenSshKeySelectorTests
         var deniedResult = await denied.SelectAsync(new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
         Assert.Equal(ExistingSshKeySelectionErrorCatalog.Permission, deniedResult.SelectionErrorCode);
         Assert.Null(deniedResult.Metadata);
+    }
+
+    [Fact]
+    public async Task ExistingKeyPermissionPolicyNeverRepermissionsUserMaterial()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new KeyWorkspace();
+        var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
+        Assert.True((await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None)).Succeeded);
+        var expectedMode = File.GetUnixFileMode(workspace.PrivateKeyPath) | UnixFileMode.GroupRead;
+        File.SetUnixFileMode(workspace.PrivateKeyPath, expectedMode);
+
+        var result = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink()).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expectedMode, File.GetUnixFileMode(workspace.PrivateKeyPath));
+    }
+
+    [Fact]
+    public async Task WindowsFailsClosedUntilAPlatformNoFollowBoundaryExists()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new KeyWorkspace();
+        var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
+        Assert.True((await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None)).Succeeded);
+
+        var result = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink()).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
     }
 
     private static byte[] EncryptedEnvelope() => [.. "openssh-key-v1\0"u8, 0, 0, 0, 10, .. "aes256-ctr"u8];

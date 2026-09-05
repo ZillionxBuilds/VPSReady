@@ -10,7 +10,10 @@ public sealed class ExistingOpenSshKeySelectionScenarioTests
     [Fact]
     public async Task PostValidationLeafSwapToReparseFailsClosedWithoutMetadata()
     {
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
         await using var workspace = new ScenarioKeyWorkspace();
         await File.WriteAllTextAsync(workspace.PrivateKeyPath, "validated-placeholder");
         var external = Path.Combine(workspace.Root, "external-private-material");
@@ -45,6 +48,30 @@ public sealed class ExistingOpenSshKeySelectionScenarioTests
         Assert.Equal(ExistingSshKeySelectionErrorCatalog.LocalIo, result.SelectionErrorCode);
         Assert.Equal("ordinary-user-file", await File.ReadAllTextAsync(workspace.PrivateKeyPath));
     }
+
+    [Fact]
+    public async Task ReparseParentFailsClosedWithoutMetadataOrExternalRead()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        await using var workspace = new ScenarioKeyWorkspace();
+        var externalParent = Path.Combine(workspace.Root, "external-parent");
+        Directory.CreateDirectory(externalParent);
+        var validatedParent = Path.Combine(workspace.Root, "validated-parent");
+        Directory.CreateDirectory(validatedParent);
+        var selectedPath = Path.Combine(validatedParent, "id_ed25519");
+        await File.WriteAllTextAsync(selectedPath, "validated-placeholder");
+        var externalKey = Path.Combine(externalParent, "id_ed25519");
+        await File.WriteAllTextAsync(externalKey, "external-must-not-be-read");
+        var selector = new ExistingOpenSshKeySelector(new ScenarioKeyDiagnosticSink(), new ParentSwapObserver(validatedParent, externalParent));
+        var result = await selector.SelectAsync(new ExistingSshKeySelectionRequest(selectedPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.Equal("external-must-not-be-read", await File.ReadAllTextAsync(externalKey));
+    }
 }
 
 internal sealed class LeafSwapObserver(string external) : IExistingSshKeySelectionObserver
@@ -53,6 +80,16 @@ internal sealed class LeafSwapObserver(string external) : IExistingSshKeySelecti
     {
         File.Delete(path);
         File.CreateSymbolicLink(path, external);
+    }
+}
+
+internal sealed class ParentSwapObserver(string validatedParent, string externalParent) : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path)
+    {
+        File.Delete(path);
+        Directory.Delete(validatedParent);
+        Directory.CreateSymbolicLink(validatedParent, externalParent);
     }
 }
 
