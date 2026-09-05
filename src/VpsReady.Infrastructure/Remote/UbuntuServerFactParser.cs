@@ -19,6 +19,26 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex Quantity = new("^(?<number>[0-9]+(?:\\.[0-9]+)?)(?<unit>[KMGTEP]?)(?:i?B)?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
+    /// <summary>C301 detects state only; C302 owns numbered-rule parsing.</summary>
+    public static UfwSnapshot ParseUfwDetection(RemoteCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.Succeeded)
+        {
+            return UfwSnapshot.StateOnly(UfwFirewallState.Error);
+        }
+
+        var lines = Lines(result.StandardOutput);
+        var line = lines.Length == 1 ? lines[0] : null;
+        return line switch
+        {
+            "ufw=unavailable" => UfwSnapshot.StateOnly(UfwFirewallState.Absent),
+            "Status: inactive" => UfwSnapshot.StateOnly(UfwFirewallState.Inactive),
+            "Status: active" => UfwSnapshot.StateOnly(UfwFirewallState.Active),
+            _ => UfwSnapshot.StateOnly(UfwFirewallState.Unknown),
+        };
+    }
+
     public static ServerFact<UbuntuOperatingSystem> ParseOperatingSystem(string output)
     {
         var values = ParseKeyValues(output);

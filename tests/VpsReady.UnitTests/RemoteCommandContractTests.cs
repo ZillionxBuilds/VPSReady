@@ -72,7 +72,7 @@ public sealed class RemoteCommandContractTests
     [Fact]
     public void UbuntuFactCatalogHasStableKnownReadOnlyCommandsWithBoundedOutput()
     {
-        Assert.Equal(13, UbuntuFactCommandCatalog.All.Count);
+        Assert.Equal(14, UbuntuFactCommandCatalog.All.Count);
 
         foreach (var definition in UbuntuFactCommandCatalog.All)
         {
