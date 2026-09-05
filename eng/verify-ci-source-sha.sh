@@ -41,6 +41,8 @@ fi
 require_text 'name: test-results-${{ runner.os }}-${{ env.VALIDATION_SHA }}'
 require_text 'name: e3-local-contained-results-${{ env.VALIDATION_SHA }}'
 require_text '-CommitSha $env:VALIDATION_SHA'
+require_text 'name: Verify C601 packaging profiles'
+require_text 'run: bash eng/verify-packaging-profiles.sh'
 require_text 'name: vpsready-${{ matrix.rid }}-${{ env.VALIDATION_SHA }}'
 require_text 'name: Resolve prospective validation identity'
 require_text 'expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}'
