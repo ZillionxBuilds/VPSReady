@@ -357,7 +357,7 @@ public sealed record StructuredDiagnosticEvent(
         Message,
         Correlation.OperationId,
         Duration,
-        NextSafeAction: null,
+        NextSafeAction: Status.ToNextSafeAction(),
         RunId: Correlation.RunId);
 }
 
@@ -372,6 +372,21 @@ public static class DiagnosticStatusExtensions
         DiagnosticStatus.Failed => ActivityState.Failed,
         DiagnosticStatus.Cancelled => ActivityState.Cancelled,
         DiagnosticStatus.RecoveryRequired => ActivityState.RecoveryRequired,
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown diagnostic status."),
+    };
+
+    /// <summary>
+    /// Produces fixed, user-safe Activity guidance. This deliberately does not
+    /// incorporate event text, command information, paths, or context values.
+    /// </summary>
+    public static string? ToNextSafeAction(this DiagnosticStatus status) => status switch
+    {
+        DiagnosticStatus.Started or DiagnosticStatus.Running => "Wait for the operation to finish before taking further action.",
+        DiagnosticStatus.Succeeded => null,
+        DiagnosticStatus.Warning => "Review the warning before continuing.",
+        DiagnosticStatus.Failed => "Review the error and verify the remote state before retrying.",
+        DiagnosticStatus.Cancelled => "Verify the remote state before retrying the cancelled action.",
+        DiagnosticStatus.RecoveryRequired => "Review the recovery guidance and verify the remote state before retrying.",
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown diagnostic status."),
     };
 }
