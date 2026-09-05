@@ -87,7 +87,7 @@ public sealed class AppViewModel : ObservableObject
             : new ActivityDiagnosticsViewModel(
                 diagnosticsWorkspace,
                 report => SafeIssueReportReady?.Invoke(report),
-                () => SupportBundleExportRequested?.Invoke());
+                runId => SupportBundleExportRequested?.Invoke(runId));
 
         if (applicationSession is not null)
         {
@@ -132,7 +132,7 @@ public sealed class AppViewModel : ObservableObject
     public event Action<string>? SafeIssueReportReady;
 
     /// <summary>Desktop hosts choose a user-approved local destination before export.</summary>
-    public event Action? SupportBundleExportRequested;
+    public event Action<string?>? SupportBundleExportRequested;
 
     public IReadOnlyList<ShellNavigationItem> NavigationItems => navigationItems;
 
@@ -177,23 +177,23 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
 {
     private readonly IDiagnosticsWorkspace workspace;
     private readonly Action<string> copySafeIssueReport;
-    private readonly Action requestSupportBundleExport;
+    private readonly Action<string?> requestSupportBundleExport;
     private string filter = string.Empty;
     private string status = "No local diagnostic events have been recorded in this session.";
 
     public ActivityDiagnosticsViewModel(
         IDiagnosticsWorkspace workspace,
         Action<string> copySafeIssueReport,
-        Action? requestSupportBundleExport = null)
+        Action<string?>? requestSupportBundleExport = null)
     {
         this.workspace = workspace;
         this.copySafeIssueReport = copySafeIssueReport;
-        this.requestSupportBundleExport = requestSupportBundleExport ?? (() => { });
+        this.requestSupportBundleExport = requestSupportBundleExport ?? (_ => { });
         RefreshCommand = new DelegateCommand(Refresh);
         ClearCommand = new DelegateCommand(() => _ = ClearAsync());
         OpenFolderCommand = new DelegateCommand(() => _ = OpenFolderAsync());
         CopySafeIssueReportCommand = new DelegateCommand(CopySafeIssueReport);
-        ExportSanitizedSupportBundleCommand = new DelegateCommand(() => this.requestSupportBundleExport());
+        ExportSanitizedSupportBundleCommand = new DelegateCommand(() => this.requestSupportBundleExport(SelectedEntry?.RunId));
         Refresh();
     }
 
@@ -227,11 +227,37 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
 
     public IReadOnlyList<ActivityEntry> Entries { get; private set; } = [];
 
+    public ActivityEntry? SelectedEntry
+    {
+        get => selectedEntry;
+        set
+        {
+            if (SetProperty(ref selectedEntry, value))
+            {
+                OnPropertyChanged(nameof(SelectedDetail));
+            }
+        }
+    }
+
+    /// <summary>Only already-sanitized Activity fields are composed into this user-facing detail.</summary>
+    public string SelectedDetail => SelectedEntry is { } entry
+        ? string.Join(Environment.NewLine,
+            $"State: {entry.State}",
+            $"Operation ID: {entry.OperationId}",
+            $"Run ID: {entry.RunId ?? "not-recorded"}",
+            $"Duration: {entry.Duration?.ToString() ?? "not-recorded"}",
+            $"Next safe action: {entry.NextSafeAction ?? "No additional action is required."}")
+        : "Select a safe Activity entry to view its operation detail or export that run's sanitized support material.";
+
     public string LogDirectory => workspace.GetLogDirectory();
 
     private void Refresh()
     {
+        var previousSelection = SelectedEntry;
         Entries = workspace.GetActivity(Filter);
+        SelectedEntry = previousSelection is null
+            ? null
+            : Entries.FirstOrDefault(entry => entry.OperationId == previousSelection.OperationId && entry.RunId == previousSelection.RunId);
         OnPropertyChanged(nameof(Entries));
         OnPropertyChanged(nameof(LogDirectory));
         Status = Entries.Count == 0 ? "No matching safe activity entries are available." : $"{Entries.Count} safe activity entr{(Entries.Count == 1 ? "y" : "ies")} available.";
@@ -243,6 +269,7 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
         {
             await workspace.ClearDiagnosticsAsync(CancellationToken.None).ConfigureAwait(false);
             Refresh();
+            SelectedEntry = null;
             Status = "Local diagnostics were cleared. Exported bundles were not deleted.";
         }
         catch
@@ -266,15 +293,22 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
 
     private void CopySafeIssueReport()
     {
-        copySafeIssueReport(workspace.CreateSafeIssueReport());
-        Status = "A sanitized issue report was copied. The repository is public; review any attachment before sharing.";
+        try
+        {
+            copySafeIssueReport(workspace.CreateSafeIssueReport(SelectedEntry?.RunId));
+            Status = "A sanitized issue report was copied. The repository is public; review any attachment before sharing.";
+        }
+        catch
+        {
+            Status = "VPSReady could not prepare a safe issue report. No diagnostic was shared.";
+        }
     }
 
-    public async Task ExportSanitizedSupportBundleAsync(string destinationDirectory)
+    public async Task ExportSanitizedSupportBundleAsync(string destinationDirectory, string? runId = null)
     {
         try
         {
-            var exported = await workspace.ExportSanitizedSupportBundleAsync(null, destinationDirectory, CancellationToken.None).ConfigureAwait(false);
+            var exported = await workspace.ExportSanitizedSupportBundleAsync(runId ?? SelectedEntry?.RunId, destinationDirectory, CancellationToken.None).ConfigureAwait(false);
             Status = $"Sanitized support bundle created locally: {Path.GetFileName(exported.BundlePath)}. Review it before sharing.";
         }
         catch
@@ -282,6 +316,8 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
             Status = "VPSReady could not export a sanitized support bundle safely. No bundle was shared.";
         }
     }
+
+    private ActivityEntry? selectedEntry;
 }
 
 public enum ShellPage

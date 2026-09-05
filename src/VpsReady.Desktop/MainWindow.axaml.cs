@@ -38,7 +38,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void ExportSanitizedSupportBundleAsync()
+    private async void ExportSanitizedSupportBundleAsync(string? runId)
     {
         try
         {
@@ -51,7 +51,7 @@ public partial class MainWindow : Window
             var path = folder?.Path.LocalPath;
             if (!string.IsNullOrWhiteSpace(path) && viewModel?.ActivityDiagnostics is not null)
             {
-                await viewModel.ActivityDiagnostics.ExportSanitizedSupportBundleAsync(path);
+                await viewModel.ActivityDiagnostics.ExportSanitizedSupportBundleAsync(path, runId);
             }
         }
         catch

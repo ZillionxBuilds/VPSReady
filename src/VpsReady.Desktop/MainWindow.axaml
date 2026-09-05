@@ -169,17 +169,20 @@
               </StackPanel>
               <TextBlock Text="{Binding ActivityDiagnostics.Status}" TextWrapping="Wrap" />
               <TextBlock FontFamily="Consolas" Text="{Binding ActivityDiagnostics.LogDirectory}" TextWrapping="Wrap" />
-              <ItemsControl ItemsSource="{Binding ActivityDiagnostics.Entries}">
-                <ItemsControl.ItemTemplate>
+              <TextBlock Text="Select an entry before copying a report or exporting a bundle to limit material to that safe correlated run. Diagnostics remain local until you explicitly share reviewed material." TextWrapping="Wrap" />
+              <ListBox ItemsSource="{Binding ActivityDiagnostics.Entries}" SelectedItem="{Binding ActivityDiagnostics.SelectedEntry, Mode=TwoWay}" MaxHeight="360">
+                <ListBox.ItemTemplate>
                   <DataTemplate>
                     <StackPanel Margin="0,4,0,4">
-                      <TextBlock FontWeight="SemiBold" Text="{Binding Action}" />
+                      <TextBlock FontWeight="SemiBold" Text="{Binding State}" />
+                      <TextBlock Text="{Binding Action}" />
                       <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
                       <TextBlock FontFamily="Consolas" Text="{Binding OperationId}" TextWrapping="Wrap" />
                     </StackPanel>
                   </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock Text="{Binding ActivityDiagnostics.SelectedDetail}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
           <Border IsVisible="{Binding HasStartupFailure}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
