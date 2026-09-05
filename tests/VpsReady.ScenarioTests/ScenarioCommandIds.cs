@@ -95,6 +95,7 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuUfwDetectionRead,
         RemoteCommandCatalog.UbuntuUfwRuleListRead,
         RemoteCommandCatalog.UbuntuUfwAllowRuleAdd,
+        RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 

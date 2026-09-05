@@ -52,6 +52,7 @@ public static class RemoteCommandCatalog
     public const string UbuntuUfwDetectionRead = DiagnosticCommandCatalog.UbuntuUfwDetectionRead;
     public const string UbuntuUfwRuleListRead = DiagnosticCommandCatalog.UbuntuUfwRuleListRead;
     public const string UbuntuUfwAllowRuleAdd = DiagnosticCommandCatalog.UbuntuUfwAllowRuleAdd;
+    public const string UbuntuUfwSelectedRuleRemove = DiagnosticCommandCatalog.UbuntuUfwSelectedRuleRemove;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -71,6 +72,7 @@ public static class RemoteCommandCatalog
         UbuntuUfwDetectionRead,
         UbuntuUfwRuleListRead,
         UbuntuUfwAllowRuleAdd,
+        UbuntuUfwSelectedRuleRemove,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

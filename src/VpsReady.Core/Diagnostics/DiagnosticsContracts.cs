@@ -155,6 +155,7 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuUfwDetectionRead = "ubuntu.ufw.detection.read";
     public const string UbuntuUfwRuleListRead = "ubuntu.ufw.rules.list.read";
     public const string UbuntuUfwAllowRuleAdd = "ubuntu.ufw.rule.allow.add";
+    public const string UbuntuUfwSelectedRuleRemove = "ubuntu.ufw.rule.selected.remove";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -174,6 +175,7 @@ public static class DiagnosticCommandCatalog
         UbuntuUfwDetectionRead,
         UbuntuUfwRuleListRead,
         UbuntuUfwAllowRuleAdd,
+        UbuntuUfwSelectedRuleRemove,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

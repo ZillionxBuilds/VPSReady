@@ -3,6 +3,7 @@ using System.Text;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 
 namespace VpsReady.Core.Remote;
 
@@ -14,6 +15,8 @@ public enum UfwIpFamily { Ipv4, Ipv6 }
 /// <summary>Opaque token binds a future selected row to its semantic fields.</summary>
 public sealed record UfwRuleIdentity(string Value)
 {
+    private static readonly Regex CanonicalValue = new("^ufw-ipv[46]-[1-9][0-9]{0,5}-[0-9a-f]{16}$", RegexOptions.CultureInvariant);
+
     public static UfwRuleIdentity Create(int number, UfwRuleProtocol protocol, int port, string source, UfwRuleAction action, UfwIpFamily family)
     {
         if (number < 1 || port is < 1 or > 65535 || string.IsNullOrWhiteSpace(source))
@@ -24,6 +27,14 @@ public sealed record UfwRuleIdentity(string Value)
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant()[..16];
         return new UfwRuleIdentity($"ufw-{family.ToString().ToLowerInvariant()}-{number}-{hash}");
     }
+
+    /// <summary>
+    /// A selection arrives from a caller, so validate its opaque shape before a
+    /// workflow can use it to match a fresh listing. It is never a shell value.
+    /// </summary>
+    public static bool IsCanonical(UfwRuleIdentity? identity) => identity is not null
+        && !string.IsNullOrWhiteSpace(identity.Value)
+        && CanonicalValue.IsMatch(identity.Value);
 }
 
 public sealed record UfwRule(UfwRuleIdentity Identity, int Number, UfwRuleProtocol Protocol, int Port, string Source, UfwRuleAction Action, UfwIpFamily Family);
@@ -91,6 +102,124 @@ public static class UfwRuleRefresh
             ? new UfwRuleRefreshResult(freshRead.Snapshot, freshRead.Status, Replaced: true)
             : new UfwRuleRefreshResult(previous, freshRead.Status, Replaced: false);
     }
+}
+
+public enum UfwRuleRemovalValidationError
+{
+    None,
+    Confirmation,
+    Selection,
+}
+
+/// <summary>
+/// Explicit destructive intent received from a future UI. The opaque identity
+/// is intentionally matched only against a fresh complete listing; it cannot
+/// provide a UFW delete number or shell input by itself.
+/// </summary>
+public sealed record UfwRuleRemovalIntent(UfwRuleIdentity? SelectedIdentity, bool Confirmed)
+{
+    public static bool TryCreate(UfwRuleRemovalIntent? intent, out UfwRuleIdentity? selectedIdentity, out UfwRuleRemovalValidationError error)
+    {
+        selectedIdentity = null;
+        if (intent is null || !intent.Confirmed)
+        {
+            error = UfwRuleRemovalValidationError.Confirmation;
+            return false;
+        }
+
+        if (!UfwRuleIdentity.IsCanonical(intent.SelectedIdentity))
+        {
+            error = UfwRuleRemovalValidationError.Selection;
+            return false;
+        }
+
+        selectedIdentity = intent.SelectedIdentity;
+        error = UfwRuleRemovalValidationError.None;
+        return true;
+    }
+}
+
+/// <summary>
+/// C304 command input created only from the exact rule in a fresh complete
+/// listing. It deliberately carries the typed semantic rule, not its mutable
+/// display number: UFW's full-rule delete form remains bound to this semantic
+/// identity at the server-side effect boundary even if rule numbers reorder.
+/// </summary>
+public sealed record UfwRuleRemovalRequest
+{
+    private UfwRuleRemovalRequest(UfwRuleProtocol protocol, int port, string source, UfwRuleAction action, UfwIpFamily family)
+    {
+        Protocol = protocol;
+        Port = port;
+        Source = source;
+        Action = action;
+        Family = family;
+    }
+
+    public UfwRuleProtocol Protocol { get; }
+
+    public int Port { get; }
+
+    public string Source { get; }
+
+    public UfwRuleAction Action { get; }
+
+    public UfwIpFamily Family { get; }
+
+    public static bool TryCreate(UfwRule? freshRule, out UfwRuleRemovalRequest? request)
+    {
+        request = null;
+        if (freshRule is null
+            || freshRule.Port is < 1 or > 65535
+            || string.IsNullOrWhiteSpace(freshRule.Source)
+            || !Enum.IsDefined(freshRule.Protocol)
+            || !Enum.IsDefined(freshRule.Action)
+            || !Enum.IsDefined(freshRule.Family)
+            || !UfwRuleIdentity.IsCanonical(freshRule.Identity))
+        {
+            return false;
+        }
+
+        var expectedIdentity = UfwRuleIdentity.Create(
+            freshRule.Number,
+            freshRule.Protocol,
+            freshRule.Port,
+            freshRule.Source,
+            freshRule.Action,
+            freshRule.Family);
+        if (!Equals(expectedIdentity, freshRule.Identity))
+        {
+            return false;
+        }
+
+        if (!UfwAllowRuleRequest.TryCreate(
+                new UfwAllowRuleInput(freshRule.Protocol, freshRule.Port, freshRule.Source, freshRule.Family),
+                out var validatedSemantic,
+                out _)
+            || validatedSemantic is null)
+        {
+            return false;
+        }
+
+        request = new UfwRuleRemovalRequest(
+            freshRule.Protocol,
+            freshRule.Port,
+            validatedSemantic.Source,
+            freshRule.Action,
+            freshRule.Family);
+        return true;
+    }
+
+    public bool MatchesSemantic(UfwRule rule) => rule is not null
+        && rule.Protocol == Protocol
+        && rule.Port == Port
+        && string.Equals(rule.Source, Source, StringComparison.Ordinal)
+        && rule.Action == Action
+        && rule.Family == Family;
+
+    public string ToCommandSource() => Source == "Anywhere"
+        ? Family == UfwIpFamily.Ipv4 ? "0.0.0.0/0" : "::/0"
+        : Source;
 }
 
 public enum UfwAllowRuleValidationError
