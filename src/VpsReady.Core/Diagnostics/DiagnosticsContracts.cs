@@ -121,6 +121,10 @@ public static class DiagnosticEventCatalog
     public const string LocalKeyGenerationFailed = "ssh.key_generation.failed";
     public const string LocalKeyGenerationCancelled = "ssh.key_generation.cancelled";
     public const string LocalKeyGenerationRecoveryRequired = "ssh.key_generation.recovery_required";
+    public const string ExistingKeySelectionStarted = "ssh.key_selection.started";
+    public const string ExistingKeySelectionSucceeded = "ssh.key_selection.succeeded";
+    public const string ExistingKeySelectionFailed = "ssh.key_selection.failed";
+    public const string ExistingKeySelectionCancelled = "ssh.key_selection.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -128,6 +132,7 @@ public static class DiagnosticEventCatalog
         OperationFailed, OperationCancelled, OperationRecoveryRequired, CommandCompleted, PayloadOmitted,
         StartupFailed, UnhandledException, LocalKeyGenerationStarted, LocalKeyGenerationSucceeded,
         LocalKeyGenerationFailed, LocalKeyGenerationCancelled, LocalKeyGenerationRecoveryRequired,
+        ExistingKeySelectionStarted, ExistingKeySelectionSucceeded, ExistingKeySelectionFailed, ExistingKeySelectionCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -195,6 +200,7 @@ public static class DiagnosticErrorCatalog
     private static readonly HashSet<string> Known = Enum.GetValues<OperationErrorCode>()
         .Select(errorCode => errorCode.ToStableCode())
         .Concat(LocalEd25519KeyGenerationErrorCatalog.All)
+        .Concat(ExistingSshKeySelectionErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);
