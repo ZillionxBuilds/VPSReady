@@ -49,6 +49,32 @@ public sealed class Ed25519KeyGenerationScenarioTests
     }
 
     [Fact]
+    public async Task CleanupRejectsAnUnknownEntryIntroducedAfterValidationWithoutDeletingAnyTransactionData()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var observer = new AddUnknownTransactionEntryAfterValidation();
+        var generator = new Ed25519OpenSshKeyPairGenerator(
+            new ScenarioKeyDiagnosticSink(),
+            new ScenarioStageFault(KeyPairTransactionStage.PrivateStaged),
+            observer);
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Recovery, result.GenerationErrorCode);
+        Assert.Equal(OperationRecovery.Failed, result.Operation.Recovery);
+        Assert.NotNull(observer.TransactionDirectory);
+        Assert.True(File.Exists(Path.Combine(observer.TransactionDirectory!, "manifest.json")));
+        Assert.True(File.Exists(Path.Combine(observer.TransactionDirectory!, "private.key")));
+        Assert.True(File.Exists(Path.Combine(observer.TransactionDirectory!, "late-user-entry")));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
     public async Task InjectedPrivateFinalizationFaultRemovesOnlyItsPartialTransaction()
     {
         await using var workspace = new ScenarioKeyWorkspace();
@@ -400,6 +426,25 @@ internal sealed class ScenarioStageFault(KeyPairTransactionStage stage, Exceptio
             thrown = true;
             throw exception ?? new IOException("Injected deterministic key transaction fault.");
         }
+    }
+}
+
+internal sealed class AddUnknownTransactionEntryAfterValidation : IKeyPairTransactionCleanupObserver
+{
+    private bool added;
+
+    public string? TransactionDirectory { get; private set; }
+
+    public void AfterTransactionValidated(string transactionDirectory)
+    {
+        if (added)
+        {
+            return;
+        }
+
+        added = true;
+        TransactionDirectory = transactionDirectory;
+        File.WriteAllText(Path.Combine(transactionDirectory, "late-user-entry"), "must-remain");
     }
 }
 

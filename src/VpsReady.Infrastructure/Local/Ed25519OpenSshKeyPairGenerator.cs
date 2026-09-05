@@ -29,19 +29,30 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
     private const string StagedPrivateFileName = "private.key";
     private const string StagedPublicFileName = "public.key";
     private const int ManifestVersion = 1;
+    private static readonly HashSet<string> AllowedTransactionFileNames = new(StringComparer.Ordinal)
+    {
+        ManifestFileName,
+        StagedPrivateFileName,
+        StagedPublicFileName,
+    };
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> TargetLocks = new(StringComparer.Ordinal);
     private readonly IDiagnosticSink diagnostics;
     private readonly IKeyPairTransactionFaultInjector faultInjector;
+    private readonly IKeyPairTransactionCleanupObserver cleanupObserver;
 
     public Ed25519OpenSshKeyPairGenerator(IDiagnosticSink diagnostics)
         : this(diagnostics, NoKeyPairTransactionFaultInjector.Instance)
     {
     }
 
-    internal Ed25519OpenSshKeyPairGenerator(IDiagnosticSink diagnostics, IKeyPairTransactionFaultInjector faultInjector)
+    internal Ed25519OpenSshKeyPairGenerator(
+        IDiagnosticSink diagnostics,
+        IKeyPairTransactionFaultInjector faultInjector,
+        IKeyPairTransactionCleanupObserver? cleanupObserver = null)
     {
         this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         this.faultInjector = faultInjector ?? throw new ArgumentNullException(nameof(faultInjector));
+        this.cleanupObserver = cleanupObserver ?? NoKeyPairTransactionCleanupObserver.Instance;
     }
 
     public async Task<LocalEd25519KeyGenerationResult> GenerateAsync(
@@ -559,7 +570,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         }
     }
 
-    private static Task RecoverMatchingTransactionsAsync(KeyPairPaths paths, CancellationToken cancellationToken)
+    private Task RecoverMatchingTransactionsAsync(KeyPairPaths paths, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         foreach (var directory in Directory.EnumerateDirectories(paths.ParentDirectory, $"{TransactionDirectoryPrefix}*", SearchOption.TopDirectoryOnly))
@@ -571,7 +582,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         return Task.CompletedTask;
     }
 
-    private static RecoveryResult RecoverAfterFailure(KeyPairPaths paths, string? transactionDirectory)
+    private RecoveryResult RecoverAfterFailure(KeyPairPaths paths, string? transactionDirectory)
     {
         if (transactionDirectory is null)
         {
@@ -598,7 +609,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         }
     }
 
-    private static bool RecoverTransaction(KeyPairPaths paths, string transactionDirectory)
+    private bool RecoverTransaction(KeyPairPaths paths, string transactionDirectory)
     {
         ValidateOwnedMatchingTransaction(paths, transactionDirectory);
 
@@ -753,13 +764,15 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         ValidateTransactionEntries(transactionDirectory);
     }
 
-    private static void DeleteTransactionDirectoryIfOwned(KeyPairPaths paths, string transactionDirectory)
+    private void DeleteTransactionDirectoryIfOwned(KeyPairPaths paths, string transactionDirectory)
     {
         ValidateOwnedMatchingTransaction(paths, transactionDirectory);
+        cleanupObserver.AfterTransactionValidated(transactionDirectory);
         var entries = Directory.EnumerateFileSystemEntries(transactionDirectory, "*", SearchOption.TopDirectoryOnly).ToArray();
+        ValidateTransactionEntries(entries);
         foreach (var entry in entries)
         {
-            EnsureRegularNonReparseFile(entry);
+            ValidateTransactionEntry(entry);
             File.Delete(entry);
         }
 
@@ -779,14 +792,21 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static void ValidateTransactionEntries(string transactionDirectory)
     {
-        var allowedFiles = new HashSet<string>(StringComparer.Ordinal)
-        {
-            ManifestFileName,
-            StagedPrivateFileName,
-            StagedPublicFileName,
-        };
         var entries = Directory.EnumerateFileSystemEntries(transactionDirectory, "*", SearchOption.TopDirectoryOnly).ToArray();
-        if (entries.Any(entry => !allowedFiles.Contains(Path.GetFileName(entry)) || !IsRegularNonReparseFile(entry)))
+        ValidateTransactionEntries(entries);
+    }
+
+    private static void ValidateTransactionEntries(IEnumerable<string> entries)
+    {
+        if (entries.Any(entry => !AllowedTransactionFileNames.Contains(Path.GetFileName(entry)) || !IsRegularNonReparseFile(entry)))
+        {
+            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+        }
+    }
+
+    private static void ValidateTransactionEntry(string entry)
+    {
+        if (!AllowedTransactionFileNames.Contains(Path.GetFileName(entry)) || !IsRegularNonReparseFile(entry))
         {
             throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
         }
@@ -901,6 +921,20 @@ internal enum KeyPairTransactionStage
 internal interface IKeyPairTransactionFaultInjector
 {
     void ThrowIfInjected(KeyPairTransactionStage stage);
+}
+
+internal interface IKeyPairTransactionCleanupObserver
+{
+    void AfterTransactionValidated(string transactionDirectory);
+}
+
+internal sealed class NoKeyPairTransactionCleanupObserver : IKeyPairTransactionCleanupObserver
+{
+    public static NoKeyPairTransactionCleanupObserver Instance { get; } = new();
+
+    public void AfterTransactionValidated(string transactionDirectory)
+    {
+    }
 }
 
 internal sealed class NoKeyPairTransactionFaultInjector : IKeyPairTransactionFaultInjector
