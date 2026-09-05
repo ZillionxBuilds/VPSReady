@@ -14,7 +14,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// a connection is usable only after SSH.NET reports it connected and its host
 /// key has passed the persisted fail-closed trust assessment.
 /// </summary>
-public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport
+public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport
 {
     private readonly IKnownHostTrustStore trustStore;
     private readonly SemaphoreSlim connectionGate = new(1, 1);
@@ -273,7 +273,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
 
         var shellCommand = factDefinition is not null
             ? factDefinition.ShellCommand!
-            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead
+            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead or RemoteCommandCatalog.UbuntuRebootApply or RemoteCommandCatalog.SshReconnectVerify
                 ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
                 : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
 
@@ -317,6 +317,77 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         catch (Exception exception)
         {
             throw ToSafeConnectionFailure(exception);
+        }
+    }
+
+    /// <summary>
+    /// Reuses only the already-authenticated SSH.NET connection information to
+    /// establish a fresh post-reboot session. The host-key callback is invoked
+    /// again and must produce a matching persisted trust assessment; a changed
+    /// or unknown host never becomes connected through this recovery path.
+    /// </summary>
+    public async Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ValidateFiniteTimeout(timeout);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            var reconnectingClient = client;
+            if (reconnectingClient is null || endpoint is null)
+            {
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            try
+            {
+                if (reconnectingClient.IsConnected)
+                {
+                    reconnectingClient.Disconnect();
+                }
+
+                LastHostTrustAssessment = null;
+                hostTrustAssessmentFailed = false;
+                using var timeoutCancellation = new CancellationTokenSource(timeout);
+                using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+                try
+                {
+                    await reconnectingClient.ConnectAsync(linkedCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+                {
+                    throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+                }
+
+                RequireExplicitTrustedHost(LastHostTrustAssessment);
+                if (!reconnectingClient.IsConnected)
+                {
+                    throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (RemoteTransportException)
+            {
+                throw;
+            }
+            catch (Exception) when (LastHostTrustAssessment is { IsTrusted: false } || hostTrustAssessmentFailed)
+            {
+                throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+            }
+            catch (Exception exception)
+            {
+                throw ToSafeConnectionFailure(exception);
+            }
+        }
+        finally
+        {
+            connectionGate.Release();
         }
     }
 

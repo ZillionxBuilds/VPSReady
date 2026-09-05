@@ -150,6 +150,11 @@ public static class DiagnosticEventCatalog
     public const string PackageUpgradeSucceeded = "apt.upgrade.succeeded";
     public const string PackageUpgradeFailed = "apt.upgrade.failed";
     public const string PackageUpgradeCancelled = "apt.upgrade.cancelled";
+    public const string RebootStarted = "system.reboot.started";
+    public const string RebootSucceeded = "system.reboot.succeeded";
+    public const string RebootFailed = "system.reboot.failed";
+    public const string RebootCancelled = "system.reboot.cancelled";
+    public const string RebootRecoveryRequired = "system.reboot.recovery_required";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -164,6 +169,7 @@ public static class DiagnosticEventCatalog
         PrivilegePreflightStarted, PrivilegePreflightSucceeded, PrivilegePreflightFailed,
         PackageIndexUpdateStarted, PackageIndexUpdateSucceeded, PackageIndexUpdateFailed, PackageIndexUpdateCancelled,
         PackageUpgradeStarted, PackageUpgradePlanned, PackageUpgradeSucceeded, PackageUpgradeFailed, PackageUpgradeCancelled,
+        RebootStarted, RebootSucceeded, RebootFailed, RebootCancelled, RebootRecoveryRequired,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -205,6 +211,8 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuAptUpgradeApply = "ubuntu.apt.upgrade.apply";
     public const string UbuntuAptUpgradeVerify = "ubuntu.apt.upgrade.verify";
     public const string UbuntuRebootRequiredRead = "ubuntu.reboot-required.read";
+    public const string UbuntuRebootApply = "ubuntu.reboot.apply";
+    public const string SshReconnectVerify = "ssh.reconnect.verify";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -238,6 +246,8 @@ public static class DiagnosticCommandCatalog
         UbuntuAptUpgradeApply,
         UbuntuAptUpgradeVerify,
         UbuntuRebootRequiredRead,
+        UbuntuRebootApply,
+        SshReconnectVerify,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -255,6 +265,7 @@ public static class DiagnosticErrorCatalog
         .Concat(PrivilegePreflightErrorCatalog.All)
         .Concat(PackageIndexUpdateErrorCatalog.All)
         .Concat(PackageUpgradeErrorCatalog.All)
+        .Concat(RebootErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

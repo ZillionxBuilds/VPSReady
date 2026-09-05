@@ -128,6 +128,22 @@ public sealed record OperationResult
             "No action is required.");
     }
 
+    /// <summary>Records a successful verification after a required recovery step, such as SSH reconnect after reboot.</summary>
+    public static OperationResult SuccessAfterRecovery(
+        string operationId,
+        OperationState state = OperationState.Applied)
+    {
+        return new OperationResult(
+            operationId,
+            OperationCompletion.Succeeded,
+            state,
+            OperationVerification.Passed,
+            OperationRecovery.Succeeded,
+            errorCode: null,
+            "The operation completed and its result was verified after recovery.",
+            "No action is required.");
+    }
+
     public static OperationResult Failure(
         string operationId,
         OperationErrorCode errorCode,

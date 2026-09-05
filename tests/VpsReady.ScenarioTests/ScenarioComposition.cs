@@ -76,16 +76,23 @@ internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost h
 /// remains available for a replacement connection identity and its state stays
 /// observable to every scenario transport.
 /// </summary>
-internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport
 {
     private bool disposed;
 
     internal bool IsDisposed => disposed;
 
-    public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+    public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
-        return host.ExecuteAsync(command, cancellationToken);
+        try
+        {
+            return await host.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+        catch (ScenarioDisconnectException)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
     }
 
     public Task<RemoteCommandResult> ExecutePublicKeyDeploymentAsync(
@@ -99,6 +106,30 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
     }
 
     public KnownHostTrustAssessment? LastHostTrustAssessment { get; private set; }
+
+    public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+        }
+
+        if (host.State.Ssh.HostKey != ScenarioHostKeyState.Matching)
+        {
+            LastHostTrustAssessment = new KnownHostTrustAssessment(
+                KnownHostTrustState.Unknown,
+                new KnownHostTrustChallenge(
+                    new KnownHostIdentity("scenario-host", host.State.Ssh.ActiveSshPort),
+                    new HostKeyFingerprint(host.State.Ssh.HostKeyFingerprint),
+                    KnownHostTrustState.Unknown),
+                recoveredCorruptStore: false);
+            throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+        }
+
+        LastHostTrustAssessment = new KnownHostTrustAssessment(KnownHostTrustState.Matching, challenge: null, recoveredCorruptStore: false);
+        return host.ReconnectAsync(cancellationToken);
+    }
 
     public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
     {

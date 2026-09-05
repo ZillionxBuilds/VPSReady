@@ -1,0 +1,260 @@
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+
+namespace VpsReady.Infrastructure.Remote;
+
+/// <summary>
+/// Inspects reboot-required state and performs only an explicitly confirmed reboot.
+/// A disconnect after dispatch is expected intermediate state, never a success:
+/// the original trusted SSH session must reconnect and verify.
+/// </summary>
+public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSink diagnostics) : IRebootWorkflow
+{
+    private const string ActionName = "RebootServer";
+    private const int MaximumReconnectAttempts = 3;
+    private static readonly TimeSpan ReconnectTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
+
+    public async Task<RebootRequiredState> InspectRequiredAsync(IRemoteTransport transport, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var correlation = CorrelationIds.Create("reboot_required_inspect");
+        var command = UbuntuPackageCommandCatalog.CreateRebootRequiredRequest();
+        try
+        {
+            await ReportAsync(correlation, DiagnosticEventCatalog.RebootStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, command.Id.Value, null).ConfigureAwait(false);
+            var read = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            if (!read.Succeeded || !TryParseRequired(read.StandardOutput, out var required))
+            {
+                return await RequiredFailureAsync(correlation, OperationErrorCode.Parse, RebootErrorCatalog.RequiredState, command.Id.Value).ConfigureAwait(false);
+            }
+
+            var result = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.RebootSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
+            return new RebootRequiredState(result, required, null);
+        }
+        catch (OperationCanceledException)
+        {
+            return await RequiredCancelledAsync(correlation, command.Id.Value).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return await RequiredFailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.RequiredState, command.Id.Value).ConfigureAwait(false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            return await RequiredFailureAsync(correlation, ToError(exception.Kind), RebootErrorCatalog.RequiredState, command.Id.Value).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await RequiredFailureAsync(correlation, OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected, command.Id.Value).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<RebootOperationResult> RebootAsync(IRemoteTransport transport, bool confirmed, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var correlation = CorrelationIds.Create("reboot");
+        var apply = UbuntuPackageCommandCatalog.CreateRebootRequest();
+        var applyAttempted = false;
+        try
+        {
+            await ReportAsync(correlation, DiagnosticEventCatalog.RebootStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
+            if (!confirmed)
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Validation, RebootErrorCatalog.Confirmation, DiagnosticPhase.Validate, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
+            }
+
+            if (transport is not IRebootReconnectTransport reconnectTransport)
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Preflight, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
+            }
+
+            var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
+            if (!privilege.Result.Succeeded)
+            {
+                if (privilege.Result.Cancelled)
+                {
+                    return await CancelledAsync(correlation, 0, RebootReconnectOutcome.NotStarted, DiagnosticPhase.Preflight, null, OperationState.Unchanged).ConfigureAwait(false);
+                }
+
+                return await FailureAsync(correlation, privilege.Result.ErrorCode ?? OperationErrorCode.Privilege, RebootErrorCatalog.Privilege, DiagnosticPhase.Preflight, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
+            }
+
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
+            applyAttempted = true;
+            try
+            {
+                var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
+                if (!applied.Succeeded)
+                {
+                    return await FailureAsync(correlation, OperationErrorCode.Command, RebootErrorCatalog.Command, DiagnosticPhase.Apply, apply.Id.Value, OperationState.Unknown, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
+                }
+            }
+            catch (RemoteTransportException exception) when (IsExpectedDisconnect(exception.Kind))
+            {
+                // The dispatch may lose its SSH channel before reporting a
+                // normal exit; recovery still has to establish a fresh,
+                // trusted connection below.
+            }
+
+            await ReportAsync(correlation, DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, apply.Id.Value, null).ConfigureAwait(false);
+            return await ReconnectAndVerifyAsync(reconnectTransport, correlation, apply.Id.Value, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return await CancelledAsync(correlation, 0, RebootReconnectOutcome.Cancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.TimedOut).ConfigureAwait(false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            return await FailureAsync(correlation, ToError(exception.Kind), exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootErrorCatalog.HostTrust : RebootErrorCatalog.Command, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootReconnectOutcome.HostTrustRejected : RebootReconnectOutcome.Failed).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await FailureAsync(correlation, OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.Failed).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<RebootOperationResult> ReconnectAndVerifyAsync(IRebootReconnectTransport transport, CorrelationIds correlation, string applyCommandId, CancellationToken cancellationToken)
+    {
+        var verify = UbuntuPackageCommandCatalog.CreateReconnectVerifyRequest();
+        for (var attempt = 1; attempt <= MaximumReconnectAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await ReportAsync(correlation, DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            try
+            {
+                await transport.ReconnectAsync(ReconnectTimeout, cancellationToken).ConfigureAwait(false);
+                var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+                if (!verified.Succeeded || !IsExactRecord(verified.StandardOutput, "reconnect=verified"))
+                {
+                    return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);
+                }
+
+                var success = OperationResult.SuccessAfterRecovery(correlation.OperationId, OperationState.Applied);
+                await ReportAsync(correlation, DiagnosticEventCatalog.RebootSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, verify.Id.Value, null).ConfigureAwait(false);
+                return new RebootOperationResult(success, null, attempt, RebootReconnectOutcome.Reconnected);
+            }
+            catch (OperationCanceledException)
+            {
+                return await CancelledAsync(correlation, attempt, RebootReconnectOutcome.Cancelled, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            }
+            catch (RemoteTransportException exception) when (exception.Kind == RemoteTransportFailureKind.HostTrust)
+            {
+                return await FailureAsync(correlation, OperationErrorCode.HostTrust, RebootErrorCatalog.HostTrust, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown, RebootReconnectOutcome.HostTrustRejected, attempt).ConfigureAwait(false);
+            }
+            catch (RemoteTransportException exception) when (IsRetryableReconnectFailure(exception.Kind))
+            {
+                if (attempt == MaximumReconnectAttempts)
+                {
+                    return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown, RebootReconnectOutcome.TimedOut, attempt).ConfigureAwait(false);
+                }
+            }
+            catch (RemoteTransportException exception)
+            {
+                return await FailureAsync(correlation, ToError(exception.Kind), RebootErrorCatalog.Reconnect, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                if (attempt == MaximumReconnectAttempts)
+                {
+                    return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown, RebootReconnectOutcome.TimedOut, attempt).ConfigureAwait(false);
+                }
+            }
+
+            await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
+        }
+
+        return await FailureAsync(correlation, OperationErrorCode.Reconnect, RebootErrorCatalog.Reconnect, DiagnosticPhase.Recovery, applyCommandId, OperationState.Unknown, RebootReconnectOutcome.Failed, MaximumReconnectAttempts).ConfigureAwait(false);
+    }
+
+    private async Task<RebootRequiredState> RequiredCancelledAsync(CorrelationIds correlation, string commandId)
+    {
+        var result = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
+        await ReportAsync(correlation, DiagnosticEventCatalog.RebootCancelled, DiagnosticPhase.Verify, DiagnosticStatus.Cancelled, commandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
+        return new RebootRequiredState(result, null, RebootErrorCatalog.Cancelled);
+    }
+
+    private async Task<RebootRequiredState> RequiredFailureAsync(CorrelationIds correlation, OperationErrorCode error, string code, string commandId)
+    {
+        var result = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
+        await ReportAsync(correlation, DiagnosticEventCatalog.RebootFailed, DiagnosticPhase.Verify, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
+        return new RebootRequiredState(result, null, code);
+    }
+
+    private async Task<RebootOperationResult> CancelledAsync(CorrelationIds correlation, int attempts, RebootReconnectOutcome outcome, DiagnosticPhase phase, string? commandId, OperationState state)
+    {
+        var result = OperationResult.Cancellation(correlation.OperationId, state);
+        await ReportAsync(correlation, DiagnosticEventCatalog.RebootCancelled, phase, DiagnosticStatus.Cancelled, commandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
+        return new RebootOperationResult(result, RebootErrorCatalog.Cancelled, attempts, outcome);
+    }
+
+    private async Task<RebootOperationResult> FailureAsync(CorrelationIds correlation, OperationErrorCode error, string code, DiagnosticPhase phase, string? commandId, OperationState state, RebootReconnectOutcome outcome, int attempts = 0)
+    {
+        var recovery = phase is DiagnosticPhase.Recovery or DiagnosticPhase.Verify
+            ? OperationRecovery.Failed
+            : state == OperationState.Unknown ? OperationRecovery.NotAttempted : OperationRecovery.NotRequired;
+        var result = OperationResult.Failure(correlation.OperationId, error, state, error == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun, recovery);
+        await ReportAsync(correlation, DiagnosticEventCatalog.RebootFailed, phase, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
+        return new RebootOperationResult(result, code, attempts, outcome);
+    }
+
+    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string? commandId, OperationErrorCode? error)
+    {
+        try
+        {
+            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "System reboot", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Reboot progress was recorded without remote output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch { }
+    }
+
+    private static bool TryParseRequired(string output, out bool required)
+    {
+        required = false;
+        return TryReadSingleRecord(output, "reboot_required=", out var value)
+            && (value == "true" || value == "false")
+            && bool.TryParse(value, out required);
+    }
+
+    private static bool IsExactRecord(string output, string expected) => TryReadSingleRecord(output, string.Empty, out var value) && value == expected;
+
+    private static bool TryReadSingleRecord(string output, string prefix, out string value)
+    {
+        value = string.Empty;
+        if (string.IsNullOrEmpty(output))
+        {
+            return false;
+        }
+
+        var line = output.EndsWith("\r\n", StringComparison.Ordinal) ? output[..^2]
+            : output.EndsWith('\n') ? output[..^1]
+            : output;
+        if (line.Contains('\r') || line.Contains('\n') || !line.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        value = line[prefix.Length..];
+        return !string.IsNullOrEmpty(value);
+    }
+
+    private static bool IsExpectedDisconnect(RemoteTransportFailureKind failure) => failure is RemoteTransportFailureKind.Network or RemoteTransportFailureKind.ConnectionRefused or RemoteTransportFailureKind.Timeout;
+
+    private static bool IsRetryableReconnectFailure(RemoteTransportFailureKind failure) => failure is RemoteTransportFailureKind.Network or RemoteTransportFailureKind.ConnectionRefused or RemoteTransportFailureKind.Timeout;
+
+    private static OperationErrorCode ToError(RemoteTransportFailureKind failure) => failure switch
+    {
+        RemoteTransportFailureKind.Network => OperationErrorCode.Network,
+        RemoteTransportFailureKind.ConnectionRefused => OperationErrorCode.ConnectionRefused,
+        RemoteTransportFailureKind.Timeout => OperationErrorCode.Timeout,
+        RemoteTransportFailureKind.Authentication => OperationErrorCode.Authentication,
+        RemoteTransportFailureKind.HostTrust => OperationErrorCode.HostTrust,
+        _ => OperationErrorCode.Unexpected,
+    };
+}

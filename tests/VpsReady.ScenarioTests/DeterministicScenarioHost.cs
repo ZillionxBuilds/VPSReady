@@ -73,6 +73,17 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
 
         if (Faults.TryTake(phase, command.Id.Value, out var fault) && fault is not null)
         {
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuRebootApply
+                && fault.Kind is ScenarioFaultKind.Disconnect or ScenarioFaultKind.DropConnection)
+            {
+                // A reboot can close SSH after the remote command has begun.
+                // This stateful fault differs from a pre-dispatch network loss:
+                // it records the reboot effect before simulating the expected
+                // command-channel disconnect that the workflow must recover.
+                _ = RebootProduction();
+                throw new ScenarioDisconnectException($"Scenario reboot disconnected after dispatch '{fault.FaultId}'.");
+            }
+
             var faultResult = await ScenarioFaultPlan.ApplyToCommandAsync(fault, command, cancellationToken).ConfigureAwait(false);
             if (faultResult is not null)
             {
@@ -137,6 +148,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuAptUpgradeApply => AptUpgradeProduction(),
             RemoteCommandCatalog.UbuntuAptUpgradeVerify => AptUpgradeVerify(),
             RemoteCommandCatalog.UbuntuRebootRequiredRead => Result($"reboot_required={State.Apt.RebootRequired.ToString().ToLowerInvariant()}"),
+            RemoteCommandCatalog.UbuntuRebootApply => RebootProduction(),
+            RemoteCommandCatalog.SshReconnectVerify => State.Ssh.IsConnected ? Result("reconnect=verified") : Failure(25, "Reconnect verification requires an authenticated session."),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -163,6 +176,18 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    internal Task ReconnectAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var reconnect = Reconnect();
+        if (!reconnect.Succeeded)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+
+        return Task.CompletedTask;
+    }
 
     public Task<RemoteCommandResult> ExecutePublicKeyDeploymentAsync(
         RemoteCommand command,
@@ -772,6 +797,14 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         return Result("reboot=started");
     }
 
+    private RemoteCommandResult RebootProduction()
+    {
+        State.Reboot.IsRebooting = true;
+        State.Reboot.ReconnectAttempts = 0;
+        State.Ssh.IsConnected = false;
+        return Result("reboot=started");
+    }
+
     private RemoteCommandResult Reconnect()
     {
         State.Reboot.ReconnectAttempts++;
@@ -783,6 +816,11 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         if (!State.Ssh.ReconnectSucceeds)
         {
             return Failure(110, "Reconnect failed in deterministic scenario.");
+        }
+
+        if (State.Ssh.HostKey != ScenarioHostKeyState.Matching)
+        {
+            return Failure(23, "Host key changed; explicit review is required.");
         }
 
         State.Reboot.IsRebooting = false;
@@ -869,7 +907,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             || commandId.Equals(ScenarioCommandIds.AptUpdate, StringComparison.Ordinal)
             || commandId.Equals(ScenarioCommandIds.AptUpgrade, StringComparison.Ordinal)
             || commandId.Equals(RemoteCommandCatalog.UbuntuAptIndexUpdate, StringComparison.Ordinal)
-            || commandId.Equals(RemoteCommandCatalog.UbuntuAptUpgradeApply, StringComparison.Ordinal))
+            || commandId.Equals(RemoteCommandCatalog.UbuntuAptUpgradeApply, StringComparison.Ordinal)
+            || commandId.Equals(RemoteCommandCatalog.UbuntuRebootApply, StringComparison.Ordinal))
         {
             return DiagnosticPhase.Apply;
         }
