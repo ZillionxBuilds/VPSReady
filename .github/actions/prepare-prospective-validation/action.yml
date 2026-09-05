@@ -1,0 +1,102 @@
+name: Prepare prospective validation tree
+description: Resolve one current-base merge identity, or reproduce that exact identity, without using GitHub's synthetic pull-request merge ref.
+
+inputs:
+  event_name:
+    required: true
+  source_sha:
+    required: true
+  pr_head_sha:
+    required: true
+  pr_base_sha:
+    required: true
+  pr_base_ref:
+    required: false
+  push_sha:
+    required: true
+  validation_base_sha:
+    required: false
+  expected_validation_sha:
+    required: false
+
+outputs:
+  pr_head_sha:
+    value: ${{ steps.prepare.outputs.pr_head_sha }}
+  pr_base_sha:
+    value: ${{ steps.prepare.outputs.pr_base_sha }}
+  validation_base_sha:
+    value: ${{ steps.prepare.outputs.validation_base_sha }}
+  validation_sha:
+    value: ${{ steps.prepare.outputs.validation_sha }}
+  push_sha:
+    value: ${{ steps.prepare.outputs.push_sha }}
+
+runs:
+  using: composite
+  steps:
+    - id: prepare
+      shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event_name }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
+        PR_BASE_SHA: ${{ inputs.pr_base_sha }}
+        PR_BASE_REF: ${{ inputs.pr_base_ref }}
+        PUSH_SHA: ${{ inputs.push_sha }}
+        PROVIDED_VALIDATION_BASE_SHA: ${{ inputs.validation_base_sha }}
+        EXPECTED_VALIDATION_SHA: ${{ inputs.expected_validation_sha }}
+      run: |
+        set -euo pipefail
+
+        if [[ "$EVENT_NAME" == 'pull_request' ]]; then
+          test -n "$PR_BASE_REF"
+          git fetch --no-tags origin "$PR_BASE_REF"
+          if [[ -n "$PROVIDED_VALIDATION_BASE_SHA" ]]; then
+            git rev-parse --verify "${PROVIDED_VALIDATION_BASE_SHA}^{commit}" >/dev/null
+            VALIDATION_BASE_SHA="$PROVIDED_VALIDATION_BASE_SHA"
+          else
+            VALIDATION_BASE_SHA="$(git rev-parse "origin/$PR_BASE_REF")"
+          fi
+
+          git checkout --detach "$VALIDATION_BASE_SHA"
+          git rev-parse --verify "${PR_HEAD_SHA}^{commit}" >/dev/null
+          validation_date="$(git show -s --format=%cI "$PR_HEAD_SHA")"
+          git -c user.name='VPSReady CI' -c user.email='ci@invalid.local' merge --no-ff --no-commit "$PR_HEAD_SHA"
+          GIT_AUTHOR_NAME='VPSReady CI' GIT_AUTHOR_EMAIL='ci@invalid.local' \
+            GIT_COMMITTER_NAME='VPSReady CI' GIT_COMMITTER_EMAIL='ci@invalid.local' \
+            GIT_AUTHOR_DATE="$validation_date" GIT_COMMITTER_DATE="$validation_date" \
+            git commit --no-gpg-sign --no-verify -m "VPSReady CI prospective merge $PR_HEAD_SHA into $VALIDATION_BASE_SHA"
+          VALIDATION_SHA="$(git rev-parse HEAD)"
+        else
+          git checkout --detach "$SOURCE_SHA"
+          VALIDATION_BASE_SHA="$PR_BASE_SHA"
+          VALIDATION_SHA="$(git rev-parse HEAD)"
+        fi
+
+        if [[ -n "$EXPECTED_VALIDATION_SHA" ]] && [[ "$VALIDATION_SHA" != "$EXPECTED_VALIDATION_SHA" ]]; then
+          printf 'Prospective validation identity mismatch: expected %s, got %s.\n' "$EXPECTED_VALIDATION_SHA" "$VALIDATION_SHA" >&2
+          exit 1
+        fi
+
+        mkdir -p TestResults/ci
+        {
+          printf 'PR_HEAD_SHA=%s\n' "$PR_HEAD_SHA"
+          printf 'PR_BASE_SHA=%s\n' "$PR_BASE_SHA"
+          printf 'VALIDATION_BASE_SHA=%s\n' "$VALIDATION_BASE_SHA"
+          printf 'VALIDATION_SHA=%s\n' "$VALIDATION_SHA"
+          printf 'PUSH_SHA=%s\n' "$PUSH_SHA"
+        } > TestResults/ci/sha-provenance.env
+        {
+          printf 'PR_HEAD_SHA=%s\n' "$PR_HEAD_SHA"
+          printf 'PR_BASE_SHA=%s\n' "$PR_BASE_SHA"
+          printf 'VALIDATION_BASE_SHA=%s\n' "$VALIDATION_BASE_SHA"
+          printf 'VALIDATION_SHA=%s\n' "$VALIDATION_SHA"
+          printf 'PUSH_SHA=%s\n' "$PUSH_SHA"
+        } >> "$GITHUB_ENV"
+        {
+          printf 'pr_head_sha=%s\n' "$PR_HEAD_SHA"
+          printf 'pr_base_sha=%s\n' "$PR_BASE_SHA"
+          printf 'validation_base_sha=%s\n' "$VALIDATION_BASE_SHA"
+          printf 'validation_sha=%s\n' "$VALIDATION_SHA"
+          printf 'push_sha=%s\n' "$PUSH_SHA"
+        } >> "$GITHUB_OUTPUT"
