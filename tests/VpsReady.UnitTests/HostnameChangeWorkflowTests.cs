@@ -65,6 +65,7 @@ public sealed class HostnameChangeWorkflowTests
             Assert.Null(entry.StandardOutput);
             Assert.Null(entry.StandardError);
         });
+        Assert.Contains(changeEvents, entry => entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.ExitCode == 0);
     }
 
     [Fact]

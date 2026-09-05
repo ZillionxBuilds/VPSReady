@@ -33,6 +33,7 @@ public sealed class PrivilegePreflightWorkflow(IDiagnosticSink diagnostics) : IP
         {
             await ReportAsync(correlation.ForStep("preflight"), DiagnosticEventCatalog.PrivilegePreflightStarted, DiagnosticPhase.Preflight, DiagnosticStatus.Started, command.Id.Value, null).ConfigureAwait(false);
             var response = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, response, command.Id.Value).ConfigureAwait(false);
             if (!response.Succeeded)
             {
                 return await FailAsync(correlation, response.ExitCode is 13 or 77 ? OperationErrorCode.Privilege : OperationErrorCode.Command, PrivilegePreflightErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
@@ -87,5 +88,10 @@ public sealed class PrivilegePreflightWorkflow(IDiagnosticSink diagnostics) : IP
             await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Privilege preflight", status == DiagnosticStatus.Failed ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation, phase, status, "Privilege capability was checked without a password prompt.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false);
         }
         catch { }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, RemoteCommandResult result, string commandId)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "Privilege preflight", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep("preflight"), DiagnosticPhase.Preflight, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Privilege capability command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 }

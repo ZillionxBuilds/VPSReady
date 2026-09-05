@@ -66,6 +66,7 @@ public sealed class RebootWorkflowTests
             Assert.Null(entry.StandardError);
         });
         Assert.Contains(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootRecoveryRequired && entry.Phase == DiagnosticPhase.Recovery);
+        Assert.Contains(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.CommandId == RemoteCommandCatalog.SshReconnectVerify && entry.ExitCode == 0);
     }
 
     [Fact]

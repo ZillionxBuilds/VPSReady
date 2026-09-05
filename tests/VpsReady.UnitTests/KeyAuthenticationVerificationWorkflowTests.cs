@@ -29,6 +29,7 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
             && item.Phase == DiagnosticPhase.Verify
             && item.CommandId == RemoteCommandCatalog.SshConnectionTest
             && item.Correlation.OperationId == result.Result.OperationId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.ExitCode == 0);
         Assert.All(diagnostics.Events, item => Assert.DoesNotContain("/private/keys", item.Message, StringComparison.Ordinal));
     }
 

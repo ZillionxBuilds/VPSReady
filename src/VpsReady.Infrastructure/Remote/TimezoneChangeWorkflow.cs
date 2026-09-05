@@ -29,6 +29,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             activeCommand = RemoteCommandCatalog.UbuntuTimezoneCurrentRead;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
             var current = await transport.ExecuteAsync(UbuntuTimezoneCommandCatalog.CreateCurrentReadRequest(), cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Plan, current, activeCommand).ConfigureAwait(false);
             if (!current.Succeeded)
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Command, TimezoneChangeErrorCatalog.Command, DiagnosticPhase.Plan, activeCommand).ConfigureAwait(false);
@@ -41,6 +42,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             activeCommand = RemoteCommandCatalog.UbuntuTimezoneAvailableList;
             var available = await transport.ExecuteAsync(UbuntuTimezoneCommandCatalog.CreateAvailableListRequest(), cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Plan, available, activeCommand).ConfigureAwait(false);
             if (!available.Succeeded)
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Command, TimezoneChangeErrorCatalog.Command, DiagnosticPhase.Plan, activeCommand).ConfigureAwait(false);
@@ -115,6 +117,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, activePhase, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
             applyAttempted = true;
             var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, activePhase, applied, activeCommand).ConfigureAwait(false);
             if (!applied.Succeeded)
             {
                 return await FailureAsync(correlation, applied.ExitCode is 13 or 77 ? OperationErrorCode.Privilege : OperationErrorCode.Command, applied.ExitCode is 13 or 77 ? TimezoneChangeErrorCatalog.Privilege : TimezoneChangeErrorCatalog.Command, activePhase, activeCommand, OperationState.Unknown).ConfigureAwait(false);
@@ -125,6 +128,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             activeCommand = verify.Id.Value;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, activePhase, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, activePhase, verified, activeCommand).ConfigureAwait(false);
             if (!verified.Succeeded || !TryParseSingleTimezone(verified.StandardOutput, out var observed) || !string.Equals(observed, plan.SelectedTimezone, StringComparison.Ordinal))
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, TimezoneChangeErrorCatalog.Verification, activePhase, activeCommand, OperationState.Applied).ConfigureAwait(false);
@@ -227,6 +231,11 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
     private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string? commandId, OperationErrorCode? error)
     {
         try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Timezone", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Timezone workflow progress was recorded without timezone output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false); } catch { }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string? commandId)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "Timezone", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Timezone command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 
     private static OperationErrorCode ToError(RemoteTransportFailureKind kind) => kind switch

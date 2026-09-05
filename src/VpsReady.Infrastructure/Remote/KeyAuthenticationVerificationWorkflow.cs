@@ -61,6 +61,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
                 maximumOutputBytes: 0);
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying the separate key-authenticated connection.", verification.Id.Value, null).ConfigureAwait(false);
             var commandResult = await candidate.ExecuteAsync(verification, linkedCancellation.Token).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, commandResult, verification.Id.Value).ConfigureAwait(false);
             if (!commandResult.Succeeded)
             {
                 return await FailAsync(correlation, OperationErrorCode.Verification, KeyAuthenticationVerificationErrorCatalog.Verification, DiagnosticPhase.Verify, verification.Id.Value).ConfigureAwait(false);
@@ -127,6 +128,15 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         {
             // Diagnostics failure cannot turn a candidate connection into success.
         }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, RemoteCommandResult result, string commandId)
+    {
+        try
+        {
+            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "SSH key authentication", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(DiagnosticPhase.Verify.ToString().ToLowerInvariant()), DiagnosticPhase.Verify, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Key-authentication verification command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Verification.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch { }
     }
 
     private static OperationErrorCode ToOperationError(RemoteTransportFailureKind failure) => failure switch

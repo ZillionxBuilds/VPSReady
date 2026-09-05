@@ -28,6 +28,7 @@ public sealed class TimezoneChangeWorkflowTests
             Assert.True(item.CommandId is null || DiagnosticCommandCatalog.IsKnown(item.CommandId));
         });
         Assert.All(TimezoneChangeErrorCatalog.All, code => Assert.True(DiagnosticErrorCatalog.IsKnown(code), code));
+        Assert.Equal([0, 0, 0, 0], sink.Events.Where(item => item.EventId == DiagnosticEventCatalog.CommandCompleted).Select(item => item.ExitCode));
     }
 
     [Theory]

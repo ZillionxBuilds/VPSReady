@@ -25,6 +25,7 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, update.Id.Value, null).ConfigureAwait(false);
             var applied = await transport.ExecuteAsync(update, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, update.Id.Value).ConfigureAwait(false);
             if (!applied.Succeeded)
             {
                 var locked = applied.ExitCode == 100;
@@ -34,6 +35,7 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             var verify = UbuntuPackageCommandCatalog.CreateVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
             if (!verified.Succeeded || !string.Equals(verified.StandardOutput.Trim(), "apt_index=refreshed", StringComparison.Ordinal))
             {
                 return await FailAsync(correlation, OperationErrorCode.Verification, PackageIndexUpdateErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
@@ -100,5 +102,10 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
     private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string? commandId, OperationErrorCode? error)
     {
         try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Package index update", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Package index update progress was recorded without remote output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false); } catch { }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "Package index update", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Package index update command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Apt.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 }

@@ -96,6 +96,7 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
                 applyAttempted = true;
                 await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
                 var applied = await hostnameTransport.ExecuteHostnameChangeAsync(apply, plan.ProposedHostname!, cancellationToken).ConfigureAwait(false);
+                await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
                 if (!applied.Succeeded)
                 {
                     return await FailureAsync(correlation, applied.ExitCode is 13 or 77 ? OperationErrorCode.Privilege : OperationErrorCode.Command, applied.ExitCode is 13 or 77 ? HostnameChangeErrorCatalog.Privilege : HostnameChangeErrorCatalog.Command, DiagnosticPhase.Apply, apply.Id.Value, OperationState.Unknown).ConfigureAwait(false);
@@ -169,6 +170,11 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Hostname change", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Hostname workflow progress was recorded without hostname output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false);
         }
         catch { }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "Hostname change", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Hostname command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 
     private static OperationErrorCode ToError(RemoteTransportFailureKind kind) => kind switch
