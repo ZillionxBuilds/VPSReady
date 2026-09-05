@@ -29,10 +29,13 @@ public static partial class UbuntuServerFactParser
         }
 
         var lines = Lines(result.StandardOutput);
-        var line = lines.Length == 1 ? lines[0] : null;
-        return line switch
+        if (lines.Length == 1 && lines[0] == "ufw=unavailable")
         {
-            "ufw=unavailable" => UfwSnapshot.StateOnly(UfwFirewallState.Absent),
+            return UfwSnapshot.StateOnly(UfwFirewallState.Absent);
+        }
+
+        return lines.FirstOrDefault() switch
+        {
             "Status: inactive" => UfwSnapshot.StateOnly(UfwFirewallState.Inactive),
             "Status: active" => UfwSnapshot.StateOnly(UfwFirewallState.Active),
             _ => UfwSnapshot.StateOnly(UfwFirewallState.Unknown),

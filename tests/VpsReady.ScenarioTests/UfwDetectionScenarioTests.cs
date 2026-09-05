@@ -18,6 +18,13 @@ public sealed class UfwDetectionScenarioTests
         state.Ufw.Status = stateValue;
         var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
         var result = await host.ExecuteAsync(UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.UbuntuUfwDetectionRead), CancellationToken.None);
+
+        if (stateValue == ScenarioUfwStatus.Active)
+        {
+            Assert.Contains("To                         Action      From", result.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("[ 1]", result.StandardOutput, StringComparison.Ordinal);
+        }
+
         Assert.Equal(expected, UbuntuServerFactParser.ParseUfwDetection(result).State);
     }
 
