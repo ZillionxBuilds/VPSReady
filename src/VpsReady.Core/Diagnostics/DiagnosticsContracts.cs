@@ -138,6 +138,9 @@ public static class DiagnosticEventCatalog
     public const string OpenSshConfigEditSucceeded = "ssh.config_edit.succeeded";
     public const string OpenSshConfigEditFailed = "ssh.config_edit.failed";
     public const string OpenSshConfigEditCancelled = "ssh.config_edit.cancelled";
+    public const string PrivilegePreflightStarted = "privilege.preflight.started";
+    public const string PrivilegePreflightSucceeded = "privilege.preflight.succeeded";
+    public const string PrivilegePreflightFailed = "privilege.preflight.failed";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -149,6 +152,7 @@ public static class DiagnosticEventCatalog
         PublicKeyDeploymentStarted, PublicKeyDeploymentSucceeded, PublicKeyDeploymentFailed, PublicKeyDeploymentCancelled,
         KeyAuthenticationVerificationStarted, KeyAuthenticationVerificationSucceeded, KeyAuthenticationVerificationFailed, KeyAuthenticationVerificationCancelled,
         OpenSshConfigEditStarted, OpenSshConfigEditSucceeded, OpenSshConfigEditFailed, OpenSshConfigEditCancelled,
+        PrivilegePreflightStarted, PrivilegePreflightSucceeded, PrivilegePreflightFailed,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
