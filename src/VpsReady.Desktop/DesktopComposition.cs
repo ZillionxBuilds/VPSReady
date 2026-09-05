@@ -40,6 +40,7 @@ public static class DesktopComposition
         services.AddSingleton<ILocalEd25519KeyGenerator, Ed25519OpenSshKeyPairGenerator>();
         services.AddSingleton<IExistingSshKeySelector, ExistingOpenSshKeySelector>();
         services.AddSingleton<PublicKeyDeploymentWorkflow>();
+        services.AddSingleton<KeyAuthenticationVerificationWorkflow>();
         services.AddSingleton<SafeUnhandledExceptionReporter>();
         services.AddSingleton<IRemoteTransportFactory, SshNetRemoteTransportFactory>();
         services.AddSingleton<IConnectionSessionLifecycle, ConnectionSessionLifecycle>();

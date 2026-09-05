@@ -4,6 +4,7 @@ using System.Text;
 using Renci.SshNet;
 using Renci.SshNet.Common;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 
 namespace VpsReady.Infrastructure.Remote;
@@ -13,7 +14,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// a connection is usable only after SSH.NET reports it connected and its host
 /// key has passed the persisted fail-closed trust assessment.
 /// </summary>
-public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport
+public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport
 {
     private readonly IKnownHostTrustStore trustStore;
     private readonly SemaphoreSlim connectionGate = new(1, 1);
@@ -120,6 +121,120 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
                     Array.Clear(passwordBytes);
                 }
 
+                if (candidate is not null)
+                {
+                    candidate.HostKeyReceived -= OnHostKeyReceived;
+                    candidate.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            connectionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Opens a fresh, disposable key-authenticated connection. The caller must
+    /// bind it to the exact host+port identity already selected for trust; this
+    /// method does not reuse or alter any password-authenticated session.
+    /// </summary>
+    public async Task ConnectWithPrivateKeyAsync(
+        RemoteEndpoint endpoint,
+        KnownHostIdentity trustedHost,
+        ExistingSshKeyLocation privateKey,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(trustedHost);
+        ArgumentNullException.ThrowIfNull(privateKey);
+        ValidateFiniteTimeout(timeout);
+        if (!Equals(new KnownHostIdentity(endpoint.Host, endpoint.Port), trustedHost))
+        {
+            throw new ArgumentException("Key authentication must use the explicitly trusted host identity.", nameof(trustedHost));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (client is not null)
+            {
+                throw new InvalidOperationException("This SSH transport is already connected or connecting.");
+            }
+
+            LastHostTrustAssessment = null;
+            hostTrustAssessmentFailed = false;
+            SshClient? candidate = null;
+            try
+            {
+                PrivateKeyFile keyFile;
+                try
+                {
+                    keyFile = new PrivateKeyFile(privateKey.PrivateKeyPath);
+                }
+                catch
+                {
+                    // Local key parsing/access details, including its path,
+                    // remain outside the transport and diagnostics boundary.
+                    throw new RemoteTransportException(RemoteTransportFailureKind.Authentication);
+                }
+
+                var authentication = new PrivateKeyAuthenticationMethod(endpoint.UserName, keyFile);
+                var connection = new ConnectionInfo(endpoint.Host, endpoint.Port, endpoint.UserName, authentication)
+                {
+                    Timeout = timeout,
+                };
+                candidate = new SshClient(connection);
+                candidate.HostKeyReceived += OnHostKeyReceived;
+
+                using var timeoutCancellation = new CancellationTokenSource(timeout);
+                using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+                try
+                {
+                    this.endpoint = endpoint;
+                    await candidate.ConnectAsync(linkedCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+                {
+                    throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+                }
+
+                RequireExplicitTrustedHost(LastHostTrustAssessment);
+                if (!candidate.IsConnected)
+                {
+                    throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+                }
+
+                client = candidate;
+                candidate = null;
+            }
+            catch (OperationCanceledException)
+            {
+                this.endpoint = null;
+                throw;
+            }
+            catch (RemoteTransportException)
+            {
+                this.endpoint = null;
+                throw;
+            }
+            catch (Exception) when (LastHostTrustAssessment is { IsTrusted: false } || hostTrustAssessmentFailed)
+            {
+                this.endpoint = null;
+                throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+            }
+            catch (Exception exception)
+            {
+                this.endpoint = null;
+                throw ToSafeConnectionFailure(exception);
+            }
+            finally
+            {
                 if (candidate is not null)
                 {
                     candidate.HostKeyReceived -= OnHostKeyReceived;
