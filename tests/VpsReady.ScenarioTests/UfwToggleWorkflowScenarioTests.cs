@@ -66,6 +66,45 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task AlreadyActiveSafeFirewallVerifiesSessionContinuityBeforeIdempotentSuccess()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.active-continuity-verified");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ssh.IsConnected = true;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var transport = new PhasedScenarioTransport(host);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.EnableAsync(transport, confirmed: true);
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest], transport.CommandIds);
+        Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, diagnostics.Events[^1].CommandId);
+    }
+
+    [Fact]
+    public async Task AlreadyActiveContinuityFailureUsesReadOnlyRecoveryAndNeverReportsSuccess()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.active-continuity-failure");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ssh.IsConnected = false;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var transport = new PhasedScenarioTransport(host);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("REMOTE_COMMAND_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.CommandIds);
+        Assert.DoesNotContain(diagnostics.Events, diagnosticEvent => diagnosticEvent.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task VerificationFaultAfterEnableUsesReadOnlyRecoveryAndNeverFalseSuccess()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.enable-verify-fault");
@@ -169,9 +208,11 @@ public sealed class UfwToggleWorkflowScenarioTests
     private sealed class PhasedScenarioTransport(DeterministicScenarioHost host) : IRemoteTransport
     {
         private int listReads;
+        public List<string> CommandIds { get; } = [];
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
+            CommandIds.Add(command.Id.Value);
             var phase = command.Id.Value switch
             {
                 RemoteCommandCatalog.SshSessionPortRead => DiagnosticPhase.Preflight,

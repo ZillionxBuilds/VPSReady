@@ -106,6 +106,37 @@ public sealed class UfwToggleWorkflowTests
     }
 
     [Fact]
+    public async Task AlreadyActiveSafeFirewallVerifiesAuthenticatedContinuityBeforeIdempotentSuccess()
+    {
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(string.Empty));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest], transport.Commands.Select(command => command.Id.Value));
+        Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, diagnostics.Events[^1].CommandId);
+    }
+
+    [Fact]
+    public async Task AlreadyActiveContinuityFailureRefreshesWithoutFalseSuccess()
+    {
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(string.Empty, exitCode: 25), Result(ActiveWithSshAllows));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("REMOTE_COMMAND_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Select(command => command.Id.Value));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task EnableVerificationMismatchUsesReadOnlyRecoveryAndNeverReportsSuccess()
     {
         var transport = new RecordingTransport(

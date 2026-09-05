@@ -41,9 +41,20 @@ public sealed class UfwToggleWorkflow
 
             if (preflight.Snapshot.State == UfwFirewallState.Active)
             {
-                return HasSshAllows(preflight.Snapshot, port)
-                    ? await Success(correlation, "EnableFirewall", list.Id.Value, preflight.Snapshot, OperationState.Unchanged).ConfigureAwait(false)
-                    : await Failure(correlation, "EnableFirewall", DiagnosticPhase.Plan, list.Id.Value, OperationErrorCode.Validation, OperationState.Unchanged, preflight.Snapshot).ConfigureAwait(false);
+                if (!HasSshAllows(preflight.Snapshot, port))
+                {
+                    return await Failure(correlation, "EnableFirewall", DiagnosticPhase.Plan, list.Id.Value, OperationErrorCode.Validation, OperationState.Unchanged, preflight.Snapshot).ConfigureAwait(false);
+                }
+
+                // Even the idempotent path is a user-visible enable success.
+                // A fresh active listing alone does not prove the authenticated
+                // channel survived, so it must perform the same continuity
+                // verification as the mutation path before returning success.
+                var activeContinuity = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.SshConnectionTest);
+                var activeContinuityResult = await Execute(correlation, "EnableFirewall", DiagnosticPhase.Verify, transport, activeContinuity, cancellationToken).ConfigureAwait(false);
+                return activeContinuityResult.Succeeded
+                    ? await Success(correlation, "EnableFirewall", activeContinuity.Id.Value, preflight.Snapshot, OperationState.Unchanged).ConfigureAwait(false)
+                    : await Recover(correlation, "EnableFirewall", transport, list, ErrorForApply(activeContinuityResult), cancellationToken, OperationState.Unchanged).ConfigureAwait(false);
             }
 
             await Report(correlation, "EnableFirewall", DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, "Ensuring and verifying TCP SSH allow rules before firewall enable.", list.Id.Value).ConfigureAwait(false);
@@ -149,16 +160,16 @@ public sealed class UfwToggleWorkflow
         catch { return await Failure(correlation, "DisableFirewall", mutated ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, list.Id.Value, OperationErrorCode.Unexpected, mutated ? OperationState.PartiallyApplied : OperationState.Unchanged, null).ConfigureAwait(false); }
     }
 
-    private async Task<UfwToggleOperationResult> Recover(CorrelationIds c, string action, IRemoteTransport t, RemoteCommand list, OperationErrorCode original, CancellationToken token)
+    private async Task<UfwToggleOperationResult> Recover(CorrelationIds c, string action, IRemoteTransport t, RemoteCommand list, OperationErrorCode original, CancellationToken token, OperationState affectedState = OperationState.PartiallyApplied)
     {
         await Report(c, action, DiagnosticEventCatalog.OperationRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, "Firewall state was not verified; refreshing without further mutation.", list.Id.Value, original).ConfigureAwait(false);
         try
         {
             var read = await Read(c, action, DiagnosticPhase.Recovery, t, list, token).ConfigureAwait(false);
             var recovered = read.IsComplete;
-            return await Failure(c, action, DiagnosticPhase.Recovery, list.Id.Value, recovered ? original : OperationErrorCode.Recovery, OperationState.PartiallyApplied, recovered ? read.Snapshot : null, original == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun, recovered ? OperationRecovery.Succeeded : OperationRecovery.Failed).ConfigureAwait(false);
+            return await Failure(c, action, DiagnosticPhase.Recovery, list.Id.Value, recovered ? original : OperationErrorCode.Recovery, affectedState, recovered ? read.Snapshot : null, original == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun, recovered ? OperationRecovery.Succeeded : OperationRecovery.Failed).ConfigureAwait(false);
         }
-        catch { return await Failure(c, action, DiagnosticPhase.Recovery, list.Id.Value, OperationErrorCode.Recovery, OperationState.PartiallyApplied, null, OperationVerification.NotRun, OperationRecovery.Failed).ConfigureAwait(false); }
+        catch { return await Failure(c, action, DiagnosticPhase.Recovery, list.Id.Value, OperationErrorCode.Recovery, affectedState, null, OperationVerification.NotRun, OperationRecovery.Failed).ConfigureAwait(false); }
     }
 
     private async Task<UfwRuleListRead> Read(CorrelationIds c, string action, DiagnosticPhase phase, IRemoteTransport t, RemoteCommand command, CancellationToken token)
