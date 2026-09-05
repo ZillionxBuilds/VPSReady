@@ -8,24 +8,34 @@ notice=''
 inventory=''
 self_test='false'
 
-strip_trailing_cr() {
-  printf '%s' "${1%$'\r'}"
-}
-
-assert_windows_tsv_normalization() {
-  local fixture=$'Avalonia\t11.3.20\tlocked-content-hash\r'
-  local id version content_hash
-  IFS=$'\t' read -r id version content_hash <<< "$fixture"
-  id="$(strip_trailing_cr "$id")"
-  version="$(strip_trailing_cr "$version")"
-  content_hash="$(strip_trailing_cr "$content_hash")"
-  [[ "$id" == 'Avalonia' && "$version" == '11.3.20' && "$content_hash" == 'locked-content-hash' ]] || {
-    printf '%s\n' 'Windows-compatible TSV normalization self-check failed.' >&2
+assert_windows_json_inventory_comparison() {
+  local expected_fixture=$'{"id":"Avalonia","version":"11.3.20","content_hash":"avalonia-hash"}\r\n{"id":"Microsoft.Extensions.DependencyInjection.Abstractions","version":"10.0.11","content_hash":"di-abstractions-hash"}\r\n'
+  local inventory_fixture='[{"id":"Avalonia","version":"11.3.20","content_hash":"avalonia-hash"},{"id":"Microsoft.Extensions.DependencyInjection.Abstractions","version":"10.0.11","content_hash":"di-abstractions-hash"}]'
+  local notice_fixture=$'| `Avalonia` | `11.3.20` | `avalonia-hash` | license |\r\n| `Microsoft.Extensions.DependencyInjection.Abstractions` | `10.0.11` | `di-abstractions-hash` | license |\r\n'
+  local mutated_notice_fixture=$'| `Avalonia` | `0.0.0` | `wrong-hash` | license |\r\n| `Microsoft.Extensions.DependencyInjection.Abstractions` | `10.0.11` | `di-abstractions-hash` | license |\r\n'
+  local missing mutated_missing
+  missing="$(printf '%s' "$expected_fixture" | jq -cs --argjson inventory "$inventory_fixture" --arg notice "$notice_fixture" '
+    [.[] as $expected
+     | select(
+         (any($inventory[]; .id == $expected.id and .version == $expected.version and .content_hash == $expected.content_hash) | not)
+         or ($notice | contains("| `\($expected.id)` | `\($expected.version)` | `\($expected.content_hash)` |") | not)
+       )
+     | $expected.id]')"
+  [[ "$missing" == '[]' ]] || {
+    printf '%s\n' 'Windows-compatible JSON inventory comparison self-check failed.' >&2
+    exit 1
+  }
+  mutated_missing="$(printf '%s' "$expected_fixture" | jq -cs --arg notice "$mutated_notice_fixture" '
+    [.[] as $expected
+     | select($notice | contains("| `\($expected.id)` | `\($expected.version)` | `\($expected.content_hash)` |") | not)
+     | $expected.id]')"
+  [[ "$mutated_missing" == '["Avalonia"]' ]] || {
+    printf '%s\n' 'Exact human-notice row mutation self-check failed.' >&2
     exit 1
   }
 }
 
-assert_windows_tsv_normalization
+assert_windows_json_inventory_comparison
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -53,7 +63,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [[ "$self_test" == 'true' ]]; then
-  printf '%s\n' 'Third-party notice verifier self-test passed: CRLF TSV fields normalize before exact-lock comparison.'
+  printf '%s\n' 'Third-party notice verifier self-test passed: CRLF JSON fixture validates Avalonia and Microsoft.Extensions.DependencyInjection.Abstractions exactly.'
   exit 0
 fi
 
@@ -74,44 +84,50 @@ expected_count="$(jq -r '
    | .value | to_entries[]
    | select(.value.type != "Project")
    | select(.value.resolved != null and .value.contentHash != null)
-   | [.key, .value.resolved, .value.contentHash]
-   | @tsv] | unique | length' "$lock")"
+   | {id: .key, version: .value.resolved, content_hash: .value.contentHash}]
+   | unique | length' "$lock")"
 actual_count="$(jq -r '.runtime_package_count' "$inventory")"
-expected_count="$(strip_trailing_cr "$expected_count")"
-actual_count="$(strip_trailing_cr "$actual_count")"
 [[ "$expected_count" -gt 0 && "$actual_count" == "$expected_count" ]] || {
   printf 'Generated runtime notice count mismatch: expected %s, found %s\n' "$expected_count" "$actual_count" >&2
   exit 1
 }
 
 source_lock="$(jq -r '.source_lock' "$inventory")"
-source_lock="$(strip_trailing_cr "$source_lock")"
 [[ "$source_lock" == 'src/VpsReady.Desktop/packages.lock.json' ]] || {
   printf '%s\n' 'Generated inventory has an unexpected source-lock reference.' >&2
   exit 1
 }
 
-while IFS=$'\t' read -r id version content_hash; do
-  id="$(strip_trailing_cr "$id")"
-  version="$(strip_trailing_cr "$version")"
-  content_hash="$(strip_trailing_cr "$content_hash")"
-  [[ -n "$id" ]] || continue
-  jq -e --arg id "$id" --arg version "$version" --arg hash "$content_hash" \
-    'any(.runtime_packages[]; .id == $id and .version == $version and .content_hash == $hash)' \
-    "$inventory" >/dev/null || {
-      printf 'Generated inventory omits exact locked runtime package: %s %s\n' "$id" "$version" >&2
-      exit 1
-    }
-  grep -Fq "$id" "$notice" || {
-    printf 'Generated human-readable notice omits runtime package: %s\n' "$id" >&2
-    exit 1
-  }
-done < <(jq -r '
-  .dependencies | to_entries[]
-  | select(.key == "net10.0" or (.key | startswith("net10.0/")))
-  | .value | to_entries[]
-  | select(.value.type != "Project")
-  | select(.value.resolved != null and .value.contentHash != null)
-  | [.key, .value.resolved, .value.contentHash] | @tsv' "$lock" | sort -u)
+missing_inventory="$(jq -c --slurpfile lock "$lock" '
+  def locked_packages:
+    [$lock[0].dependencies | to_entries[]
+     | select(.key == "net10.0" or (.key | startswith("net10.0/")))
+     | .value | to_entries[]
+     | select(.value.type != "Project" and .value.resolved != null and .value.contentHash != null)
+     | {id: .key, version: .value.resolved, content_hash: .value.contentHash}]
+    | unique;
+  [(locked_packages[]) as $expected
+   | select(any(.runtime_packages[]; .id == $expected.id and .version == $expected.version and .content_hash == $expected.content_hash) | not)
+   | $expected]' "$inventory")"
+[[ "$missing_inventory" == '[]' ]] || {
+  printf 'Generated inventory omits exact locked runtime package records: %s\n' "$missing_inventory" >&2
+  exit 1
+}
+
+missing_notice="$(jq -c --slurpfile lock "$lock" --rawfile notice "$notice" '
+  def locked_packages:
+    [$lock[0].dependencies | to_entries[]
+     | select(.key == "net10.0" or (.key | startswith("net10.0/")))
+     | .value | to_entries[]
+     | select(.value.type != "Project" and .value.resolved != null and .value.contentHash != null)
+     | {id: .key, version: .value.resolved, content_hash: .value.contentHash}]
+    | unique;
+  [(locked_packages[]) as $expected
+   | select($notice | contains("| `\($expected.id)` | `\($expected.version)` | `\($expected.content_hash)` |") | not)
+   | $expected]' "$inventory")"
+[[ "$missing_notice" == '[]' ]] || {
+  printf 'Generated human-readable notice omits runtime packages: %s\n' "$missing_notice" >&2
+  exit 1
+}
 
 printf 'Third-party notices passed: %s exact locked runtime packages in generated notice and inventory.\n' "$expected_count"
