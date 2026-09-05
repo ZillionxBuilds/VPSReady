@@ -10,7 +10,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// Success is possible only after the new connection has a matching trusted
 /// host key and completes the catalogued minimum verification command.
 /// </summary>
-public sealed class KeyAuthenticationVerificationWorkflow
+public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVerifier
 {
     private const string ActionName = "VerifyKeyAuthentication";
     private readonly IRemoteTransportFactory transportFactory;

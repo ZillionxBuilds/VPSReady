@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Local;
+using VpsReady.Core.Remote;
 
 namespace VpsReady.Application;
 
@@ -48,6 +50,31 @@ public sealed class AppViewModel : ObservableObject
     {
         ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
         Firewall = new FirewallViewModel(applicationSession, firewallManagement, firewallDiagnostics);
+    }
+
+    public AppViewModel(
+        IApplicationSession applicationSession,
+        IConnectionSessionLifecycle lifecycle,
+        IDiagnosticsWorkspace diagnosticsWorkspace,
+        IFirewallManagement firewallManagement,
+        ILocalEd25519KeyGenerator keyGenerator,
+        IExistingSshKeySelector keySelector,
+        IPublicKeyDeployment keyDeployment,
+        IKeyAuthenticationVerifier keyAuthentication,
+        IOpenSshConfigEditor configEditor,
+        IDiagnosticSink diagnostics)
+        : this(applicationSession, false, null, diagnosticsWorkspace)
+    {
+        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
+        Firewall = new FirewallViewModel(applicationSession, firewallManagement, diagnostics);
+        SshManagement = new SshManagementViewModel(
+            applicationSession,
+            keyGenerator,
+            keySelector,
+            keyDeployment,
+            keyAuthentication,
+            configEditor,
+            diagnostics);
     }
 
     private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)
@@ -99,6 +126,7 @@ public sealed class AppViewModel : ObservableObject
     public ActivityDiagnosticsViewModel? ActivityDiagnostics { get; }
     public ConnectionOverviewViewModel? ConnectionOverview { get; }
     public FirewallViewModel? Firewall { get; }
+    public SshManagementViewModel? SshManagement { get; }
 
     /// <summary>Desktop hosts copy this already-sanitized report only after an explicit user action.</summary>
     public event Action<string>? SafeIssueReportReady;
@@ -302,7 +330,8 @@ public sealed record ShellPageViewModel(
 {
     public bool IsActivityPage => Page == ShellPage.ActivityAndDiagnostics;
     public bool IsFirewallPage => Page == ShellPage.Firewall;
-    public bool IsPlaceholderPage => Page is not ShellPage.Firewall;
+    public bool IsSshManagementPage => Page == ShellPage.SshKeysAndConfig;
+    public bool IsPlaceholderPage => Page is not ShellPage.Firewall and not ShellPage.SshKeysAndConfig;
     public bool IsConnectionSurfacePage => Page is ShellPage.Connection or ShellPage.Overview;
 
     public static ShellPageViewModel Create(ShellPage page) => page switch

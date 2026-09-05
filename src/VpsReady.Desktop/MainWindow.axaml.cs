@@ -125,6 +125,68 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void GenerateSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh)
+        {
+            return;
+        }
+
+        var selected = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Choose a local private-key destination",
+            SuggestedFileName = "id_ed25519",
+        });
+        var path = selected?.Path.LocalPath;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await ssh.GenerateAsync(path);
+        }
+    }
+
+    private async void SelectSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh)
+        {
+            return;
+        }
+
+        var selected = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select a local private key",
+            AllowMultiple = false,
+        });
+        var path = selected.Count == 1 ? selected[0].Path.LocalPath : null;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await ssh.SelectAsync(path);
+        }
+    }
+
+    private async void DeploySshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh)
+        {
+            await ssh.DeployAsync();
+        }
+    }
+
+    private async void VerifySshKeyAuthenticationAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh)
+        {
+            await ssh.VerifyKeyAuthenticationAsync();
+        }
+    }
+
+    private async void SaveSshConfigAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh)
+        {
+            await ssh.SaveConfigAsync();
+        }
+    }
+
     private void ConnectionPasswordKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
         var connection = viewModel?.ConnectionOverview;
