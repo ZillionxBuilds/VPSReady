@@ -76,11 +76,16 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             var faultResult = await ScenarioFaultPlan.ApplyToCommandAsync(fault, command, cancellationToken).ConfigureAwait(false);
             if (faultResult is not null)
             {
-                return faultResult with { Duration = State.Ssh.CommandLatency + faultResult.Duration };
+                return new RemoteCommandResult(
+                    faultResult.ExitCode,
+                    faultResult.StandardOutput,
+                    faultResult.StandardError,
+                    State.Ssh.CommandLatency + faultResult.Duration,
+                    command.OutputCapturePolicy);
             }
         }
 
-        return command.Id.Value switch
+        var result = command.Id.Value switch
         {
             ScenarioCommandIds.CounterRead => Result(State.Counter.ToString(CultureInfo.InvariantCulture)),
             ScenarioCommandIds.CounterIncrement => Result((++State.Counter).ToString(CultureInfo.InvariantCulture)),
@@ -112,6 +117,13 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             ScenarioCommandIds.Reconnect => Reconnect(),
             _ => throw new InvalidOperationException($"Scenario '{State.ScenarioId}' does not recognize command ID '{command.Id.Value}'."),
         };
+
+        return new RemoteCommandResult(
+            result.ExitCode,
+            result.StandardOutput,
+            result.StandardError,
+            result.Duration,
+            command.OutputCapturePolicy);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

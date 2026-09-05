@@ -406,16 +406,15 @@ public sealed class ScenarioStateTests
     }
 
     [Fact]
-    public async Task CredentialBearingArgumentSummariesAreRejectedBeforeExecution()
+    public void CredentialBearingArgumentSummariesAreRejectedBeforeExecution()
     {
-        await using var services = ScenarioComposition.Create("scenario.e2.safe-arguments");
-        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        using var services = ScenarioComposition.Create("scenario.e2.safe-arguments");
         var runtimeSecret = string.Concat("runtime", "-", "only", "-", "secret");
-        var command = Command(ScenarioCommandIds.UbuntuHostnameSet, $"password={runtimeSecret} hostname=unsafe");
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => host.ExecuteAsync(command, CancellationToken.None));
+        var exception = Assert.Throws<ArgumentException>(() =>
+            Command(ScenarioCommandIds.UbuntuHostnameSet, $"password={runtimeSecret} hostname=unsafe"));
 
-        Assert.Contains("credential-bearing", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("no credentials", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("scenario-ubuntu", services.GetRequiredService<ScenarioHostState>().Hostname);
     }
 
