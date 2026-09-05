@@ -162,7 +162,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
                 OnPlanAvailabilityChanged();
             }
             );
-        }, cancellationToken);
+        }, cancellationToken, ClearUpgradePlan);
 
     public Task InspectRebootRequiredAsync(CancellationToken cancellationToken = default) => RunAsync(
         "reboot-required-inspect",
@@ -264,7 +264,8 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
     private async Task RunAsync(
         string action,
         Func<IRemoteTransport, CancellationToken, Task<(OperationResult Result, string? ErrorCode, Action? Apply)>> execute,
-        CancellationToken callerCancellation)
+        CancellationToken callerCancellation,
+        Action? invalidateOnOverriddenResult = null)
     {
         if (!TryBegin(callerCancellation, out var cancellation))
         {
@@ -293,6 +294,13 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             if (completed is { } accepted && string.Equals(result.OperationId, accepted.Result.OperationId, StringComparison.Ordinal))
             {
                 accepted.Apply?.Invoke();
+            }
+            else
+            {
+                // A caller cancellation or finite session timeout can override
+                // a workflow that later completes. A reviewed mutation plan is
+                // no longer safe to reuse after that boundary.
+                invalidateOnOverriddenResult?.Invoke();
             }
             Complete(result, workflowError);
         }
@@ -359,7 +367,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         if (!session.Snapshot.IsConnected)
         {
             Cancel();
-            upgradePlan = null;
+            ClearUpgradePlan();
             hostnamePlan = null;
             timezonePlan = null;
             RebootRequired = null;
@@ -381,6 +389,13 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(CanStartOperation));
         OnPropertyChanged(nameof(CanCancel));
+        OnPlanAvailabilityChanged();
+    }
+
+    private void ClearUpgradePlan()
+    {
+        upgradePlan = null;
+        IsUpgradeConfirmed = false;
         OnPlanAvailabilityChanged();
     }
 
