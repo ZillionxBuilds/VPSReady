@@ -1,0 +1,60 @@
+name: Prepare prospective validation tree
+description: Validate an exact push or the current base merged with a pull-request head, then record safe SHA provenance.
+
+inputs:
+  event_name:
+    required: true
+  source_sha:
+    required: true
+  pr_head_sha:
+    required: true
+  pr_base_sha:
+    required: true
+  pr_base_ref:
+    required: false
+  push_sha:
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event_name }}
+        SOURCE_SHA: ${{ inputs.source_sha }}
+        PR_HEAD_SHA: ${{ inputs.pr_head_sha }}
+        PR_BASE_SHA: ${{ inputs.pr_base_sha }}
+        PR_BASE_REF: ${{ inputs.pr_base_ref }}
+        PUSH_SHA: ${{ inputs.push_sha }}
+      run: |
+        set -euo pipefail
+
+        if [[ "$EVENT_NAME" == 'pull_request' ]]; then
+          test -n "$PR_BASE_REF"
+          git fetch --no-tags origin "$PR_BASE_REF"
+          git checkout --detach "origin/$PR_BASE_REF"
+          VALIDATION_BASE_SHA="$(git rev-parse HEAD)"
+          git rev-parse --verify "${PR_HEAD_SHA}^{commit}" >/dev/null
+          git -c user.name='VPSReady CI' -c user.email='ci@invalid.local' merge --no-ff --no-edit "$PR_HEAD_SHA"
+          VALIDATION_SHA="$(git rev-parse HEAD)"
+        else
+          git checkout --detach "$SOURCE_SHA"
+          VALIDATION_BASE_SHA="$PR_BASE_SHA"
+          VALIDATION_SHA="$(git rev-parse HEAD)"
+        fi
+
+        mkdir -p TestResults/ci
+        {
+          printf 'PR_HEAD_SHA=%s\n' "$PR_HEAD_SHA"
+          printf 'PR_BASE_SHA=%s\n' "$PR_BASE_SHA"
+          printf 'VALIDATION_BASE_SHA=%s\n' "$VALIDATION_BASE_SHA"
+          printf 'VALIDATION_SHA=%s\n' "$VALIDATION_SHA"
+          printf 'PUSH_SHA=%s\n' "$PUSH_SHA"
+        } > TestResults/ci/sha-provenance.env
+        {
+          printf 'PR_HEAD_SHA=%s\n' "$PR_HEAD_SHA"
+          printf 'PR_BASE_SHA=%s\n' "$PR_BASE_SHA"
+          printf 'VALIDATION_BASE_SHA=%s\n' "$VALIDATION_BASE_SHA"
+          printf 'VALIDATION_SHA=%s\n' "$VALIDATION_SHA"
+          printf 'PUSH_SHA=%s\n' "$PUSH_SHA"
+        } >> "$GITHUB_ENV"
