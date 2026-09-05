@@ -57,6 +57,9 @@ public static class RemoteCommandCatalog
     public const string UbuntuUfwActiveSshAllowEnsure = DiagnosticCommandCatalog.UbuntuUfwActiveSshAllowEnsure;
     public const string UbuntuUfwEnable = DiagnosticCommandCatalog.UbuntuUfwEnable;
     public const string UbuntuUfwDisable = DiagnosticCommandCatalog.UbuntuUfwDisable;
+    public const string UbuntuAuthorizedKeysInspect = DiagnosticCommandCatalog.UbuntuAuthorizedKeysInspect;
+    public const string UbuntuAuthorizedKeysInstall = DiagnosticCommandCatalog.UbuntuAuthorizedKeysInstall;
+    public const string UbuntuAuthorizedKeysVerify = DiagnosticCommandCatalog.UbuntuAuthorizedKeysVerify;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -81,6 +84,9 @@ public static class RemoteCommandCatalog
         UbuntuUfwActiveSshAllowEnsure,
         UbuntuUfwEnable,
         UbuntuUfwDisable,
+        UbuntuAuthorizedKeysInspect,
+        UbuntuAuthorizedKeysInstall,
+        UbuntuAuthorizedKeysVerify,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

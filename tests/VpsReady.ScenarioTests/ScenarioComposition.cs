@@ -5,6 +5,7 @@ using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Diagnostics;
 using VpsReady.Infrastructure.Local;
+using VpsReady.Infrastructure.Remote;
 
 namespace VpsReady.ScenarioTests;
 
@@ -57,6 +58,7 @@ public static class ScenarioComposition
         services.AddSingleton<ScenarioDiagnosticRecorder>();
         services.AddSingleton<ISanitizedDiagnosticSink>(provider => provider.GetRequiredService<ScenarioDiagnosticRecorder>());
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
+        services.AddSingleton<PublicKeyDeploymentWorkflow>();
         services.AddSingleton<ScenarioOperationRunner>();
         return services.BuildServiceProvider(validateScopes: true);
     }
@@ -73,7 +75,7 @@ internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost h
 /// remains available for a replacement connection identity and its state stays
 /// observable to every scenario transport.
 /// </summary>
-internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport
 {
     private bool disposed;
 
@@ -83,6 +85,16 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         return host.ExecuteAsync(command, cancellationToken);
+    }
+
+    public Task<RemoteCommandResult> ExecutePublicKeyDeploymentAsync(
+        RemoteCommand command,
+        ReadOnlyMemory<char> canonicalPublicKey,
+        DiagnosticPhase phase,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return host.ExecutePublicKeyDeploymentAsync(command, canonicalPublicKey, phase, cancellationToken);
     }
 
     public KnownHostTrustAssessment? LastHostTrustAssessment => null;
