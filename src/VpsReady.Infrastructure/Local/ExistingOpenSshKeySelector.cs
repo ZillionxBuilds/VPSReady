@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
+using System.Runtime.InteropServices;
 using System.Text;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Utilities;
@@ -109,6 +111,10 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Permission, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
         }
+        catch (UnsafeKeySelectionPathException)
+        {
+            return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.InvalidTarget, OperationErrorCode.Validation, OperationVerification.NotRun).ConfigureAwait(false);
+        }
         catch (InvalidDataException)
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Corrupt, OperationErrorCode.Parse, OperationVerification.Failed).ConfigureAwait(false);
@@ -171,6 +177,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
 
         try
         {
+            RejectReparsePointHierarchy(candidate);
             var attributes = File.GetAttributes(candidate);
             if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
             {
@@ -189,7 +196,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
 
     private static async Task<byte[]> ReadBoundedAsync(string path, CancellationToken cancellationToken)
     {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
+        await using var stream = OpenNoFollowReadStream(path);
         if (stream.Length is <= 0 or > MaximumPrivateKeyBytes)
         {
             throw new InvalidDataException();
@@ -207,6 +214,83 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         }
 
         return bytes;
+    }
+
+    private static FileStream OpenNoFollowReadStream(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw new UnsafeKeySelectionPathException();
+        }
+
+        var segments = path.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        var directoryHandle = OpenUnix("/", UnixOpenFlags.ReadOnly | UnixOpenFlags.Directory | UnixOpenFlags.NoFollow);
+        try
+        {
+            for (var index = 0; index < segments.Length - 1; index++)
+            {
+                var next = OpenUnixAt(directoryHandle, segments[index], UnixOpenFlags.ReadOnly | UnixOpenFlags.Directory | UnixOpenFlags.NoFollow);
+                directoryHandle.Dispose();
+                directoryHandle = next;
+            }
+
+            var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow);
+            return new FileStream(fileHandle, FileAccess.Read, 4096, isAsync: true);
+        }
+        finally
+        {
+            directoryHandle.Dispose();
+        }
+    }
+
+    private static SafeFileHandle OpenUnix(string path, UnixOpenFlags flags)
+    {
+        var descriptor = OperatingSystem.IsMacOS() ? OpenMac(path, TranslateUnixFlags(flags)) : OpenLinux(path, TranslateUnixFlags(flags));
+        return CreateUnixHandle(descriptor);
+    }
+
+    private static SafeFileHandle OpenUnixAt(SafeFileHandle directory, string name, UnixOpenFlags flags)
+    {
+        var descriptor = OperatingSystem.IsMacOS() ? OpenAtMac(directory.DangerousGetHandle().ToInt32(), name, TranslateUnixFlags(flags)) : OpenAtLinux(directory.DangerousGetHandle().ToInt32(), name, TranslateUnixFlags(flags));
+        return CreateUnixHandle(descriptor);
+    }
+
+    private static SafeFileHandle CreateUnixHandle(int descriptor)
+    {
+        if (descriptor < 0)
+        {
+            throw new UnsafeKeySelectionPathException();
+        }
+
+        return new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
+    }
+
+    private static int TranslateUnixFlags(UnixOpenFlags flags)
+    {
+        var translated = 0;
+        if ((flags & UnixOpenFlags.NoFollow) != 0)
+        {
+            translated |= OperatingSystem.IsMacOS() ? 0x100 : 0x20000;
+        }
+        if ((flags & UnixOpenFlags.Directory) != 0 && !OperatingSystem.IsMacOS())
+        {
+            translated |= 0x10000;
+        }
+        return translated;
+    }
+
+    private static void RejectReparsePointHierarchy(string path)
+    {
+        var root = Path.GetPathRoot(path) ?? throw new UnsafeKeySelectionPathException();
+        var current = root;
+        foreach (var segment in path[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new UnsafeKeySelectionPathException();
+            }
+        }
     }
 
     private static OpenSshEnvelope ClassifyOpenSshEnvelope(ReadOnlySpan<byte> blob)
@@ -237,6 +321,27 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     private static bool IsParserException() => true;
 
     private enum OpenSshEnvelope { Unencrypted, Encrypted, Corrupt }
+
+    [Flags]
+    private enum UnixOpenFlags
+    {
+        ReadOnly = 0,
+        NoFollow = 1,
+        Directory = 2,
+    }
+
+    private sealed class UnsafeKeySelectionPathException : IOException;
+
+#pragma warning disable CA2101 // Unix open/openat paths are explicitly ANSI UTF-8 marshalled below.
+    [DllImport("libc", EntryPoint = "open", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int OpenLinux([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+    [DllImport("libc", EntryPoint = "openat", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int OpenAtLinux(int directory, [MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "open", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int OpenMac([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "openat", SetLastError = true, CharSet = CharSet.Ansi)]
+    private static extern int OpenAtMac(int directory, [MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+#pragma warning restore CA2101
 }
 
 internal interface IExistingSshKeySelectionObserver { void BeforeRead(string path); }
