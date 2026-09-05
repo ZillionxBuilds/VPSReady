@@ -58,6 +58,12 @@ public static class UbuntuFactCommandCatalog
         Definitions.FirstOrDefault(definition => string.Equals(definition.Id.Value, commandId, StringComparison.Ordinal))
         ?? throw new ArgumentOutOfRangeException(nameof(commandId), commandId, "The command ID is not a known Ubuntu fact command.");
 
+    public static bool TryGet(string commandId, out UbuntuFactCommandDefinition? definition)
+    {
+        definition = Definitions.FirstOrDefault(candidate => string.Equals(candidate.Id.Value, commandId, StringComparison.Ordinal));
+        return definition is not null;
+    }
+
     public static RemoteCommand CreateRequest(string commandId) => RequireKnown(commandId).CreateRequest();
 
     private static UbuntuFactCommandDefinition Remote(string commandId, string source, string shellCommand) =>
