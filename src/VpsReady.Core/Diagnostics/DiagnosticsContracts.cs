@@ -134,6 +134,10 @@ public static class DiagnosticEventCatalog
     public const string KeyAuthenticationVerificationSucceeded = "ssh.key_auth_verification.succeeded";
     public const string KeyAuthenticationVerificationFailed = "ssh.key_auth_verification.failed";
     public const string KeyAuthenticationVerificationCancelled = "ssh.key_auth_verification.cancelled";
+    public const string OpenSshConfigEditStarted = "ssh.config_edit.started";
+    public const string OpenSshConfigEditSucceeded = "ssh.config_edit.succeeded";
+    public const string OpenSshConfigEditFailed = "ssh.config_edit.failed";
+    public const string OpenSshConfigEditCancelled = "ssh.config_edit.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -144,6 +148,7 @@ public static class DiagnosticEventCatalog
         ExistingKeySelectionStarted, ExistingKeySelectionSucceeded, ExistingKeySelectionFailed, ExistingKeySelectionCancelled,
         PublicKeyDeploymentStarted, PublicKeyDeploymentSucceeded, PublicKeyDeploymentFailed, PublicKeyDeploymentCancelled,
         KeyAuthenticationVerificationStarted, KeyAuthenticationVerificationSucceeded, KeyAuthenticationVerificationFailed, KeyAuthenticationVerificationCancelled,
+        OpenSshConfigEditStarted, OpenSshConfigEditSucceeded, OpenSshConfigEditFailed, OpenSshConfigEditCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -219,6 +224,7 @@ public static class DiagnosticErrorCatalog
         .Concat(LocalEd25519KeyGenerationErrorCatalog.All)
         .Concat(ExistingSshKeySelectionErrorCatalog.All)
         .Concat(KeyAuthenticationVerificationErrorCatalog.All)
+        .Concat(OpenSshConfigEditErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

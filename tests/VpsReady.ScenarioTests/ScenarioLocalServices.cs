@@ -60,7 +60,7 @@ public sealed class ScenarioPlatformPaths : IPlatformPaths
 /// In-memory local-file boundary with explicit collision, permission and
 /// interrupted-atomic-write controls.
 /// </summary>
-public sealed class ScenarioLocalFileStore(ScenarioHostState state) : ILocalFileStore
+public sealed class ScenarioLocalFileStore(ScenarioHostState state) : IRecoverableLocalFileStore
 {
     public async Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken)
     {
@@ -137,6 +137,16 @@ public sealed class ScenarioLocalFileStore(ScenarioHostState state) : ILocalFile
         }
 
         return contents.ToArray();
+    }
+
+    public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        cancellationToken.ThrowIfCancellationRequested();
+        state.LocalFiles.Files.Remove(path);
+        state.LocalFiles.Permissions.Remove(path);
+        state.LocalFiles.LastWriteUtc.Remove(path);
+        return Task.CompletedTask;
     }
 
     public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken)

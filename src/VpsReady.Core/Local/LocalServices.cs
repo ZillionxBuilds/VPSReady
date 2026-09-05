@@ -131,6 +131,12 @@ public interface ILocalFileStore
     Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken);
 }
 
+/// <summary>Optional recovery boundary for a post-commit local transaction.</summary>
+public interface IRecoverableLocalFileStore : ILocalFileStore
+{
+    Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken);
+}
+
 public interface ISecureLocalStorage
 {
     string GetDirectory(LocalStorageArea area);

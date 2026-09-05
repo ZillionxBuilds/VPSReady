@@ -101,7 +101,7 @@ public sealed class SecureLocalStorage(IPlatformPaths platformPaths, ILocalFileS
     }
 }
 
-public sealed class AtomicFileStore : ILocalFileStore
+public sealed class AtomicFileStore : IRecoverableLocalFileStore
 {
     public async Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken)
     {
@@ -183,6 +183,14 @@ public sealed class AtomicFileStore : ILocalFileStore
 
     public async Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) =>
         await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+
+    public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        cancellationToken.ThrowIfCancellationRequested();
+        File.Delete(path);
+        return Task.CompletedTask;
+    }
 
     public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken)
     {
