@@ -116,6 +116,28 @@ public sealed class ExistingOpenSshKeySelectionScenarioTests
         Assert.Null(result.Location);
         Assert.True(Directory.Exists(workspace.PrivateKeyPath));
     }
+
+    [Fact]
+    public async Task UnixDirectNonDirectoryParentFailsAsInvalidTargetWithoutReadingOrMetadata()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new ScenarioKeyWorkspace();
+        var parent = Path.Combine(workspace.Root, "not-a-directory");
+        await File.WriteAllTextAsync(parent, "scenario-parent-content");
+        var selectedPath = Path.Combine(parent, "id_ed25519");
+
+        var result = await new ExistingOpenSshKeySelector(new ScenarioKeyDiagnosticSink()).SelectAsync(
+            new ExistingSshKeySelectionRequest(selectedPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.Equal("scenario-parent-content", await File.ReadAllTextAsync(parent));
+    }
 }
 
 internal sealed class LeafSwapObserver(string external) : IExistingSshKeySelectionObserver

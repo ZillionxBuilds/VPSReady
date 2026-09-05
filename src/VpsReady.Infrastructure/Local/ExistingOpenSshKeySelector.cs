@@ -209,10 +209,45 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             return true;
         }
         catch (FileNotFoundException) { error = ExistingSshKeySelectionErrorCatalog.Missing; return false; }
-        catch (DirectoryNotFoundException) { error = ExistingSshKeySelectionErrorCatalog.Missing; return false; }
+        catch (DirectoryNotFoundException)
+        {
+            // Framework path inspection presents a child of an existing regular
+            // file as DirectoryNotFoundException. It is not an absent target:
+            // its parent is an unsafe non-directory component and must retain
+            // the same invalid-target boundary as native openat ENOTDIR.
+            error = HasExistingNonDirectoryParent(candidate)
+                ? ExistingSshKeySelectionErrorCatalog.InvalidTarget
+                : ExistingSshKeySelectionErrorCatalog.Missing;
+            return false;
+        }
         catch (UnauthorizedAccessException) { error = ExistingSshKeySelectionErrorCatalog.Permission; return false; }
         catch (UnsafeKeySelectionPathException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
         catch (IOException) { error = ExistingSshKeySelectionErrorCatalog.LocalIo; return false; }
+    }
+
+    private static bool HasExistingNonDirectoryParent(string path)
+    {
+        var root = Path.GetPathRoot(path) ?? throw new UnsafeKeySelectionPathException();
+        var segments = path[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        var current = root;
+        foreach (var segment in segments[..^1])
+        {
+            current = Path.Combine(current, segment);
+            try
+            {
+                var attributes = File.GetAttributes(current);
+                if ((attributes & FileAttributes.Directory) == 0)
+                {
+                    return true;
+                }
+            }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (IOException) { return false; }
+        }
+
+        return false;
     }
 
     private static async Task<byte[]> ReadBoundedAsync(string path, CancellationToken cancellationToken)

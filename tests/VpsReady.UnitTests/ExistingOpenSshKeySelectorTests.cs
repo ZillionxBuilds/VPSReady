@@ -124,6 +124,28 @@ public sealed class ExistingOpenSshKeySelectorTests
         Assert.Null(result.Location);
     }
 
+    [Fact]
+    public async Task UnixRegularFileParentIsAnInvalidTargetNotAnOrdinaryMissingPath()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new KeyWorkspace();
+        var parent = Path.Combine(workspace.Root, "not-a-directory");
+        await File.WriteAllTextAsync(parent, "user-owned-parent-content");
+        var selectedPath = Path.Combine(parent, "id_ed25519");
+
+        var result = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink()).SelectAsync(
+            new ExistingSshKeySelectionRequest(selectedPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.Equal("user-owned-parent-content", await File.ReadAllTextAsync(parent));
+    }
+
     private static byte[] EncryptedEnvelope() => [.. "openssh-key-v1\0"u8, 0, 0, 0, 10, .. "aes256-ctr"u8];
 
     private static string Pem(string type, byte[] contents) => $"-----BEGIN {type}-----{Environment.NewLine}{Convert.ToBase64String(contents)}{Environment.NewLine}-----END {type}-----{Environment.NewLine}";
