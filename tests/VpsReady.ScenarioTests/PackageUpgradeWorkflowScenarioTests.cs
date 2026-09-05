@@ -79,4 +79,16 @@ public sealed class PackageUpgradeWorkflowScenarioTests
         Assert.Equal(PackageUpgradeErrorCatalog.Privilege, result.ErrorCode);
         Assert.Equal(0, services.GetRequiredService<ScenarioHostState>().Apt.UpgradeGeneration);
     }
+
+    [Fact]
+    public async Task PlanFaultFailsClosedWithoutAnUpgrade()
+    {
+        await using var services = ScenarioComposition.Create("c503-plan-nonzero");
+        services.GetRequiredService<ScenarioFaultPlan>().Inject(DiagnosticPhase.Plan, ScenarioFaultKind.NonZeroExit, "c503-plan-nonzero", RemoteCommandCatalog.UbuntuAptUpgradePlan, exitCode: 42);
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var plan = await new PackageUpgradeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).PlanAsync(services.GetRequiredService<DeterministicScenarioHost>());
+
+        Assert.False(plan.IsReady);
+        Assert.Equal(0, services.GetRequiredService<ScenarioHostState>().Apt.UpgradeGeneration);
+    }
 }

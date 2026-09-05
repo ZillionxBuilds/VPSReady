@@ -163,7 +163,39 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Package upgrade", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Package upgrade progress was recorded without remote output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 
-    private static bool TryParsePlan(string output, out int count) => int.TryParse(output.Trim().Replace("upgrade_plan_packages=", string.Empty, StringComparison.Ordinal), NumberStyles.None, CultureInfo.InvariantCulture, out count) && count >= 0;
+    private static bool TryParsePlan(string output, out int count)
+    {
+        count = 0;
+        return TryReadSingleRecord(output, "upgrade_plan_packages=", out var value)
+            && int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out count)
+            && count >= 0;
+    }
 
-    private static bool TryParseRebootRequired(string output, out bool required) => bool.TryParse(output.Trim().Replace("reboot_required=", string.Empty, StringComparison.Ordinal), out required);
+    private static bool TryParseRebootRequired(string output, out bool required)
+    {
+        required = false;
+        return TryReadSingleRecord(output, "reboot_required=", out var value)
+            && (value == "true" || value == "false")
+            && bool.TryParse(value, out required);
+    }
+
+    private static bool TryReadSingleRecord(string output, string prefix, out string value)
+    {
+        value = string.Empty;
+        if (string.IsNullOrEmpty(output))
+        {
+            return false;
+        }
+
+        var line = output.EndsWith("\r\n", StringComparison.Ordinal) ? output[..^2]
+            : output.EndsWith('\n') ? output[..^1]
+            : output;
+        if (line.Contains('\r') || line.Contains('\n') || !line.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        value = line[prefix.Length..];
+        return !string.IsNullOrEmpty(value);
+    }
 }

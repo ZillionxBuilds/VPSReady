@@ -70,6 +70,36 @@ public sealed class PackageUpgradeWorkflowTests
         Assert.Single(transport.Commands);
     }
 
+    [Theory]
+    [InlineData("2")]
+    [InlineData("upgrade_plan_packages=2upgrade_plan_packages=")]
+    [InlineData("upgrade_plan_packages=2\nupgrade_plan_packages=3")]
+    public async Task MalformedPlanRecordsFailClosedBeforeConfirmationCanReachApply(string output)
+    {
+        var transport = new Transport(Ok(output));
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), new Sink());
+        var plan = await workflow.PlanAsync(transport);
+        var result = await workflow.UpgradeAsync(transport, plan, true);
+
+        Assert.False(plan.IsReady);
+        Assert.Equal(PackageUpgradeErrorCatalog.Confirmation, result.ErrorCode);
+        Assert.Single(transport.Commands);
+    }
+
+    [Fact]
+    public async Task BareRebootBooleanAndPlanNonzeroFailClosed()
+    {
+        var failedPlan = await new PackageUpgradeWorkflow(new AllowedPreflight(), new Sink()).PlanAsync(new Transport(new RemoteCommandResult(42, string.Empty, "failed", TimeSpan.Zero)));
+        var transport = new Transport(Ok("upgrade_plan_packages=1"), Ok("done"), Ok("package_upgrade=verified"), Ok("true"));
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), new Sink());
+        var plan = await workflow.PlanAsync(transport);
+        var result = await workflow.UpgradeAsync(transport, plan, true);
+
+        Assert.False(failedPlan.IsReady);
+        Assert.Equal(PackageUpgradeErrorCatalog.Verification, result.ErrorCode);
+        Assert.False(result.Result.Succeeded);
+    }
+
     private static RemoteCommandResult Ok(string output) => new(0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class AllowedPreflight : IPrivilegePreflight
