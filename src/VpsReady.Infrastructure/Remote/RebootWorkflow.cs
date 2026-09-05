@@ -35,6 +35,7 @@ public sealed class RebootWorkflow : IRebootWorkflow
             await ReportAsync(correlation, DiagnosticEventCatalog.RebootStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, command.Id.Value, null).ConfigureAwait(false);
             var read = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Verify, read, command.Id.Value).ConfigureAwait(false);
             if (!read.Succeeded || !TryParseRequired(read.StandardOutput, out var required))
             {
                 return await RequiredFailureAsync(correlation, OperationErrorCode.Parse, RebootErrorCatalog.RequiredState, command.Id.Value).ConfigureAwait(false);
@@ -111,6 +112,7 @@ public sealed class RebootWorkflow : IRebootWorkflow
             try
             {
                 var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
+                await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
                 if (!applied.Succeeded)
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Command, RebootErrorCatalog.Command, DiagnosticPhase.Apply, apply.Id.Value, OperationState.Unknown, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
@@ -195,6 +197,7 @@ public sealed class RebootWorkflow : IRebootWorkflow
                 }
 
                 var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+                await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
                 if (recoveryTime.Elapsed >= recoveryDeadline)
                 {
@@ -298,6 +301,11 @@ public sealed class RebootWorkflow : IRebootWorkflow
             await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "System reboot", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Reboot progress was recorded without remote output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false);
         }
         catch { }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "System reboot", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Reboot command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 
     private static bool TryParseRequired(string output, out bool required)

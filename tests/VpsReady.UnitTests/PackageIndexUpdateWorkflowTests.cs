@@ -31,6 +31,7 @@ public sealed class PackageIndexUpdateWorkflowTests
         Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate, RemoteCommandCatalog.UbuntuAptIndexVerify], transport.Commands.Select(command => command.Id.Value));
         Assert.All(sink.Events, item => Assert.Equal(result.Result.OperationId, item.Correlation.OperationId));
         Assert.All(sink.Events, item => Assert.Null(item.StandardOutput));
+        Assert.Equal([0, 0], sink.Events.Where(item => item.EventId == DiagnosticEventCatalog.CommandCompleted).Select(item => item.ExitCode));
     }
 
     [Theory]
@@ -39,10 +40,12 @@ public sealed class PackageIndexUpdateWorkflowTests
     public async Task AptExitIsTypedAndVerificationNeverRuns(int exitCode, string expected)
     {
         var transport = new SequenceTransport(new RemoteCommandResult(exitCode, string.Empty, "private-output", TimeSpan.Zero));
-        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), new RecordingSink()).UpdateAsync(transport);
+        var sink = new RecordingSink();
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink).UpdateAsync(transport);
         Assert.Equal(expected, result.ErrorCode);
         Assert.Equal(OperationErrorCode.Apt, result.Result.ErrorCode);
         Assert.Single(transport.Commands);
+        Assert.Contains(sink.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.ExitCode == exitCode);
     }
 
     [Fact]

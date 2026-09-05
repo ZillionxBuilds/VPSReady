@@ -28,6 +28,7 @@ public sealed class PrivilegePreflightWorkflowTests
         Assert.Equal(new PrivilegeCapability(root, sudo), result.Capability);
         Assert.Equal([RemoteCommandCatalog.UbuntuPrivilegeRead], transport.Commands.Select(command => command.Id.Value));
         Assert.Contains(sink.Events, item => item.EventId == DiagnosticEventCatalog.PrivilegePreflightSucceeded && item.CommandId == RemoteCommandCatalog.UbuntuPrivilegeRead);
+        Assert.Contains(sink.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.ExitCode == 0);
     }
 
     [Fact]
@@ -59,7 +60,8 @@ public sealed class PrivilegePreflightWorkflowTests
     [Fact]
     public async Task NonzeroAndCancellationAreTypedAndNeverExposeSensitiveArgumentData()
     {
-        var denied = await new PrivilegePreflightWorkflow(new RecordingSink()).CheckAsync(
+        var sink = new RecordingSink();
+        var denied = await new PrivilegePreflightWorkflow(sink).CheckAsync(
             new RecordingTransport(new RemoteCommandResult(77, string.Empty, "denied", TimeSpan.Zero, OutputCapturePolicy.SanitizedTruncated)),
             PrivilegeOperationIntent.Mutation);
         using var cancelled = new CancellationTokenSource();
@@ -71,6 +73,7 @@ public sealed class PrivilegePreflightWorkflowTests
 
         Assert.Equal(OperationErrorCode.Privilege, denied.Result.ErrorCode);
         Assert.Equal(PrivilegePreflightErrorCatalog.Command, denied.ErrorCode);
+        Assert.Contains(sink.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.ExitCode == 77);
         Assert.True(cancellation.Result.Cancelled);
         Assert.Equal(PrivilegePreflightErrorCatalog.Cancelled, cancellation.ErrorCode);
     }

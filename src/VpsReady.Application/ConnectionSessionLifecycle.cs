@@ -152,7 +152,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                 CancellationToken.None,
                 RemoteCommandCatalog.SshConnectionTest).ConfigureAwait(false);
             Publish(correlation.OperationId, ConnectionTestProgressState.Verifying);
-            var verification = await VerifyTransportAsync(candidate, correlation.OperationId, input.Timeout, linkedCancellation.Token).ConfigureAwait(false);
+            var verification = await VerifyTransportAsync(candidate, correlation, input.Timeout, linkedCancellation.Token).ConfigureAwait(false);
             if (!verification.Succeeded)
             {
                 await ReportTerminalAsync(correlation, verification, CancellationToken.None).ConfigureAwait(false);
@@ -241,14 +241,14 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         return await session.RunOperationForSessionAsync(
             correlation.OperationId,
             timeout,
-            async (transport, token) => await VerifyTransportAsync(transport, correlation.OperationId, timeout, token).ConfigureAwait(false),
+            async (transport, token) => await VerifyTransportAsync(transport, correlation, timeout, token).ConfigureAwait(false),
             expectedSessionId,
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<OperationResult> VerifyTransportAsync(
+    private async Task<OperationResult> VerifyTransportAsync(
         IRemoteTransport transport,
-        string operationId,
+        CorrelationIds correlation,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
@@ -261,13 +261,14 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                 OutputCapturePolicy.MetadataOnly,
                 maximumOutputBytes: 0);
             var result = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Verify, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Connection verification command completed without recording remote output.", CancellationToken.None, command.Id.Value, result.Succeeded ? null : OperationErrorCode.Verification, result.Duration, result.ExitCode).ConfigureAwait(false);
             return result.Succeeded
-                ? OperationResult.Success(operationId)
-                : OperationResult.Failure(operationId, OperationErrorCode.Verification, OperationState.Unknown, OperationVerification.Failed);
+                ? OperationResult.Success(correlation.OperationId)
+                : OperationResult.Failure(correlation.OperationId, OperationErrorCode.Verification, OperationState.Unknown, OperationVerification.Failed);
         }
         catch (RemoteTransportException exception)
         {
-            return OperationResult.Failure(operationId, ToOperationError(exception.Kind), OperationState.Unknown);
+            return OperationResult.Failure(correlation.OperationId, ToOperationError(exception.Kind), OperationState.Unknown);
         }
         catch (OperationCanceledException)
         {
@@ -275,11 +276,11 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         }
         catch (TimeoutException)
         {
-            return OperationResult.Failure(operationId, OperationErrorCode.Timeout, OperationState.Unknown);
+            return OperationResult.Failure(correlation.OperationId, OperationErrorCode.Timeout, OperationState.Unknown);
         }
         catch
         {
-            return OperationResult.Failure(operationId, OperationErrorCode.Unexpected, OperationState.Unknown);
+            return OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unknown);
         }
     }
 
@@ -324,7 +325,9 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         string message,
         CancellationToken cancellationToken,
         string? commandId = null,
-        OperationErrorCode? errorCode = null)
+        OperationErrorCode? errorCode = null,
+        TimeSpan? duration = null,
+        int? exitCode = null)
     {
         try
         {
@@ -339,7 +342,9 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                     message,
                     commandId,
                     errorCode?.ToStableCode(),
-                    ActionName),
+                    ActionName,
+                    duration,
+                    ExitCode: exitCode),
                 cancellationToken).ConfigureAwait(false);
         }
         catch

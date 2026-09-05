@@ -36,6 +36,7 @@ public sealed class PackageUpgradeWorkflowTests
         Assert.Equal([RemoteCommandCatalog.UbuntuAptUpgradePlan, RemoteCommandCatalog.UbuntuAptUpgradeApply, RemoteCommandCatalog.UbuntuAptUpgradeVerify, RemoteCommandCatalog.UbuntuRebootRequiredRead], transport.Commands.Select(command => command.Id.Value));
         Assert.All(sink.Events, item => Assert.Null(item.StandardOutput));
         Assert.All(sink.Events.Where(item => item.EventId.StartsWith("apt.upgrade", StringComparison.Ordinal)), item => Assert.True(DiagnosticEventCatalog.IsKnown(item.EventId)));
+        Assert.Equal([0, 0, 0, 0], sink.Events.Where(item => item.EventId == DiagnosticEventCatalog.CommandCompleted).Select(item => item.ExitCode));
     }
 
     [Theory]
@@ -45,12 +46,14 @@ public sealed class PackageUpgradeWorkflowTests
     public async Task ApplyFailuresAreTypedAndNeverVerify(int exitCode, string expected)
     {
         var transport = new Transport(Ok("upgrade_plan_packages=1"), new RemoteCommandResult(exitCode, string.Empty, "secret-output", TimeSpan.Zero));
-        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), new Sink());
+        var sink = new Sink();
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), sink);
         var plan = await workflow.PlanAsync(transport);
         var result = await workflow.UpgradeAsync(transport, plan, confirmed: true);
 
         Assert.Equal(expected, result.ErrorCode);
         Assert.Equal(2, transport.Commands.Count);
+        Assert.Contains(sink.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.ExitCode == exitCode);
     }
 
     [Fact]

@@ -30,6 +30,7 @@ public sealed class ConnectionSessionLifecycleTests
         Assert.Contains(progress, value => value.State == ConnectionTestProgressState.Verifying);
         Assert.Equal(ConnectionTestProgressState.Succeeded, progress[^1].State);
         Assert.Contains(diagnostics.Events, value => value.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Contains(diagnostics.Events, value => value.EventId == DiagnosticEventCatalog.CommandCompleted && value.ExitCode == 0);
     }
 
     [Fact]

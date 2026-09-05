@@ -20,6 +20,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, command.Id.Value, null).ConfigureAwait(false);
             var planned = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Plan, planned, command.Id.Value).ConfigureAwait(false);
             if (!planned.Succeeded || !TryParsePlan(planned.StandardOutput, out var count))
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
@@ -70,6 +71,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
             applyAttempted = true;
             var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
             if (!applied.Succeeded)
             {
                 var (error, code) = applied.ExitCode switch
@@ -85,6 +87,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             var verify = UbuntuPackageCommandCatalog.CreateUpgradeVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
             if (!verified.Succeeded || !string.Equals(verified.StandardOutput.Trim(), "package_upgrade=verified", StringComparison.Ordinal))
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
@@ -92,6 +95,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             var reboot = UbuntuPackageCommandCatalog.CreateRebootRequiredRequest();
             var rebootState = await transport.ExecuteAsync(reboot, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Verify, rebootState, reboot.Id.Value).ConfigureAwait(false);
             if (!rebootState.Succeeded || !TryParseRebootRequired(rebootState.StandardOutput, out var rebootRequired))
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, reboot.Id.Value, OperationState.Applied).ConfigureAwait(false);
@@ -161,6 +165,11 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
     private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string? commandId, OperationErrorCode? error)
     {
         try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Package upgrade", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, "Package upgrade progress was recorded without remote output.", commandId, error?.ToStableCode(), ActionName), CancellationToken.None).ConfigureAwait(false); } catch { }
+    }
+
+    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId)
+    {
+        try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "Package upgrade", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Package upgrade command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 
     private static bool TryParsePlan(string output, out int count)
