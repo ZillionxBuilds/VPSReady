@@ -145,8 +145,8 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport
             throw new RemoteTransportException(RemoteTransportFailureKind.Network);
         }
 
-        var definition = UbuntuFactCommandCatalog.RequireKnown(command.Id.Value);
-        if (definition.Execution == UbuntuFactCommandExecution.SessionMetadata)
+        if (UbuntuFactCommandCatalog.TryGet(command.Id.Value, out var factDefinition)
+            && factDefinition is { Execution: UbuntuFactCommandExecution.SessionMetadata })
         {
             return new RemoteCommandResult(
                 0,
@@ -156,12 +156,16 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport
                 command.OutputCapturePolicy);
         }
 
+        var shellCommand = factDefinition is not null
+            ? factDefinition.ShellCommand!
+            : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
+
         using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
         var startedAt = Stopwatch.GetTimestamp();
         try
         {
-            using var sshCommand = connectedClient.CreateCommand(definition.ShellCommand!);
+            using var sshCommand = connectedClient.CreateCommand(shellCommand);
             sshCommand.CommandTimeout = command.Timeout;
             await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
             var standardOutput = await SshNetBoundedOutputCapture.ReadAsync(

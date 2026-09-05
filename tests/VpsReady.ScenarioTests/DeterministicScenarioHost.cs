@@ -118,6 +118,7 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             RemoteCommandCatalog.UbuntuUfwStatusRead => FactUfwStatus(),
             RemoteCommandCatalog.UbuntuUfwDetectionRead => FirewallDetection(),
             RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallRuleList(),
+            RemoteCommandCatalog.UbuntuUfwAllowRuleAdd => AddUfwRule(command),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -359,6 +360,11 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             return Failure(127, "ufw is unavailable in this scenario.");
         }
 
+        if (!HasPrivilege())
+        {
+            return Failure(13, "Permission denied while adding a firewall rule.");
+        }
+
         if (!Enum.TryParse<ScenarioRuleProtocol>(GetArgument(command, "protocol"), true, out var protocol)
             || !int.TryParse(GetArgument(command, "port"), NumberStyles.None, CultureInfo.InvariantCulture, out var port)
             || port is < 1 or > 65535
@@ -368,6 +374,11 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         }
 
         var source = GetArgument(command, "source") ?? "Anywhere";
+        source = (source, family) switch
+        {
+            ("0.0.0.0/0", ScenarioIpFamily.Ipv4) or ("::/0", ScenarioIpFamily.Ipv6) => "Anywhere",
+            _ => source,
+        };
         var duplicate = State.Ufw.FindDuplicate(protocol, port, source, family);
         if (duplicate is not null)
         {
