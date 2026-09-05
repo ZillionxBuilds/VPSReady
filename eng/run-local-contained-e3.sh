@@ -100,6 +100,12 @@ fi
 ssh-keyscan -T 2 -p "$port" 127.0.0.1 > "$runtime_root/known_hosts"
 chmod 600 "$runtime_root/known_hosts"
 
+# C504 proves the exact production SSH.NET password path against this same
+# disposable loopback daemon. The fixture values remain process environment
+# only and are never written to test output or artifacts.
+VPSREADY_E3_DOTNET_PASSWORD="$login_value" VPSREADY_E3_DOTNET_USER="$service_user" VPSREADY_E3_DOTNET_PORT="$port" \
+  dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --filter "Category=E3" --logger "trx;LogFileName=e3-production-sshnet.trx" --results-directory TestResults
+
 set +e
 run_ssh 'printf stdout; printf stderr >&2; exit 7' >"$runtime_root/command.out" 2>"$runtime_root/command.err"
 command_status=$?

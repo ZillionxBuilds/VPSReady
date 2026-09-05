@@ -14,12 +14,13 @@ namespace VpsReady.Infrastructure.Remote;
 /// a connection is usable only after SSH.NET reports it connected and its host
 /// key has passed the persisted fail-closed trust assessment.
 /// </summary>
-public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport
+public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport
 {
     private readonly IKnownHostTrustStore trustStore;
     private readonly SemaphoreSlim connectionGate = new(1, 1);
     private SshClient? client;
     private RemoteEndpoint? endpoint;
+    private PasswordReauthenticationLease? reauthenticationLease;
     private bool hostTrustAssessmentFailed;
     private bool disposed;
 
@@ -51,47 +52,13 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
                 throw new InvalidOperationException("This SSH transport is already connected or connecting.");
             }
 
-            LastHostTrustAssessment = null;
-            hostTrustAssessmentFailed = false;
-            var passwordCharacters = new char[password.Length];
-            byte[]? passwordBytes = null;
-            SshClient? candidate = null;
+            var candidateLease = new PasswordReauthenticationLease(password);
             try
             {
-                password.CopyTo(passwordCharacters);
-                passwordBytes = Encoding.UTF8.GetBytes(passwordCharacters);
-                var authentication = new PasswordAuthenticationMethod(endpoint.UserName, passwordBytes);
-                var connection = new ConnectionInfo(endpoint.Host, endpoint.Port, endpoint.UserName, authentication)
-                {
-                    Timeout = timeout,
-                };
-                candidate = new SshClient(connection);
-                candidate.HostKeyReceived += OnHostKeyReceived;
-
-                using var timeoutCancellation = new CancellationTokenSource(timeout);
-                using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
-                try
-                {
-                    // HostKeyReceived is synchronous in SSH.NET. Its callback
-                    // only permits the session after the local trust store has
-                    // assessed the exact host+port fingerprint.
-                    this.endpoint = endpoint;
-                    await candidate.ConnectAsync(linkedCancellation.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
-                {
-                    throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
-                }
-
-                RequireExplicitTrustedHost(LastHostTrustAssessment);
-
-                if (!candidate.IsConnected)
-                {
-                    throw new RemoteTransportException(RemoteTransportFailureKind.Network);
-                }
-
-                client = candidate;
-                candidate = null;
+                this.endpoint = endpoint;
+                await ConnectWithPasswordLeaseAsync(endpoint, candidateLease, timeout, cancellationToken).ConfigureAwait(false);
+                reauthenticationLease = candidateLease;
+                candidateLease = null!;
             }
             catch (OperationCanceledException)
             {
@@ -115,22 +82,90 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             }
             finally
             {
-                Array.Clear(passwordCharacters);
-                if (passwordBytes is not null)
+                if (candidateLease is not null)
                 {
-                    Array.Clear(passwordBytes);
-                }
-
-                if (candidate is not null)
-                {
-                    candidate.HostKeyReceived -= OnHostKeyReceived;
-                    candidate.Dispose();
+                    candidateLease.Dispose();
                 }
             }
         }
         finally
         {
             connectionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Uses a new SSH.NET authentication graph for one password attempt. The
+    /// attempt buffer is cleared even after the client takes a reference to it;
+    /// that client is never reused to authenticate again.
+    /// </summary>
+    private async Task ConnectWithPasswordLeaseAsync(RemoteEndpoint target, PasswordReauthenticationLease lease, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        byte[]? passwordBytes = null;
+        SshClient? candidate = null;
+        try
+        {
+            LastHostTrustAssessment = null;
+            hostTrustAssessmentFailed = false;
+            passwordBytes = lease.MaterializeUtf8();
+            var authentication = new PasswordAuthenticationMethod(target.UserName, passwordBytes);
+            var connection = new ConnectionInfo(target.Host, target.Port, target.UserName, authentication) { Timeout = timeout };
+            candidate = new SshClient(connection);
+            candidate.HostKeyReceived += OnHostKeyReceived;
+            using var timeoutCancellation = new CancellationTokenSource(timeout);
+            using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+            try
+            {
+                await candidate.ConnectAsync(linkedCancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+            {
+                throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+            }
+
+            RequireExplicitTrustedHost(LastHostTrustAssessment);
+            if (!candidate.IsConnected)
+            {
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            var previous = client;
+            client = candidate;
+            candidate = null;
+            if (previous is not null)
+            {
+                previous.HostKeyReceived -= OnHostKeyReceived;
+                previous.Dispose();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (RemoteTransportException)
+        {
+            throw;
+        }
+        catch (Exception) when (LastHostTrustAssessment is { IsTrusted: false } || hostTrustAssessmentFailed)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+        }
+        catch (Exception exception)
+        {
+            throw ToSafeConnectionFailure(exception);
+        }
+        finally
+        {
+            if (passwordBytes is not null)
+            {
+                Array.Clear(passwordBytes);
+            }
+
+            if (candidate is not null)
+            {
+                candidate.HostKeyReceived -= OnHostKeyReceived;
+                candidate.Dispose();
+            }
         }
     }
 
@@ -273,7 +308,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
 
         var shellCommand = factDefinition is not null
             ? factDefinition.ShellCommand!
-            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead
+            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead or RemoteCommandCatalog.UbuntuRebootApply or RemoteCommandCatalog.SshReconnectVerify or RemoteCommandCatalog.UbuntuBootIdentityRead
                 ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
                 : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
 
@@ -301,6 +336,83 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
                 standardError,
                 Stopwatch.GetElapsedTime(startedAt),
                 command.OutputCapturePolicy);
+        }
+        catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (SshOperationTimeoutException)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (Exception exception)
+        {
+            throw ToSafeConnectionFailure(exception);
+        }
+    }
+
+    /// <summary>
+    /// Establishes a fresh post-reboot SSH.NET client using the session-bound
+    /// lease. It never reconnects an old client whose authentication buffer was
+    /// cleared after its original attempt.
+    /// </summary>
+    public async Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ValidateFiniteTimeout(timeout);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            var target = endpoint;
+            var lease = reauthenticationLease;
+            if (target is null || lease is null)
+            {
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            await ConnectWithPasswordLeaseAsync(target, lease, timeout, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            connectionGate.Release();
+        }
+    }
+
+    public async Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var command = UbuntuPackageCommandCatalog.CreateBootIdentityRequest();
+        var bounded = new RemoteCommand(command.Id, command.SafeArgumentSummary, timeout, command.OutputCapturePolicy, command.MaximumOutputBytes);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        var connectedClient = client;
+        if (connectedClient is null || !connectedClient.IsConnected)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
+
+        using var timeoutCancellation = new CancellationTokenSource(timeout);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+        try
+        {
+            using var sshCommand = connectedClient.CreateCommand(UbuntuPackageCommandCatalog.RequireShellCommand(bounded));
+            sshCommand.CommandTimeout = timeout;
+            await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
+
+            // This value is deliberately not a RemoteCommandResult. It is a
+            // bounded parser input used only to create the opaque in-memory
+            // BootIdentityToken; command diagnostics remain metadata-only.
+            var raw = await SshNetBoundedOutputCapture.ReadEphemeralSingleLineAsync(sshCommand.OutputStream, 128, linkedCancellation.Token).ConfigureAwait(false);
+            await SshNetBoundedOutputCapture.ReadAsync(sshCommand.ExtendedOutputStream, OutputCapturePolicy.MetadataOnly, 0, linkedCancellation.Token).ConfigureAwait(false);
+            return sshCommand.ExitStatus == 0 && raw is not null && BootIdentityToken.TryCreate(raw, out var token)
+                ? new BootIdentityReadResult(token, true)
+                : BootIdentityReadResult.Unavailable;
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
         {
@@ -382,6 +494,9 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             var value = client;
             client = null;
             endpoint = null;
+            var secretLease = reauthenticationLease;
+            reauthenticationLease = null;
+            secretLease?.Dispose();
             LastHostTrustAssessment = null;
             if (value is not null)
             {
@@ -459,6 +574,26 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         }
     }
 
+    private static bool TryReadSingleLine(string output, out string value)
+    {
+        value = string.Empty;
+        if (string.IsNullOrEmpty(output))
+        {
+            return false;
+        }
+
+        var line = output.EndsWith("\r\n", StringComparison.Ordinal) ? output[..^2]
+            : output.EndsWith('\n') ? output[..^1]
+            : output;
+        if (line.Contains('\r') || line.Contains('\n'))
+        {
+            return false;
+        }
+
+        value = line;
+        return true;
+    }
+
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -520,6 +655,54 @@ internal static class SshNetBoundedOutputCapture
         {
             Array.Clear(buffer);
             await retained.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Reads one bounded parser-only line without creating a command result or
+    /// diagnostic value. Callers must immediately transform it into an opaque
+    /// domain token and must never forward it to UI, journals, or support data.
+    /// </summary>
+    public static async Task<string?> ReadEphemeralSingleLineAsync(Stream source, int maximumBytes, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumBytes, 0);
+        var retained = new byte[maximumBytes];
+        var buffer = new byte[256];
+        var count = 0;
+        var malformed = false;
+        try
+        {
+            int bytesRead;
+            while ((bytesRead = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
+            {
+                var remaining = maximumBytes - count;
+                if (remaining <= 0)
+                {
+                    malformed = true;
+                    continue;
+                }
+
+                var copyLength = Math.Min(remaining, bytesRead);
+                buffer.AsSpan(0, copyLength).CopyTo(retained.AsSpan(count));
+                count += copyLength;
+                malformed |= copyLength != bytesRead;
+            }
+
+            if (malformed || count == 0)
+            {
+                return null;
+            }
+
+            var text = Encoding.UTF8.GetString(retained, 0, count);
+            return text.EndsWith("\r\n", StringComparison.Ordinal) ? text[..^2]
+                : text.EndsWith('\n') ? text[..^1]
+                : text;
+        }
+        finally
+        {
+            Array.Clear(buffer);
+            Array.Clear(retained);
         }
     }
 

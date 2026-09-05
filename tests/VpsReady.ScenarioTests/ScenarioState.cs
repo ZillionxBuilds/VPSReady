@@ -335,6 +335,12 @@ public sealed class ScenarioAptState
 
 public sealed class ScenarioRebootState
 {
+    public string BootIdentity { get; set; } = "11111111-1111-1111-1111-111111111111";
+
+    public int BootGeneration { get; set; }
+
+    public bool AdvanceBootIdentityOnReconnect { get; set; } = true;
+
     public bool IsRebooting { get; set; }
 
     public int ReconnectAttempts { get; set; }
