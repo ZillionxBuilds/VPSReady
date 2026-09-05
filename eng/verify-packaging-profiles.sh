@@ -5,9 +5,11 @@ set -euo pipefail
 
 profiles='eng/packaging-profiles.psd1'
 packager='eng/package-artifact.ps1'
+notice_verifier='eng/verify-third-party-notices.sh'
 
 [[ -f "$profiles" ]] || { printf '%s\n' "Missing packaging profiles: $profiles" >&2; exit 1; }
 [[ -f "$packager" ]] || { printf '%s\n' "Missing package script: $packager" >&2; exit 1; }
+[[ -f "$notice_verifier" ]] || { printf '%s\n' "Missing generated-notice verifier: $notice_verifier" >&2; exit 1; }
 
 for rid in win-x64 win-arm64 linux-x64 linux-arm64 osx-x64 osx-arm64; do
   grep -Fq "Rid = '$rid'" "$profiles" || { printf '%s\n' "Missing packaging profile: $rid" >&2; exit 1; }
@@ -28,6 +30,9 @@ grep -Fq 'generate-third-party-notices.ps1' "$packager"
 grep -Fq 'third_party_notices' "$packager"
 grep -Fq 'THIRD_PARTY_NOTICE_INVENTORY.json' "$packager"
 grep -Fq 'inventory_sha256' "$packager"
+grep -Fq -- '--notice' "$notice_verifier"
+grep -Fq -- '--inventory' "$notice_verifier"
+! grep -Eq '\bmapfile\b' "$notice_verifier"
 grep -Fq 'source_sha = $CommitSha' "$packager"
 grep -Fq 'startup_smoked = $profiles.StartupEvidence' "$packager"
 
