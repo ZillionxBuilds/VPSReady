@@ -118,8 +118,16 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             RemoteCommandCatalog.UbuntuUfwStatusRead => FactUfwStatus(),
             RemoteCommandCatalog.UbuntuUfwDetectionRead => FirewallDetection(),
             RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallRuleList(),
+            RemoteCommandCatalog.UbuntuUfwAddedRulesRead => FirewallAddedRules(),
             RemoteCommandCatalog.UbuntuUfwAllowRuleAdd => AddUfwRule(command),
             RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove => RemoveUfwRuleBySemantic(command),
+            RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure => AddUfwRule(command),
+            RemoteCommandCatalog.UbuntuUfwEnable => EnableUfwWithoutClientSafetyGuard(),
+            // C305 deliberately uses a production-shaped effect boundary.  The
+            // client workflow, not this scenario host, must prove the SSH
+            // continuity check before enable; privilege remains a remote
+            // mutation concern for both toggle operations.
+            RemoteCommandCatalog.UbuntuUfwDisable => DisableUfwProduction(),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -325,6 +333,39 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         _ => Result($"Status: {State.Ufw.Status.ToString().ToLowerInvariant()}"),
     };
 
+    private RemoteCommandResult FirewallAddedRules()
+    {
+        if (State.Ufw.Status == ScenarioUfwStatus.Absent)
+        {
+            return Result("ufw=unavailable");
+        }
+
+        if (State.Ufw.Status == ScenarioUfwStatus.Error)
+        {
+            return Failure(1, State.Ufw.ErrorMessage);
+        }
+
+        var rules = State.Ufw.Rules.Select(rule =>
+            $"ufw {rule.Action.ToLowerInvariant()} from {(rule.Source == "Anywhere" ? rule.IpFamily == ScenarioIpFamily.Ipv4 ? "0.0.0.0/0" : "::/0" : rule.Source)} to any port {rule.Port.ToString(CultureInfo.InvariantCulture)} proto {rule.Protocol.ToString().ToLowerInvariant()}");
+        return Result(string.Join(Environment.NewLine, ["Added user rules (see 'ufw status' for running firewall):", .. rules]));
+    }
+
+    private RemoteCommandResult DisableUfwProduction()
+    {
+        if (State.Ufw.Status is ScenarioUfwStatus.Absent or ScenarioUfwStatus.Error)
+        {
+            return Failure(127, "ufw is unavailable in this scenario.");
+        }
+
+        if (!HasPrivilege())
+        {
+            return Failure(13, "Permission denied while disabling the firewall.");
+        }
+
+        State.Ufw.Status = ScenarioUfwStatus.Inactive;
+        return Result("status=inactive");
+    }
+
     private string ActiveNumberedUfwStatus()
     {
         var rules = State.Ufw.Rules
@@ -366,7 +407,9 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             return Failure(13, "Permission denied while adding a firewall rule.");
         }
 
-        if (!Enum.TryParse<ScenarioRuleProtocol>(GetArgument(command, "protocol"), true, out var protocol)
+        var requestedProtocol = GetArgument(command, "protocol")
+            ?? (command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure ? "Tcp" : null);
+        if (!Enum.TryParse<ScenarioRuleProtocol>(requestedProtocol, true, out var protocol)
             || !int.TryParse(GetArgument(command, "port"), NumberStyles.None, CultureInfo.InvariantCulture, out var port)
             || port is < 1 or > 65535
             || !Enum.TryParse<ScenarioIpFamily>(GetArgument(command, "family") ?? "Ipv4", true, out var family))
@@ -470,6 +513,22 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         if (!State.Ufw.HasActiveSshAllow(State.Ssh.ActiveSshPort))
         {
             return Failure(13, "Firewall enable blocked until the active SSH port has a verified allow rule.");
+        }
+
+        State.Ufw.Status = ScenarioUfwStatus.Active;
+        return Result("status=active");
+    }
+
+    private RemoteCommandResult EnableUfwWithoutClientSafetyGuard()
+    {
+        if (State.Ufw.Status is ScenarioUfwStatus.Absent or ScenarioUfwStatus.Error)
+        {
+            return Failure(127, "ufw is unavailable in this scenario.");
+        }
+
+        if (!HasPrivilege())
+        {
+            return Failure(13, "Permission denied while enabling UFW.");
         }
 
         State.Ufw.Status = ScenarioUfwStatus.Active;
