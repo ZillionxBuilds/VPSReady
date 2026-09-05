@@ -45,11 +45,31 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public ConnectionScreenState OverviewState { get => overviewState; private set => SetProperty(ref overviewState, value); }
     public bool HasConnectedSession => session.Snapshot.IsConnected;
     public ConnectionSecretInput SecretInput { get; } = new();
+    public string SecretDisplay => new('•', SecretInput.Length);
+
+    public void AppendSecretCharacter(char value)
+    {
+        SecretInput.Append(value);
+        OnPropertyChanged(nameof(SecretDisplay));
+    }
+
+    public void BackspaceSecretCharacter()
+    {
+        SecretInput.Backspace();
+        OnPropertyChanged(nameof(SecretDisplay));
+    }
+
+    public void ClearSecretInput()
+    {
+        SecretInput.Clear();
+        OnPropertyChanged(nameof(SecretDisplay));
+    }
 
     /// <summary>Accepts transient characters only; it never stores a password string.</summary>
     public async Task TestAsync(string? host, string? port, string? user, TimeSpan? timeout, CancellationToken cancellationToken = default)
     {
         using var transient = SecretInput.TakeForSubmission();
+        OnPropertyChanged(nameof(SecretDisplay));
         var validation = ConnectionInputValidator.Validate(host, port, user, transient.Characters, timeout);
         if (!validation.IsValid)
         {
@@ -91,7 +111,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
 
     private async Task DisconnectAsync()
     {
-        SecretInput.Clear();
+        ClearSecretInput();
         await lifecycle.DisconnectAsync().ConfigureAwait(false);
         Refresh();
     }
@@ -106,6 +126,30 @@ public sealed class ConnectionSecretInput : IDisposable
     {
         Clear();
         characters = value.ToArray();
+    }
+    public void Append(char value)
+    {
+        if (char.IsControl(value) || value > 0x7f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value));
+        }
+        var current = characters ?? [];
+        var next = new char[current.Length + 1];
+        current.CopyTo(next, 0);
+        next[^1] = value;
+        Clear();
+        characters = next;
+    }
+    public void Backspace()
+    {
+        var current = characters ?? [];
+        if (current.Length == 0)
+        {
+            return;
+        }
+        var next = current[..^1];
+        Clear();
+        characters = next;
     }
     public SubmittedConnectionSecret TakeForSubmission()
     {

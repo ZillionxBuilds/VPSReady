@@ -62,7 +62,10 @@
               <TextBox x:Name="ConnectionHost" Watermark="Host or IP" />
               <TextBox x:Name="ConnectionPort" Watermark="SSH port (default 22)" />
               <TextBox x:Name="ConnectionUser" Watermark="Username" />
-              <TextBlock Text="Password input is supplied through the host secure input boundary and is never read from a Text property." TextWrapping="Wrap" />
+              <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" Padding="8">
+                <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" />
+              </Border>
+              <TextBlock Text="Password entry accepts basic ASCII keys only; IME input is rejected to avoid retaining an unreviewed managed text value." TextWrapping="Wrap" />
               <Button Click="TestConnectionAsync" Content="Test Connection" />
               <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.State}" />

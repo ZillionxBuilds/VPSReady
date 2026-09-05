@@ -84,4 +84,47 @@ public partial class MainWindow : Window
             connection.SecretInput.Clear();
         }
     }
+
+    private void ConnectionPasswordKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        var connection = viewModel?.ConnectionOverview;
+        if (connection is null)
+        {
+            return;
+        }
+        if (e.Key == Avalonia.Input.Key.Back)
+        {
+            connection.BackspaceSecretCharacter();
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Avalonia.Input.Key.Escape)
+        {
+            connection.ClearSecretInput();
+            e.Handled = true;
+            return;
+        }
+        if (TryMapAsciiKey(e.Key, out var value))
+        {
+            connection.AppendSecretCharacter(value);
+            e.Handled = true;
+        }
+    }
+
+    private static bool TryMapAsciiKey(Avalonia.Input.Key key, out char value)
+    {
+        var name = key.ToString();
+        if (name.Length == 1 && name[0] is >= 'A' and <= 'Z')
+        {
+            value = char.ToLowerInvariant(name[0]);
+            return true;
+        }
+        if (name.Length == 2 && name[0] == 'D' && name[1] is >= '0' and <= '9')
+        {
+            value = name[1];
+            return true;
+        }
+        value = default;
+        return false;
+    }
 }
