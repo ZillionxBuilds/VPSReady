@@ -38,6 +38,7 @@ public static class DesktopComposition
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
         services.AddSingleton<SafeUnhandledExceptionReporter>();
         services.AddSingleton<IRemoteTransportFactory, SshNetRemoteTransportFactory>();
+        services.AddSingleton<IConnectionSessionLifecycle, ConnectionSessionLifecycle>();
         return services.BuildServiceProvider(validateScopes: true);
     }
 

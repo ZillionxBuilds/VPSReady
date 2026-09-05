@@ -79,6 +79,7 @@ public static class ScenarioCommandIds
     }
     .Concat(new[]
     {
+        RemoteCommandCatalog.SshConnectionTest,
         RemoteCommandCatalog.UbuntuOsReleaseRead,
         RemoteCommandCatalog.UbuntuKernelArchitectureRead,
         RemoteCommandCatalog.UbuntuHostnameRead,

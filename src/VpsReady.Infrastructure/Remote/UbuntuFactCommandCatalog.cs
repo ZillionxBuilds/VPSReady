@@ -18,6 +18,7 @@ public static class UbuntuFactCommandCatalog
 
     private static readonly IReadOnlyList<UbuntuFactCommandDefinition> Definitions =
     [
+        Remote(RemoteCommandCatalog.SshConnectionTest, "authenticated-minimum-verification", "true"),
         Remote(RemoteCommandCatalog.UbuntuOsReleaseRead, "os-release", "cat /etc/os-release"),
         Remote(RemoteCommandCatalog.UbuntuKernelArchitectureRead, "uname", "uname -s -r -m"),
         Remote(RemoteCommandCatalog.UbuntuHostnameRead, "hostname", "hostname"),
