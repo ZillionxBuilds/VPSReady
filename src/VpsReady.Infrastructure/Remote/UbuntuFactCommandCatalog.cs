@@ -46,6 +46,10 @@ public static class UbuntuFactCommandCatalog
             RemoteCommandCatalog.UbuntuUfwDetectionRead,
             "ufw-detection",
             "if command -v ufw >/dev/null 2>&1; then ufw status numbered; else printf 'ufw=unavailable\\n'; fi"),
+        Remote(
+            RemoteCommandCatalog.UbuntuUfwRuleListRead,
+            "ufw-numbered-rules",
+            "if command -v ufw >/dev/null 2>&1; then ufw status numbered; else printf 'ufw=unavailable\\n'; fi"),
     ];
 
     public static IReadOnlyList<UbuntuFactCommandDefinition> All => Definitions;

@@ -1,4 +1,7 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 using VpsReady.Core.Remote;
 
@@ -18,6 +21,11 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex CpuModel = new("^(?:model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex Quantity = new("^(?<number>[0-9]+(?:\\.[0-9]+)?)(?<unit>[KMGTEP]?)(?:i?B)?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwPartialRule = new("^\\[\\s*[0-9]+(?:\\]|$)", RegexOptions.CultureInvariant);
+    private const int MaximumUfwRuleRows = 512;
 
     /// <summary>C301 detects state only; C302 owns numbered-rule parsing.</summary>
     public static UfwSnapshot ParseUfwDetection(RemoteCommandResult result)
@@ -40,6 +48,67 @@ public static partial class UbuntuServerFactParser
             "Status: active" => UfwSnapshot.StateOnly(UfwFirewallState.Active),
             _ => UfwSnapshot.StateOnly(UfwFirewallState.Unknown),
         };
+    }
+
+    /// <summary>
+    /// Parses the bounded, C-locale output from <c>ufw status numbered</c>.
+    /// Any row which is malformed, unsupported, ambiguous, or incomplete makes
+    /// the entire listing unusable; callers must retain their prior snapshot.
+    /// </summary>
+    public static UfwRuleListRead ParseUfwRuleList(RemoteCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.Succeeded)
+        {
+            return UfwRuleListRead(UfwFirewallState.Error, UfwRuleListReadStatus.RemoteFailure);
+        }
+
+        if (Encoding.UTF8.GetByteCount(result.StandardOutput) > UbuntuFactCommandCatalog.MaximumOutputBytes)
+        {
+            return UfwRuleListRead(UfwFirewallState.Unknown, UfwRuleListReadStatus.Partial);
+        }
+
+        var lines = Lines(result.StandardOutput);
+        if (lines.Length == 1 && lines[0] == "ufw=unavailable")
+        {
+            return UfwRuleListRead(UfwFirewallState.Absent, UfwRuleListReadStatus.Complete);
+        }
+
+        if (lines.Length == 1 && lines[0] == "Status: inactive")
+        {
+            return UfwRuleListRead(UfwFirewallState.Inactive, UfwRuleListReadStatus.Complete);
+        }
+
+        if (lines.Length < 3 || lines[0] != "Status: active" || !UfwHeader.IsMatch(lines[1]) || !UfwSeparator.IsMatch(lines[2]))
+        {
+            return UfwRuleListRead(UfwFirewallState.Unknown, UfwRuleListReadStatus.Malformed);
+        }
+
+        if (lines.Length - 3 > MaximumUfwRuleRows)
+        {
+            return UfwRuleListRead(UfwFirewallState.Active, UfwRuleListReadStatus.Partial);
+        }
+
+        var rules = new List<UfwRule>(lines.Length - 3);
+        var numbers = new HashSet<int>();
+        var identities = new HashSet<UfwRuleIdentity>();
+        foreach (var line in lines.Skip(3))
+        {
+            var parsed = ParseUfwRule(line);
+            if (parsed.Rule is null)
+            {
+                return UfwRuleListRead(UfwFirewallState.Active, parsed.Status);
+            }
+
+            if (!numbers.Add(parsed.Rule.Number) || !identities.Add(parsed.Rule.Identity))
+            {
+                return UfwRuleListRead(UfwFirewallState.Active, UfwRuleListReadStatus.Ambiguous);
+            }
+
+            rules.Add(parsed.Rule);
+        }
+
+        return new UfwRuleListRead(new UfwSnapshot(UfwFirewallState.Active, rules), UfwRuleListReadStatus.Complete);
     }
 
     public static ServerFact<UbuntuOperatingSystem> ParseOperatingSystem(string output)
@@ -263,4 +332,100 @@ public static partial class UbuntuServerFactParser
     private static string Unquote(string value) => value.Length >= 2 && value[0] == '"' && value[^1] == '"'
         ? value[1..^1]
         : value;
+
+    private static UfwRuleListRead UfwRuleListRead(UfwFirewallState state, UfwRuleListReadStatus status) =>
+        new(UfwSnapshot.StateOnly(state), status);
+
+    private static (UfwRule? Rule, UfwRuleListReadStatus Status) ParseUfwRule(string line)
+    {
+        if (line.Length > 1024)
+        {
+            return (null, UfwRuleListReadStatus.Partial);
+        }
+
+        var match = UfwRule.Match(line);
+        if (!match.Success)
+        {
+            return (null, UfwPartialRule.IsMatch(line) ? UfwRuleListReadStatus.Partial : UfwRuleListReadStatus.Malformed);
+        }
+
+        if (!int.TryParse(match.Groups["number"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            || !int.TryParse(match.Groups["port"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || port is < 1 or > 65535)
+        {
+            return (null, UfwRuleListReadStatus.Unsupported);
+        }
+
+        var protocol = match.Groups["protocol"].Value switch
+        {
+            "tcp" => UfwRuleProtocol.Tcp,
+            "udp" => UfwRuleProtocol.Udp,
+            _ => (UfwRuleProtocol?)null,
+        };
+        var action = match.Groups["action"].Value switch
+        {
+            "ALLOW" => UfwRuleAction.Allow,
+            "DENY" => UfwRuleAction.Deny,
+            "REJECT" => UfwRuleAction.Reject,
+            "LIMIT" => UfwRuleAction.Limit,
+            _ => (UfwRuleAction?)null,
+        };
+        if (protocol is null || action is null)
+        {
+            return (null, UfwRuleListReadStatus.Unsupported);
+        }
+
+        var source = match.Groups["source"].Value.Trim();
+        var destinationIsV6 = match.Groups["toV6"].Success;
+        var sourceIsV6 = source.EndsWith(" (v6)", StringComparison.Ordinal);
+        if (destinationIsV6 != sourceIsV6)
+        {
+            return (null, UfwRuleListReadStatus.Ambiguous);
+        }
+
+        var family = destinationIsV6 ? UfwIpFamily.Ipv6 : UfwIpFamily.Ipv4;
+        if (sourceIsV6)
+        {
+            source = source[..^5].TrimEnd();
+        }
+
+        if (!TryParseUfwSource(source, family, out var normalizedSource))
+        {
+            return (null, UfwRuleListReadStatus.Unsupported);
+        }
+
+        var identity = UfwRuleIdentity.Create(number, protocol.Value, port, normalizedSource, action.Value, family);
+        return (new UfwRule(identity, number, protocol.Value, port, normalizedSource, action.Value, family), UfwRuleListReadStatus.Complete);
+    }
+
+    private static bool TryParseUfwSource(string source, UfwIpFamily family, out string normalizedSource)
+    {
+        normalizedSource = string.Empty;
+        if (source == "Anywhere")
+        {
+            normalizedSource = source;
+            return true;
+        }
+
+        var slash = source.LastIndexOf('/');
+        var addressText = slash < 0 ? source : source[..slash];
+        var prefixText = slash < 0 ? null : source[(slash + 1)..];
+        if (!IPAddress.TryParse(addressText, out var address)
+            || (family == UfwIpFamily.Ipv4 && address.AddressFamily != AddressFamily.InterNetwork)
+            || (family == UfwIpFamily.Ipv6 && address.AddressFamily != AddressFamily.InterNetworkV6))
+        {
+            return false;
+        }
+
+        if (prefixText is not null
+            && (!int.TryParse(prefixText, NumberStyles.None, CultureInfo.InvariantCulture, out var prefix)
+                || prefix < 0
+                || prefix > (family == UfwIpFamily.Ipv4 ? 32 : 128)))
+        {
+            return false;
+        }
+
+        normalizedSource = source;
+        return true;
+    }
 }
