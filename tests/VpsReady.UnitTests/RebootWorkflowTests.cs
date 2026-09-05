@@ -45,7 +45,7 @@ public sealed class RebootWorkflowTests
         var sink = new Sink();
         var preflight = new AllowedPreflight();
         var transport = new RebootTransport(new RemoteTransportException(RemoteTransportFailureKind.Network), Ok("reconnect=verified"));
-        var result = await new RebootWorkflow(preflight, sink).RebootAsync(transport, confirmed: true);
+        var result = await CreateWorkflow(preflight, sink).RebootAsync(transport, confirmed: true);
 
         Assert.True(result.Result.Succeeded);
         Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
@@ -70,11 +70,11 @@ public sealed class RebootWorkflowTests
     {
         var preflight = new AllowedPreflight();
         var rejectedTransport = new RebootTransport();
-        var rejected = await new RebootWorkflow(preflight, new Sink()).RebootAsync(rejectedTransport, confirmed: false);
+        var rejected = await CreateWorkflow(preflight, new Sink()).RebootAsync(rejectedTransport, confirmed: false);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        var cancelledResult = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(new RebootTransport(), confirmed: true, cancelled.Token);
-        var unavailable = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(new PlainTransport(), confirmed: true);
+        var cancelledResult = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(new RebootTransport(), confirmed: true, cancelled.Token);
+        var unavailable = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(new PlainTransport(), confirmed: true);
 
         Assert.Equal(RebootErrorCatalog.Confirmation, rejected.ErrorCode);
         Assert.Empty(rejectedTransport.Commands);
@@ -91,11 +91,11 @@ public sealed class RebootWorkflowTests
         timeoutTransport.ReconnectFailures.Enqueue(new RemoteTransportException(RemoteTransportFailureKind.Network));
         timeoutTransport.ReconnectFailures.Enqueue(new RemoteTransportException(RemoteTransportFailureKind.Timeout));
         timeoutTransport.ReconnectFailures.Enqueue(new RemoteTransportException(RemoteTransportFailureKind.ConnectionRefused));
-        var timeout = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(timeoutTransport, confirmed: true);
+        var timeout = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(timeoutTransport, confirmed: true);
 
         var trustTransport = new RebootTransport(Ok("reboot=started"));
         trustTransport.ReconnectFailures.Enqueue(new RemoteTransportException(RemoteTransportFailureKind.HostTrust));
-        var trust = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(trustTransport, confirmed: true);
+        var trust = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(trustTransport, confirmed: true);
 
         Assert.Equal(RebootErrorCatalog.Timeout, timeout.ErrorCode);
         Assert.Equal(RebootReconnectOutcome.TimedOut, timeout.ReconnectOutcome);
@@ -112,7 +112,7 @@ public sealed class RebootWorkflowTests
     {
         using var cancellation = new CancellationTokenSource();
         var transport = new RebootTransport(Ok("reboot=started")) { OnReconnect = cancellation.Cancel };
-        var result = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(transport, confirmed: true, cancellation.Token);
+        var result = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(transport, confirmed: true, cancellation.Token);
 
         Assert.True(result.Result.Cancelled);
         Assert.Equal(RebootErrorCatalog.Cancelled, result.ErrorCode);
@@ -126,7 +126,7 @@ public sealed class RebootWorkflowTests
     {
         var sink = new Sink();
         var transport = new RebootTransport(Ok("reboot=started"), new InvalidOperationException("injected recovery failure"));
-        var result = await new RebootWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
+        var result = await CreateWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
@@ -146,7 +146,7 @@ public sealed class RebootWorkflowTests
         transport.BootIdentities.Enqueue("11111111-1111-1111-1111-111111111111");
         transport.BootIdentities.Enqueue("11111111-1111-1111-1111-111111111111");
 
-        var result = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(transport, confirmed: true);
+        var result = await CreateWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(transport, confirmed: true);
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal(RebootErrorCatalog.Timeout, result.ErrorCode);
@@ -155,6 +155,89 @@ public sealed class RebootWorkflowTests
     }
 
     private static RemoteCommandResult Ok(string output) => new(0, output, string.Empty, TimeSpan.Zero);
+
+    private static RebootRecoveryPolicy TestPolicy { get; } = new(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 3);
+
+    [Fact]
+    public async Task RecoveryPolicyDeadlinePreventsReconnectAndNeverReportsSuccess()
+    {
+        var time = new DeterministicRecoveryTime();
+        var transport = new RebootTransport(Ok("reboot=started"));
+
+        var policy = new RebootRecoveryPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), [TimeSpan.Zero], 3);
+        var result = await new RebootWorkflow(new AllowedPreflight(), new Sink(), policy, time).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(RebootErrorCatalog.Timeout, result.ErrorCode);
+        Assert.Equal(RebootReconnectOutcome.TimedOut, result.ReconnectOutcome);
+        Assert.Equal(0, result.ReconnectAttempts);
+        Assert.Equal(0, transport.ReconnectCalls);
+    }
+
+    [Fact]
+    public void RecoveryPolicyCopiesRetryDelaysAndRejectsInvalidBounds()
+    {
+        var suppliedDelays = new List<TimeSpan> { TimeSpan.FromSeconds(1) };
+        var policy = new RebootRecoveryPolicy(TimeSpan.FromSeconds(2), TimeSpan.Zero, TimeSpan.FromSeconds(1), suppliedDelays, 1);
+        suppliedDelays[0] = TimeSpan.FromSeconds(9);
+
+        Assert.Equal(TimeSpan.FromSeconds(1), policy.DelayForAttempt(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RebootRecoveryPolicy(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RebootRecoveryPolicy(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [], 1));
+    }
+
+    [Fact]
+    public async Task RecoveryPolicyAppliesGraceAndClampsRetryAndReconnectToTheRemainingDeadline()
+    {
+        var policy = new RebootRecoveryPolicy(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10), [TimeSpan.FromSeconds(3)], 3);
+        var time = new DeterministicRecoveryTime();
+        var transport = new RebootTransport(Ok("reboot=started"));
+        transport.ReconnectFailures.Enqueue(new RemoteTransportException(RemoteTransportFailureKind.Network));
+
+        var result = await new RebootWorkflow(new AllowedPreflight(), new Sink(), policy, time).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(RebootErrorCatalog.Timeout, result.ErrorCode);
+        Assert.Equal(1, result.ReconnectAttempts);
+        Assert.Equal([TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3)], time.Delays);
+        Assert.Equal([TimeSpan.FromSeconds(3)], transport.ReconnectTimeouts);
+    }
+
+    [Fact]
+    public async Task CancellationDuringRecoveryGraceIsTerminalCancelledAndNeverReconnects()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var time = new DeterministicRecoveryTime { OnDelay = _ => cancellation.Cancel() };
+        var transport = new RebootTransport(Ok("reboot=started"));
+
+        var result = await new RebootWorkflow(new AllowedPreflight(), new Sink(), TestPolicy, time).RebootAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(RebootErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(RebootReconnectOutcome.Cancelled, result.ReconnectOutcome);
+        Assert.Equal(0, result.ReconnectAttempts);
+        Assert.Equal(0, transport.ReconnectCalls);
+    }
+
+    private static RebootWorkflow CreateWorkflow(IPrivilegePreflight preflight, IDiagnosticSink diagnostics) =>
+        new(preflight, diagnostics, TestPolicy, new DeterministicRecoveryTime());
+
+    private sealed class DeterministicRecoveryTime(TimeSpan? elapsed = null) : IRebootRecoveryTime
+    {
+        public TimeSpan Elapsed { get; private set; } = elapsed ?? TimeSpan.Zero;
+        public List<TimeSpan> Delays { get; } = [];
+        public Action<TimeSpan>? OnDelay { get; init; }
+
+        public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Delays.Add(delay);
+            Elapsed += delay;
+            OnDelay?.Invoke(delay);
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class AllowedPreflight : IPrivilegePreflight
     {
@@ -174,6 +257,7 @@ public sealed class RebootWorkflowTests
         public List<RemoteCommand> Commands { get; } = [];
         public Queue<Exception> ReconnectFailures { get; } = [];
         public Queue<string> BootIdentities { get; } = [];
+        public List<TimeSpan> ReconnectTimeouts { get; } = [];
         public int ReconnectCalls { get; private set; }
         private int bootIdentityReads;
         public Action? OnReconnect { get; init; }
@@ -199,6 +283,7 @@ public sealed class RebootWorkflowTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReconnectCalls++;
+            ReconnectTimeouts.Add(timeout);
             OnReconnect?.Invoke();
             return ReconnectFailures.Count == 0 ? Task.CompletedTask : Task.FromException(ReconnectFailures.Dequeue());
         }

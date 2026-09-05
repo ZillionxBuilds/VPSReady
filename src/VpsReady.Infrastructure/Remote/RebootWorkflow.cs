@@ -9,12 +9,21 @@ namespace VpsReady.Infrastructure.Remote;
 /// A disconnect after dispatch is expected intermediate state, never a success:
 /// the original trusted SSH session must reconnect and verify.
 /// </summary>
-public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSink diagnostics) : IRebootWorkflow
+public sealed class RebootWorkflow : IRebootWorkflow
 {
     private const string ActionName = "RebootServer";
-    private const int MaximumReconnectAttempts = 3;
-    private static readonly TimeSpan ReconnectTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(50);
+    private readonly IPrivilegePreflight preflight;
+    private readonly IDiagnosticSink diagnostics;
+    private readonly RebootRecoveryPolicy policy;
+    private readonly IRebootRecoveryTime recoveryTime;
+
+    public RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSink diagnostics, RebootRecoveryPolicy? policy = null, IRebootRecoveryTime? recoveryTime = null)
+    {
+        this.preflight = preflight ?? throw new ArgumentNullException(nameof(preflight));
+        this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+        this.policy = policy ?? RebootRecoveryPolicy.Production;
+        this.recoveryTime = recoveryTime ?? new StopwatchRebootRecoveryTime();
+    }
 
     public async Task<RebootRequiredState> InspectRequiredAsync(IRemoteTransport transport, CancellationToken cancellationToken = default)
     {
@@ -89,7 +98,7 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
             activePhase = DiagnosticPhase.Plan;
             activeCommandId = RemoteCommandCatalog.UbuntuBootIdentityRead;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, activeCommandId, null).ConfigureAwait(false);
-            var before = await reconnectTransport.ReadBootIdentityAsync(ReconnectTimeout, cancellationToken).ConfigureAwait(false);
+            var before = await reconnectTransport.ReadBootIdentityAsync(policy.ConnectTimeout, cancellationToken).ConfigureAwait(false);
             if (!before.IsAvailable || before.Token is null)
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Plan, activeCommandId, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
@@ -117,7 +126,8 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
             await ReportAsync(correlation, DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, apply.Id.Value, null).ConfigureAwait(false);
             activePhase = DiagnosticPhase.Recovery;
             activeCommandId = RemoteCommandCatalog.SshReconnectVerify;
-            return await ReconnectAndVerifyAsync(reconnectTransport, correlation, apply.Id.Value, before.Token, cancellationToken).ConfigureAwait(false);
+            var recoveryDeadline = recoveryTime.Elapsed + policy.OverallDeadline;
+            return await ReconnectAndVerifyAsync(reconnectTransport, correlation, apply.Id.Value, before.Token, recoveryDeadline, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -137,17 +147,33 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
         }
     }
 
-    private async Task<RebootOperationResult> ReconnectAndVerifyAsync(IRebootReconnectTransport transport, CorrelationIds correlation, string applyCommandId, BootIdentityToken before, CancellationToken cancellationToken)
+    private async Task<RebootOperationResult> ReconnectAndVerifyAsync(IRebootReconnectTransport transport, CorrelationIds correlation, string applyCommandId, BootIdentityToken before, TimeSpan recoveryDeadline, CancellationToken cancellationToken)
     {
         var verify = UbuntuPackageCommandCatalog.CreateReconnectVerifyRequest();
-        for (var attempt = 1; attempt <= MaximumReconnectAttempts; attempt++)
+        await recoveryTime.DelayAsync(policy.ShutdownGrace, cancellationToken).ConfigureAwait(false);
+        var attempts = 0;
+        for (var attempt = 1; attempt <= policy.MaximumAttempts && recoveryTime.Elapsed < recoveryDeadline; attempt++)
         {
+            attempts = attempt;
             cancellationToken.ThrowIfCancellationRequested();
             await ReportAsync(correlation, DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
             try
             {
-                await transport.ReconnectAsync(ReconnectTimeout, cancellationToken).ConfigureAwait(false);
-                var after = await transport.ReadBootIdentityAsync(ReconnectTimeout, cancellationToken).ConfigureAwait(false);
+                var timeout = ConnectTimeoutForRemainingDeadline(recoveryDeadline);
+                if (timeout <= TimeSpan.Zero)
+                {
+                    break;
+                }
+                await transport.ReconnectAsync(timeout, cancellationToken).ConfigureAwait(false);
+
+                cancellationToken.ThrowIfCancellationRequested();
+                timeout = ConnectTimeoutForRemainingDeadline(recoveryDeadline);
+                if (timeout <= TimeSpan.Zero)
+                {
+                    break;
+                }
+                var after = await transport.ReadBootIdentityAsync(timeout, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!after.IsAvailable || after.Token is null)
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Recovery, RemoteCommandCatalog.UbuntuBootIdentityRead, OperationState.Unknown, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);
@@ -155,16 +181,17 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
 
                 if (after.Token.Matches(before))
                 {
-                    if (attempt == MaximumReconnectAttempts)
+                    if (attempt == policy.MaximumAttempts)
                     {
                         return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, DiagnosticPhase.Recovery, RemoteCommandCatalog.UbuntuBootIdentityRead, OperationState.Unknown, RebootReconnectOutcome.TimedOut, attempt).ConfigureAwait(false);
                     }
 
-                    await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
+                    await recoveryTime.DelayAsync(ClampDelay(attempt, recoveryDeadline), cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
                 var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!verified.Succeeded || !IsExactRecord(verified.StandardOutput, "reconnect=verified"))
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);
@@ -184,7 +211,7 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
             }
             catch (RemoteTransportException exception) when (IsRetryableReconnectFailure(exception.Kind))
             {
-                if (attempt == MaximumReconnectAttempts)
+                if (attempt == policy.MaximumAttempts)
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown, RebootReconnectOutcome.TimedOut, attempt).ConfigureAwait(false);
                 }
@@ -195,16 +222,34 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
             }
             catch (TimeoutException)
             {
-                if (attempt == MaximumReconnectAttempts)
+                if (attempt == policy.MaximumAttempts)
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, DiagnosticPhase.Recovery, verify.Id.Value, OperationState.Unknown, RebootReconnectOutcome.TimedOut, attempt).ConfigureAwait(false);
                 }
             }
 
-            await Task.Delay(RetryDelay, cancellationToken).ConfigureAwait(false);
+            await recoveryTime.DelayAsync(ClampDelay(attempt, recoveryDeadline), cancellationToken).ConfigureAwait(false);
         }
 
-        return await FailureAsync(correlation, OperationErrorCode.Reconnect, RebootErrorCatalog.Reconnect, DiagnosticPhase.Recovery, applyCommandId, OperationState.Unknown, RebootReconnectOutcome.Failed, MaximumReconnectAttempts).ConfigureAwait(false);
+        return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, DiagnosticPhase.Recovery, applyCommandId, OperationState.Unknown, RebootReconnectOutcome.TimedOut, attempts).ConfigureAwait(false);
+    }
+
+    private TimeSpan ConnectTimeoutForRemainingDeadline(TimeSpan recoveryDeadline)
+    {
+        var remaining = recoveryDeadline - recoveryTime.Elapsed;
+        return remaining <= TimeSpan.Zero ? TimeSpan.Zero : remaining < policy.ConnectTimeout ? remaining : policy.ConnectTimeout;
+    }
+
+    private TimeSpan ClampDelay(int attempt, TimeSpan recoveryDeadline)
+    {
+        var remaining = recoveryDeadline - recoveryTime.Elapsed;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var delay = policy.DelayForAttempt(attempt);
+        return remaining < delay ? remaining : delay;
     }
 
     private async Task<RebootRequiredState> RequiredCancelledAsync(CorrelationIds correlation, string commandId)

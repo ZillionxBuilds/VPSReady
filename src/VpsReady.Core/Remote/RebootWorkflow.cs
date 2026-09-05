@@ -50,13 +50,33 @@ public sealed record BootIdentityReadResult(BootIdentityToken? Token, bool IsAva
 }
 
 /// <summary>Immutable bounded recovery policy; the overall deadline is authoritative.</summary>
-public sealed record RebootRecoveryPolicy(
-    TimeSpan OverallDeadline,
-    TimeSpan ShutdownGrace,
-    TimeSpan ConnectTimeout,
-    IReadOnlyList<TimeSpan> RetryDelays,
-    int MaximumAttempts)
+public sealed record RebootRecoveryPolicy
 {
+    public RebootRecoveryPolicy(TimeSpan overallDeadline, TimeSpan shutdownGrace, TimeSpan connectTimeout, IReadOnlyList<TimeSpan> retryDelays, int maximumAttempts)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(overallDeadline, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(shutdownGrace, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(connectTimeout, TimeSpan.Zero);
+        ArgumentNullException.ThrowIfNull(retryDelays);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumAttempts, 0);
+        if (retryDelays.Count == 0 || retryDelays.Any(delay => delay < TimeSpan.Zero))
+        {
+            throw new ArgumentOutOfRangeException(nameof(retryDelays));
+        }
+
+        OverallDeadline = overallDeadline;
+        ShutdownGrace = shutdownGrace;
+        ConnectTimeout = connectTimeout;
+        RetryDelays = Array.AsReadOnly(retryDelays.ToArray());
+        MaximumAttempts = maximumAttempts;
+    }
+
+    public TimeSpan OverallDeadline { get; }
+    public TimeSpan ShutdownGrace { get; }
+    public TimeSpan ConnectTimeout { get; }
+    public IReadOnlyList<TimeSpan> RetryDelays { get; }
+    public int MaximumAttempts { get; }
+
     public static RebootRecoveryPolicy Production { get; } = new(
         TimeSpan.FromMinutes(5),
         TimeSpan.FromSeconds(2),

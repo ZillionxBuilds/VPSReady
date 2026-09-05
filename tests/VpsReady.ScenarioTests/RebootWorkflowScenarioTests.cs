@@ -17,7 +17,7 @@ public sealed class RebootWorkflowScenarioTests
         var diagnostics = services.GetRequiredService<IDiagnosticSink>();
         var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
         await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
-        var workflow = new RebootWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var workflow = CreateWorkflow(diagnostics);
 
         var inspection = await workflow.InspectRequiredAsync(transport);
         var result = await workflow.RebootAsync(transport, confirmed: true);
@@ -47,12 +47,12 @@ public sealed class RebootWorkflowScenarioTests
         await using var timeoutServices = ScenarioComposition.CreateProfile(ScenarioProfiles.RebootReconnectTimeout);
         var timeoutDiagnostics = timeoutServices.GetRequiredService<IDiagnosticSink>();
         await using var timeoutTransport = timeoutServices.GetRequiredService<IRemoteTransportFactory>().Create();
-        var timeout = await new RebootWorkflow(new PrivilegePreflightWorkflow(timeoutDiagnostics), timeoutDiagnostics).RebootAsync(timeoutTransport, confirmed: true);
+        var timeout = await CreateWorkflow(timeoutDiagnostics).RebootAsync(timeoutTransport, confirmed: true);
 
         await using var trustServices = ScenarioComposition.Create("c504-host-change", state => state.Ssh.HostKey = ScenarioHostKeyState.Changed);
         var trustDiagnostics = trustServices.GetRequiredService<IDiagnosticSink>();
         await using var trustTransport = trustServices.GetRequiredService<IRemoteTransportFactory>().Create();
-        var trust = await new RebootWorkflow(new PrivilegePreflightWorkflow(trustDiagnostics), trustDiagnostics).RebootAsync(trustTransport, confirmed: true);
+        var trust = await CreateWorkflow(trustDiagnostics).RebootAsync(trustTransport, confirmed: true);
 
         Assert.False(timeout.Result.Succeeded);
         Assert.Equal(RebootErrorCatalog.Timeout, timeout.ErrorCode);
@@ -73,7 +73,7 @@ public sealed class RebootWorkflowScenarioTests
         var faults = services.GetRequiredService<ScenarioFaultPlan>();
         var diagnostics = services.GetRequiredService<IDiagnosticSink>();
         await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
-        var workflow = new RebootWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var workflow = CreateWorkflow(diagnostics);
 
         faults.Inject(DiagnosticPhase.Apply, ScenarioFaultKind.Disconnect, "reboot-expected-disconnect", RemoteCommandCatalog.UbuntuRebootApply);
         var recovered = await workflow.RebootAsync(transport, confirmed: true);
@@ -101,7 +101,7 @@ public sealed class RebootWorkflowScenarioTests
         await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
         faults.Inject(DiagnosticPhase.Recovery, ScenarioFaultKind.Throw, "reconnect-unexpected", RemoteCommandCatalog.SshReconnectVerify);
 
-        var result = await new RebootWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).RebootAsync(transport, confirmed: true);
+        var result = await CreateWorkflow(diagnostics).RebootAsync(transport, confirmed: true);
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
@@ -119,11 +119,28 @@ public sealed class RebootWorkflowScenarioTests
         var diagnostics = services.GetRequiredService<IDiagnosticSink>();
         await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
 
-        var result = await new RebootWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).RebootAsync(transport, confirmed: true);
+        var result = await CreateWorkflow(diagnostics).RebootAsync(transport, confirmed: true);
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal(RebootErrorCatalog.Timeout, result.ErrorCode);
         Assert.Equal(RebootReconnectOutcome.TimedOut, result.ReconnectOutcome);
         Assert.Equal(3, result.ReconnectAttempts);
+    }
+    private static RebootWorkflow CreateWorkflow(IDiagnosticSink diagnostics) =>
+        new(new PrivilegePreflightWorkflow(diagnostics), diagnostics, TestPolicy, new DeterministicRecoveryTime());
+
+    private static RebootRecoveryPolicy TestPolicy { get; } = new(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 3);
+
+    private sealed class DeterministicRecoveryTime : IRebootRecoveryTime
+    {
+        public TimeSpan Elapsed { get; private set; }
+
+        public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Elapsed += delay;
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
     }
 }
