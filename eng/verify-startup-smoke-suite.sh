@@ -41,12 +41,13 @@ if grep -Fq '$Rid:' "$smoke"; then
   exit 1
 fi
 
-if grep -Eiq '\$host\b' "$smoke"; then
-  printf '%s\n' 'Startup-smoke script must not assign or reference the reserved PowerShell Host variable.' >&2
+if grep -Eiq '\$(host|iswindows)\b' "$smoke"; then
+  printf '%s\n' 'Startup-smoke script must not shadow the reserved PowerShell Host or IsWindows automatic variables.' >&2
   exit 1
 fi
 
 require_smoke 'Get-Variable -Name Host'
+require_smoke 'Get-Variable -Name IsWindows'
 require_smoke '$observedHost = Get-CurrentHost'
 
 for workflow in "$blind_ci" "$release_ci"; do

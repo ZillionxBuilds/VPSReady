@@ -138,8 +138,8 @@ function Stop-SmokeProcess([Diagnostics.Process]$Process, [int]$TimeoutSeconds) 
     throw 'Startup-smoke process tree did not terminate during bounded cleanup.'
 }
 
-function New-NoDotnetShim([string]$Path, [bool]$IsWindows) {
-    if ($IsWindows) {
+function New-NoDotnetShim([string]$Path, [bool]$WindowsHost) {
+    if ($WindowsHost) {
         [IO.File]::WriteAllText($Path, "@echo off`r`nexit /b 77`r`n", [Text.UTF8Encoding]::new($false))
         return
     }
@@ -175,6 +175,10 @@ if ($SelfTest) {
 
     if ((Get-Variable -Name Host).Options -notmatch 'ReadOnly|Constant') {
         throw 'Startup-smoke reserved Host variable self-test failed.'
+    }
+
+    if ((Get-Variable -Name IsWindows).Options -notmatch 'ReadOnly|Constant') {
+        throw 'Startup-smoke reserved IsWindows variable self-test failed.'
     }
 
     $selfTestDirectory = Join-Path ([IO.Path]::GetTempPath()) ("vpsready-startup-smoke-" + [Guid]::NewGuid().ToString('N'))
