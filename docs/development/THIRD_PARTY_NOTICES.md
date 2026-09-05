@@ -1,31 +1,31 @@
-# VPSReady Third-Party Notices
+# VPSReady Third-Party Notice Generation Policy
 
-This file is included with distributed VPSReady artifacts. It records direct
-runtime dependencies whose licenses require notice preservation.
+Distributed artifacts must include a generated `THIRD_PARTY_NOTICES.md` that
+matches the exact runtime dependency graph locked in
+`src/VpsReady.Desktop/packages.lock.json`. This source-policy document is not
+itself copied into an archive: `eng/package-artifact.ps1` invokes
+`eng/generate-third-party-notices.ps1` after locked restore and writes the
+artifact-local notice file.
 
-## BouncyCastle.Cryptography 2.7.0
+The generator:
 
-- Package: `BouncyCastle.Cryptography` 2.7.0
-- Purpose: maintained Ed25519 generation and OpenSSH-v1 encoding for local SSH
-  key pairs.
-- Upstream: <https://github.com/bcgit/bc-csharp/tree/release-2.7.0>
-- License: MIT / Bouncy Castle License
+- takes the union of non-project packages from every `net10.0` runtime target
+  graph, excluding test-project locks;
+- records exact package ID, resolved version, lock content hash, package
+  source URL, and package-declared license/copyright/project metadata;
+- copies package-supplied `LICENSE*` files verbatim, including a
+  package-declared file license when present; and
+- fails closed when a locked package, `.nuspec`, license declaration, or
+  declared license file cannot be resolved from the restored cache.
 
-Copyright (c) 2000-2026 The Legion of the Bouncy Castle Inc.
+The package also includes `THIRD_PARTY_NOTICE_INVENTORY.json`, a
+machine-readable projection of the same exact package IDs, versions, content
+hashes, and license metadata. `eng/verify-third-party-notices.sh` compares a
+generated/archive-local notice and inventory to every locked runtime package,
+then rejects developer cache paths and private-key/credential-like material.
+The artifact manifest records the generated paths, SHA-256 values, source-lock
+path, and runtime package count so package inspection can verify archive
+alignment.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files, to deal in the Software
-without restriction, including without limitation the rights to use, copy,
-modify, merge, publish, distribute, sublicense, and/or sell copies of the
-Software, and to permit persons to whom the Software is furnished to do so,
-subject to the following conditions: the above copyright notice and this
-permission notice shall be included in all copies or substantial portions of
-the Software.
-
-THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+This policy records package metadata and notice handling; it is not legal
+advice and does not change VPSReady's Apache-2.0 license.

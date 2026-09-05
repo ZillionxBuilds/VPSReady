@@ -277,6 +277,14 @@ jobs:
           -RunnerOs '${{ runner.os }}'
           -RunnerArchitecture '${{ runner.arch }}'
 
+      - name: Verify generated third-party notice inventory
+        shell: bash
+        run: >
+          bash eng/verify-third-party-notices.sh
+          --lock src/VpsReady.Desktop/packages.lock.json
+          --notice artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICES.md
+          --inventory artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICE_INVENTORY.json
+
       - name: Reject unsafe retained package material
         shell: bash
         run: bash eng/verify-artifact-safety.sh artifacts/publish
@@ -343,7 +351,20 @@ jobs:
               *-"$EXPECTED_VALIDATION_SHA".zip) ;;
               *) printf 'Package does not use resolved validation identity: %s\n' "$archive" >&2; exit 1 ;;
             esac
-            unzip -p "$archive" artifact-manifest.json | jq -e --arg expected "$EXPECTED_VALIDATION_SHA" '.source_sha == $expected' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICES.md' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICE_INVENTORY.json' >/dev/null
+            notice_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er --arg expected "$EXPECTED_VALIDATION_SHA" '
+              select(.source_sha == $expected
+                and .third_party_notices.path == "THIRD_PARTY_NOTICES.md"
+                and .third_party_notices.inventory_path == "THIRD_PARTY_NOTICE_INVENTORY.json"
+                and (.third_party_notices.runtime_package_count > 0)
+                and .third_party_notices.source_lock == "src/VpsReady.Desktop/packages.lock.json")
+              | .third_party_notices.sha256')"
+            actual_notice_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICES.md | sha256sum | awk '{print $1}')"
+            test "$actual_notice_sha" = "$notice_sha"
+            inventory_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er '.third_party_notices.inventory_sha256')"
+            actual_inventory_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICE_INVENTORY.json | sha256sum | awk '{print $1}')"
+            test "$actual_inventory_sha" = "$inventory_sha"
           done
 
   required:

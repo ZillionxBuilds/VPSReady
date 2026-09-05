@@ -175,6 +175,14 @@ jobs:
           dotnet restore src/VpsReady.Desktop/VpsReady.Desktop.csproj --locked-mode
           ./eng/package-artifact.ps1 -Rid '${{ matrix.rid }}' -CommitSha '${{ needs.identity.outputs.source_sha }}' -RunnerOs '${{ runner.os }}' -RunnerArchitecture '${{ runner.arch }}'
 
+      - name: Verify generated third-party notice inventory
+        shell: bash
+        run: >
+          bash eng/verify-third-party-notices.sh
+          --lock src/VpsReady.Desktop/packages.lock.json
+          --notice artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICES.md
+          --inventory artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICE_INVENTORY.json
+
       - name: Reject unsafe retained package material
         shell: bash
         run: |
@@ -219,8 +227,23 @@ jobs:
             sidecar="$archive.sha256"
             test -f "$sidecar"
             (cd "$(dirname "$archive")" && sha256sum --check "$(basename "$sidecar")")
-            unzip -p "$archive" artifact-manifest.json | jq -e --arg sha "${{ needs.identity.outputs.source_sha }}" \
-              '.source_sha == $sha and .self_contained == true and .signing.status == "UNSIGNED" and (.evidence.startup_smoked | startswith("NOT RUN"))' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICES.md' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICE_INVENTORY.json' >/dev/null
+            notice_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er --arg sha "${{ needs.identity.outputs.source_sha }}" '
+              select(.source_sha == $sha
+                and .self_contained == true
+                and .signing.status == "UNSIGNED"
+                and (.evidence.startup_smoked | startswith("NOT RUN"))
+                and .third_party_notices.path == "THIRD_PARTY_NOTICES.md"
+                and .third_party_notices.inventory_path == "THIRD_PARTY_NOTICE_INVENTORY.json"
+                and (.third_party_notices.runtime_package_count > 0)
+                and .third_party_notices.source_lock == "src/VpsReady.Desktop/packages.lock.json")
+              | .third_party_notices.sha256')"
+            actual_notice_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICES.md | sha256sum | awk '{print $1}')"
+            test "$actual_notice_sha" = "$notice_sha"
+            inventory_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er '.third_party_notices.inventory_sha256')"
+            actual_inventory_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICE_INVENTORY.json | sha256sum | awk '{print $1}')"
+            test "$actual_inventory_sha" = "$inventory_sha"
           done
           jq -n --arg sha "${{ needs.identity.outputs.source_sha }}" --arg run "$GITHUB_RUN_ID" \
             '{schema_version:1,source_sha:$sha,run_id:$run,package_count:6,candidate_status:"BLIND_CI_ARTIFACTS_ONLY",release_decision:"NOT MADE"}' \
