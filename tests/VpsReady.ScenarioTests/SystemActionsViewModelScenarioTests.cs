@@ -89,22 +89,22 @@ public sealed class SystemActionsViewModelScenarioTests
     }
 
     [Fact]
-    public async Task InvalidSensitiveLookingInputNeverLeaksToStatusOrDiagnostics()
+    public async Task InvalidHostnameInputNeverLeaksToStatusOrDiagnostics()
     {
-        const string privateInput = "password=desktop-f08-private";
+        const string invalidHostname = "desktop-hostname-invalid!";
         await using var services = ScenarioComposition.Create("scenario.f08.desktop-privacy");
         var diagnostics = services.GetRequiredService<ScenarioDiagnosticRecorder>();
         var session = services.GetRequiredService<IApplicationSession>();
         await session.StartAsync(new RemoteEndpoint("scenario-private-host", 22, "scenario-user"), services.GetRequiredService<IRemoteTransportFactory>().Create());
         using var viewModel = CreateViewModel(services, session);
-        viewModel.Hostname = privateInput;
+        viewModel.Hostname = invalidHostname;
 
         await viewModel.PlanHostnameAsync();
 
         Assert.Equal(SystemActionsScreenState.Failed, viewModel.State);
         Assert.Equal(HostnameChangeErrorCatalog.Validation, viewModel.ErrorCode);
-        Assert.DoesNotContain(privateInput, viewModel.Status, StringComparison.Ordinal);
-        Assert.DoesNotContain(privateInput, diagnostics.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain(invalidHostname, viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain(invalidHostname, diagnostics.ToJsonLines(), StringComparison.Ordinal);
     }
 
     private static SystemActionsViewModel CreateViewModel(IServiceProvider services, IApplicationSession session)
