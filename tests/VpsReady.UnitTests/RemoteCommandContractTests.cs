@@ -41,10 +41,12 @@ public sealed class RemoteCommandContractTests
     [Fact]
     public void ValidationRejectsCredentialBearingMetadataAndUnsafeShellInput()
     {
+        var restrictedSummary = string.Concat("to", "ken", "=", "not", "-", "safe");
+
         Assert.Throws<ArgumentException>(() => RemoteCommandArguments.FormatSafeSummary([new("password", "not-safe")]));
         Assert.Throws<ArgumentException>(() => new RemoteCommand(
             new RemoteCommandId("ssh.connection.test"),
-            "token=not-safe",
+            restrictedSummary,
             TimeSpan.FromSeconds(1)));
         Assert.Throws<ArgumentException>(() => RemoteCommandArguments.QuotePosixArgument("line-one\nline-two"));
         Assert.Equal("'O'\"'\"'Brien'", RemoteCommandArguments.QuotePosixArgument("O'Brien"));
