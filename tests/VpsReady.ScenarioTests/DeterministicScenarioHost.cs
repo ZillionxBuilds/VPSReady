@@ -10,7 +10,7 @@ namespace VpsReady.ScenarioTests;
 /// It never creates a socket or invokes a shell.  Every supported command reads
 /// or mutates <see cref="ScenarioHostState"/> and every other command fails.
 /// </summary>
-public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTransport
+public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTransport, IHostnameChangeTransport
 {
     public DeterministicScenarioHost(string scenarioId)
         : this(ScenarioHostState.CreateDefault(scenarioId), new ScenarioFaultPlan())
@@ -31,6 +31,50 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
     {
         ArgumentNullException.ThrowIfNull(command);
         return ExecuteAsync(command, InferPhase(command.Id.Value), cancellationToken);
+    }
+
+    /// <summary>Hostname is supplied through the dedicated ephemeral operation boundary, never command metadata.</summary>
+    public async Task<RemoteCommandResult> ExecuteHostnameChangeAsync(RemoteCommand command, string validatedHostname, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Id.Value != RemoteCommandCatalog.UbuntuHostnameChangeApply || !HostnameChangeValidator.TryNormalize(validatedHostname, out var hostname))
+        {
+            throw new ArgumentException("Scenario hostname apply requires a strict catalog command and hostname.", nameof(command));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (State.Ssh.CommandLatency > command.Timeout)
+        {
+            throw new TimeoutException("Scenario hostname apply exceeded its finite timeout.");
+        }
+
+        if (Faults.TryTake(DiagnosticPhase.Apply, command.Id.Value, out var fault) && fault is not null)
+        {
+            var faultResult = await ScenarioFaultPlan.ApplyToCommandAsync(fault, command, cancellationToken).ConfigureAwait(false);
+            if (faultResult is not null)
+            {
+                return new RemoteCommandResult(faultResult.ExitCode, faultResult.StandardOutput, faultResult.StandardError, State.Ssh.CommandLatency + faultResult.Duration, command.OutputCapturePolicy);
+            }
+        }
+
+        State.Hostname = hostname;
+        State.Ubuntu.RawFactsOutput = null;
+        return new RemoteCommandResult(0, string.Empty, string.Empty, State.Ssh.CommandLatency, command.OutputCapturePolicy);
+    }
+
+    public async Task<HostnameReadResult> ReadHostnameAsync(RemoteCommand command, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Id.Value is not (RemoteCommandCatalog.UbuntuHostnameChangeRead or RemoteCommandCatalog.UbuntuHostnameChangeVerify))
+        {
+            throw new ArgumentException("Scenario hostname reads require a hostname catalog command.", nameof(command));
+        }
+
+        var phase = command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeVerify ? DiagnosticPhase.Verify : DiagnosticPhase.Plan;
+        var response = await ExecuteAsync(command, phase, cancellationToken).ConfigureAwait(false);
+        return response.Succeeded && HostnameChangeValidator.TryNormalize(response.StandardOutput, out var hostname)
+            ? new HostnameReadResult(hostname, true)
+            : HostnameReadResult.Unavailable;
     }
 
     /// <summary>
@@ -121,6 +165,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuOsReleaseRead => Result($"ID={State.Ubuntu.Distribution.ToLowerInvariant()}\nVERSION=\"{State.Ubuntu.Version}\""),
             RemoteCommandCatalog.UbuntuKernelArchitectureRead => Result($"Linux {State.Ubuntu.Kernel} {State.Ubuntu.Architecture}"),
             RemoteCommandCatalog.UbuntuHostnameRead => Result(State.Hostname),
+            RemoteCommandCatalog.UbuntuHostnameChangeRead => Result(State.Hostname),
+            RemoteCommandCatalog.UbuntuHostnameChangeVerify => Result(State.Hostname),
             RemoteCommandCatalog.UbuntuUptimeRead => Result("93600.00 1200.00"),
             RemoteCommandCatalog.UbuntuCurrentUserRead => Result(State.Ssh.UserName),
             RemoteCommandCatalog.UbuntuPrivilegeRead => PrivilegeFacts(),

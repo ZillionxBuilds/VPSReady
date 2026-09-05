@@ -76,7 +76,7 @@ internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost h
 /// remains available for a replacement connection identity and its state stays
 /// observable to every scenario transport.
 /// </summary>
-internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport, IHostnameChangeTransport
 {
     private bool disposed;
 
@@ -138,6 +138,34 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
         return response.Succeeded && BootIdentityToken.TryCreate(response.StandardOutput.Trim(), out var token)
             ? new BootIdentityReadResult(token, true)
             : BootIdentityReadResult.Unavailable;
+    }
+
+    public async Task<HostnameReadResult> ReadHostnameAsync(RemoteCommand command, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (command.Id.Value is not (RemoteCommandCatalog.UbuntuHostnameChangeRead or RemoteCommandCatalog.UbuntuHostnameChangeVerify))
+        {
+            throw new ArgumentException("Scenario hostname reads require a hostname catalog command.", nameof(command));
+        }
+
+        try
+        {
+            var phase = command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeVerify ? DiagnosticPhase.Verify : DiagnosticPhase.Plan;
+            var response = await host.ExecuteAsync(command, phase, cancellationToken).ConfigureAwait(false);
+            return response.Succeeded && HostnameChangeValidator.TryNormalize(response.StandardOutput, out var hostname)
+                ? new HostnameReadResult(hostname, true)
+                : HostnameReadResult.Unavailable;
+        }
+        catch (ScenarioDisconnectException)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
+    }
+
+    public Task<RemoteCommandResult> ExecuteHostnameChangeAsync(RemoteCommand command, string validatedHostname, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return host.ExecuteHostnameChangeAsync(command, validatedHostname, cancellationToken);
     }
 
     public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)

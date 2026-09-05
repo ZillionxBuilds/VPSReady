@@ -112,6 +112,9 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuRebootApply,
         RemoteCommandCatalog.SshReconnectVerify,
         RemoteCommandCatalog.UbuntuBootIdentityRead,
+        RemoteCommandCatalog.UbuntuHostnameChangeRead,
+        RemoteCommandCatalog.UbuntuHostnameChangeApply,
+        RemoteCommandCatalog.UbuntuHostnameChangeVerify,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 

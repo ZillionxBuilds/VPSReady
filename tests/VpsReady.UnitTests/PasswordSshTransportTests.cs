@@ -57,6 +57,24 @@ public sealed class PasswordSshTransportTests
         Assert.Equal(source.Length, source.Position);
     }
 
+    [Fact]
+    public async Task MaximumLengthHostnameWithOneNewlineRemainsEphemeralAndStrictlyValid()
+    {
+        var hostname = string.Join('.', [new string('a', 63), new string('b', 63), new string('c', 63), new string('d', 61)]);
+        Assert.Equal(253, hostname.Length);
+        Assert.True(HostnameChangeValidator.TryNormalize(hostname, out _));
+
+        await using var source = new MemoryStream(Encoding.UTF8.GetBytes(hostname + "\n"));
+        var parsed = await SshNetBoundedOutputCapture.ReadEphemeralSingleLineAsync(
+            source,
+            UbuntuHostnameCommandCatalog.HostnameReadMaximumBytes,
+            CancellationToken.None);
+
+        Assert.Equal(hostname, parsed);
+        Assert.True(HostnameChangeValidator.TryNormalize(parsed, out _));
+        Assert.Equal(source.Length, source.Position);
+    }
+
     [Theory]
     [InlineData(RemoteTransportFailureKind.Authentication)]
     [InlineData(RemoteTransportFailureKind.Network)]
