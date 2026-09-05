@@ -14,7 +14,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// a connection is usable only after SSH.NET reports it connected and its host
 /// key has passed the persisted fail-closed trust assessment.
 /// </summary>
-public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport
+public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport, IHostnameChangeTransport
 {
     private readonly IKnownHostTrustStore trustStore;
     private readonly SemaphoreSlim connectionGate = new(1, 1);
@@ -308,9 +308,11 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
 
         var shellCommand = factDefinition is not null
             ? factDefinition.ShellCommand!
-            : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead or RemoteCommandCatalog.UbuntuRebootApply or RemoteCommandCatalog.SshReconnectVerify or RemoteCommandCatalog.UbuntuBootIdentityRead
-                ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
-                : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
+            : command.Id.Value is RemoteCommandCatalog.UbuntuHostnameChangeRead or RemoteCommandCatalog.UbuntuHostnameChangeVerify
+                ? UbuntuHostnameCommandCatalog.RequireShellCommand(command)
+                : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead or RemoteCommandCatalog.UbuntuRebootApply or RemoteCommandCatalog.SshReconnectVerify or RemoteCommandCatalog.UbuntuBootIdentityRead
+                    ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
+                    : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
 
         using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
@@ -430,6 +432,91 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         {
             throw ToSafeConnectionFailure(exception);
         }
+    }
+
+    public async Task<HostnameReadResult> ReadHostnameAsync(RemoteCommand command, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Id.Value is not (RemoteCommandCatalog.UbuntuHostnameChangeRead or RemoteCommandCatalog.UbuntuHostnameChangeVerify)
+            || command.OutputCapturePolicy != OutputCapturePolicy.MetadataOnly
+            || command.MaximumOutputBytes != 0)
+        {
+            throw new ArgumentException("Hostname inspection requires a metadata-only hostname catalog command.", nameof(command));
+        }
+
+        return await ReadHostnameEphemeralAsync(command, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RemoteCommandResult> ExecuteHostnameChangeAsync(RemoteCommand command, string validatedHostname, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Id.Value != RemoteCommandCatalog.UbuntuHostnameChangeApply
+            || command.OutputCapturePolicy != OutputCapturePolicy.MetadataOnly
+            || command.MaximumOutputBytes != 0
+            || !HostnameChangeValidator.TryNormalize(validatedHostname, out _))
+        {
+            throw new ArgumentException("Hostname apply requires a metadata-only catalog command and strict hostname.", nameof(command));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        var connectedClient = client;
+        if (connectedClient is null || !connectedClient.IsConnected)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
+
+        using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            using var sshCommand = connectedClient.CreateCommand(UbuntuHostnameCommandCatalog.RequireShellCommand(command, validatedHostname));
+            sshCommand.CommandTimeout = command.Timeout;
+            await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
+            await SshNetBoundedOutputCapture.ReadAsync(sshCommand.OutputStream, OutputCapturePolicy.MetadataOnly, 0, linkedCancellation.Token).ConfigureAwait(false);
+            await SshNetBoundedOutputCapture.ReadAsync(sshCommand.ExtendedOutputStream, OutputCapturePolicy.MetadataOnly, 0, linkedCancellation.Token).ConfigureAwait(false);
+            return new RemoteCommandResult(sshCommand.ExitStatus ?? 255, string.Empty, string.Empty, Stopwatch.GetElapsedTime(startedAt), OutputCapturePolicy.MetadataOnly);
+        }
+        catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (SshOperationTimeoutException) { throw new RemoteTransportException(RemoteTransportFailureKind.Timeout); }
+        catch (Exception exception) { throw ToSafeConnectionFailure(exception); }
+    }
+
+    private async Task<HostnameReadResult> ReadHostnameEphemeralAsync(RemoteCommand command, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        var connectedClient = client;
+        if (connectedClient is null || !connectedClient.IsConnected)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+        }
+
+        using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
+        using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+        try
+        {
+            using var sshCommand = connectedClient.CreateCommand(UbuntuHostnameCommandCatalog.RequireShellCommand(command));
+            sshCommand.CommandTimeout = command.Timeout;
+            await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
+            var raw = await SshNetBoundedOutputCapture.ReadEphemeralSingleLineAsync(sshCommand.OutputStream, 253, linkedCancellation.Token).ConfigureAwait(false);
+            await SshNetBoundedOutputCapture.ReadAsync(sshCommand.ExtendedOutputStream, OutputCapturePolicy.MetadataOnly, 0, linkedCancellation.Token).ConfigureAwait(false);
+            return sshCommand.ExitStatus == 0 && HostnameChangeValidator.TryNormalize(raw, out var hostname)
+                ? new HostnameReadResult(hostname, true)
+                : HostnameReadResult.Unavailable;
+        }
+        catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (SshOperationTimeoutException) { throw new RemoteTransportException(RemoteTransportFailureKind.Timeout); }
+        catch (Exception exception) { throw ToSafeConnectionFailure(exception); }
     }
 
     /// <summary>

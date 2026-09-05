@@ -69,6 +69,9 @@ public static class RemoteCommandCatalog
     public const string UbuntuRebootApply = DiagnosticCommandCatalog.UbuntuRebootApply;
     public const string SshReconnectVerify = DiagnosticCommandCatalog.SshReconnectVerify;
     public const string UbuntuBootIdentityRead = DiagnosticCommandCatalog.UbuntuBootIdentityRead;
+    public const string UbuntuHostnameChangeRead = DiagnosticCommandCatalog.UbuntuHostnameChangeRead;
+    public const string UbuntuHostnameChangeApply = DiagnosticCommandCatalog.UbuntuHostnameChangeApply;
+    public const string UbuntuHostnameChangeVerify = DiagnosticCommandCatalog.UbuntuHostnameChangeVerify;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -105,6 +108,9 @@ public static class RemoteCommandCatalog
         UbuntuRebootApply,
         SshReconnectVerify,
         UbuntuBootIdentityRead,
+        UbuntuHostnameChangeRead,
+        UbuntuHostnameChangeApply,
+        UbuntuHostnameChangeVerify,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

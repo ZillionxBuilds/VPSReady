@@ -155,6 +155,11 @@ public static class DiagnosticEventCatalog
     public const string RebootFailed = "system.reboot.failed";
     public const string RebootCancelled = "system.reboot.cancelled";
     public const string RebootRecoveryRequired = "system.reboot.recovery_required";
+    public const string HostnameChangeStarted = "system.hostname_change.started";
+    public const string HostnameChangePlanned = "system.hostname_change.planned";
+    public const string HostnameChangeSucceeded = "system.hostname_change.succeeded";
+    public const string HostnameChangeFailed = "system.hostname_change.failed";
+    public const string HostnameChangeCancelled = "system.hostname_change.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -170,6 +175,7 @@ public static class DiagnosticEventCatalog
         PackageIndexUpdateStarted, PackageIndexUpdateSucceeded, PackageIndexUpdateFailed, PackageIndexUpdateCancelled,
         PackageUpgradeStarted, PackageUpgradePlanned, PackageUpgradeSucceeded, PackageUpgradeFailed, PackageUpgradeCancelled,
         RebootStarted, RebootSucceeded, RebootFailed, RebootCancelled, RebootRecoveryRequired,
+        HostnameChangeStarted, HostnameChangePlanned, HostnameChangeSucceeded, HostnameChangeFailed, HostnameChangeCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -214,6 +220,9 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuRebootApply = "ubuntu.reboot.apply";
     public const string SshReconnectVerify = "ssh.reconnect.verify";
     public const string UbuntuBootIdentityRead = "ubuntu.boot_identity.read";
+    public const string UbuntuHostnameChangeRead = "ubuntu.hostname.change.read";
+    public const string UbuntuHostnameChangeApply = "ubuntu.hostname.change.apply";
+    public const string UbuntuHostnameChangeVerify = "ubuntu.hostname.change.verify";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -250,6 +259,9 @@ public static class DiagnosticCommandCatalog
         UbuntuRebootApply,
         SshReconnectVerify,
         UbuntuBootIdentityRead,
+        UbuntuHostnameChangeRead,
+        UbuntuHostnameChangeApply,
+        UbuntuHostnameChangeVerify,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -268,6 +280,7 @@ public static class DiagnosticErrorCatalog
         .Concat(PackageIndexUpdateErrorCatalog.All)
         .Concat(PackageUpgradeErrorCatalog.All)
         .Concat(RebootErrorCatalog.All)
+        .Concat(HostnameChangeErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);
