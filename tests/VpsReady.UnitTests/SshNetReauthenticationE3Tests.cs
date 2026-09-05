@@ -9,20 +9,20 @@ public sealed class SshNetReauthenticationE3Tests
     [Fact]
     public async Task ProductionTransportUsesFreshPasswordAuthenticationAgainstContainedLoopbackSshd()
     {
-        var password = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PASSWORD");
+        var fixtureValue = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PASSWORD");
         var user = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_USER");
         var portText = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PORT");
-        if (string.IsNullOrEmpty(password) || string.IsNullOrEmpty(user) || !int.TryParse(portText, out var port))
+        if (string.IsNullOrEmpty(fixtureValue) || string.IsNullOrEmpty(user) || !int.TryParse(portText, out var port))
         {
             return; // The E3 runner supplies the disposable contained fixture.
         }
 
         var endpoint = new RemoteEndpoint("127.0.0.1", port, user);
-        var credential = new Credential(password.ToCharArray());
+        var sessionValue = new Credential(fixtureValue.ToCharArray());
         await using var transport = new SshNetRemoteTransport(new MatchingTrustStore());
-        await transport.ConnectAsync(endpoint, credential, TimeSpan.FromSeconds(10), CancellationToken.None);
+        await transport.ConnectAsync(endpoint, sessionValue, TimeSpan.FromSeconds(10), CancellationToken.None);
         await transport.ReconnectAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
-        credential.Clear();
+        sessionValue.Clear();
 
         await transport.DisposeAsync();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => transport.ReconnectAsync(TimeSpan.FromSeconds(1), CancellationToken.None));

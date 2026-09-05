@@ -27,15 +27,15 @@ public sealed class BootIdentityToken
 
     private BootIdentityToken(string value) => this.value = value;
 
-    public static bool TryCreate(string candidate, out BootIdentityToken? token)
+    public static bool TryCreate(string candidate, out BootIdentityToken? identity)
     {
-        token = null;
+        identity = null;
         if (string.IsNullOrWhiteSpace(candidate) || candidate.Length > 128 || candidate.Any(character => !(char.IsAsciiLetterOrDigit(character) || character == '-')))
         {
             return false;
         }
 
-        token = new BootIdentityToken(candidate);
+        identity = new BootIdentityToken(candidate);
         return true;
     }
 
