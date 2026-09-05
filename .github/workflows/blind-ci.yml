@@ -126,6 +126,10 @@ jobs:
         shell: bash
         run: bash eng/verify-tracked-secrets.sh
 
+      - name: E0 user and troubleshooting guide semantic guard (C603)
+        shell: bash
+        run: bash eng/verify-user-troubleshooting-guide.sh
+
       - name: E0 prospective-source policy
         shell: bash
         run: |
