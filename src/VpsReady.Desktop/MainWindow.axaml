@@ -132,6 +132,53 @@
               <TextBlock Text="Use Activity &amp; Diagnostics and the operation ID to Copy a Safe Issue Report or export a sanitized support bundle. Nothing is uploaded automatically." TextWrapping="Wrap" />
             </StackPanel>
           </Border>
+          <Border IsVisible="{Binding SelectedPage.IsSystemActionsPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Safe system actions" />
+              <TextBlock Text="Every change reads state, creates a plan where applicable, requires your explicit confirmation, then verifies the result. Package actions never offer a distribution release upgrade." TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.State}" />
+              <TextBlock IsVisible="{Binding SystemActions.OperationId}" FontFamily="Consolas" Text="{Binding SystemActions.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SystemActions.ErrorCode}" FontFamily="Consolas" Text="{Binding SystemActions.ErrorCode}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding SystemActions.CancelCommand}" IsEnabled="{Binding SystemActions.CanCancel}" Content="Cancel operation" />
+              </StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Packages" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="RefreshPackageIndexAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Refresh package index" />
+                <Button Click="PlanPackageUpgradeAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Read upgrade plan" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.UpgradeEligibilityMessage}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.UpgradePlanStatus}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsUpgradeConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed normal package upgrade." />
+              <Button Click="ApplyPackageUpgradeAsync" IsEnabled="{Binding SystemActions.CanUpgrade}" Content="Apply and verify package upgrade" />
+              <TextBlock FontWeight="SemiBold" Text="Reboot" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="InspectRebootRequiredAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Inspect reboot requirement" />
+                <TextBlock Text="{Binding SystemActions.RebootRequirementStatus}" VerticalAlignment="Center" TextWrapping="Wrap" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.RebootEligibilityMessage}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsRebootConfirmed, Mode=TwoWay}" Content="I confirm reboot. Connection loss is expected; reconnect and revalidation are bounded." />
+              <Button Click="RebootSystemAsync" IsEnabled="{Binding SystemActions.CanReboot}" Content="Reboot and verify reconnect" />
+              <TextBlock FontWeight="SemiBold" Text="Hostname" />
+              <TextBox Watermark="New hostname" Text="{Binding SystemActions.Hostname, Mode=TwoWay}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="PlanHostnameAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Validate and read hostname plan" />
+                <Button Click="ApplyHostnameAsync" IsEnabled="{Binding SystemActions.CanApplyHostname}" Content="Apply and verify hostname" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.HostnameEligibilityMessage}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsHostnameConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed hostname change." />
+              <TextBlock FontWeight="SemiBold" Text="Timezone" />
+              <TextBox Watermark="IANA timezone, for example Europe/London" Text="{Binding SystemActions.Timezone, Mode=TwoWay}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="PlanTimezoneAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Validate and read timezone plan" />
+                <Button Click="ApplyTimezoneAsync" IsEnabled="{Binding SystemActions.CanApplyTimezone}" Content="Apply and verify timezone" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.TimezoneEligibilityMessage}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsTimezoneConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed timezone change." />
+              <TextBlock Text="Use the operation ID in Activity &amp; Diagnostics to prepare a Safe Issue Report or a local sanitized support bundle. No raw command, endpoint, credential or secret is displayed or uploaded." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
           <Border IsVisible="{Binding SelectedPage.IsConnectionSurfacePage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="8">
               <TextBlock FontWeight="SemiBold" Text="Connection and overview" />

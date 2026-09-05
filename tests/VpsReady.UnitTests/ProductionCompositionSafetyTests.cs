@@ -23,6 +23,11 @@ public sealed class ProductionCompositionSafetyTests
         var keyVerifier = services.GetRequiredService<IKeyAuthenticationVerifier>();
         var configEditor = services.GetRequiredService<IOpenSshConfigEditor>();
         var firewallManagement = services.GetRequiredService<IFirewallManagement>();
+        var packageIndexUpdater = services.GetRequiredService<IPackageIndexUpdater>();
+        var packageUpgrader = services.GetRequiredService<IPackageUpgrader>();
+        var rebootWorkflow = services.GetRequiredService<IRebootWorkflow>();
+        var hostnameChanger = services.GetRequiredService<IHostnameChanger>();
+        var timezoneChanger = services.GetRequiredService<ITimezoneChanger>();
         var appViewModel = services.GetRequiredService<AppViewModel>();
         await using var transport = transportFactory.Create();
 
@@ -34,8 +39,14 @@ public sealed class ProductionCompositionSafetyTests
         Assert.IsType<KeyAuthenticationVerificationWorkflow>(keyVerifier);
         Assert.IsType<OpenSshConfigEditor>(configEditor);
         Assert.IsType<FirewallManagement>(firewallManagement);
+        Assert.IsType<PackageIndexUpdateWorkflow>(packageIndexUpdater);
+        Assert.IsType<PackageUpgradeWorkflow>(packageUpgrader);
+        Assert.IsType<RebootWorkflow>(rebootWorkflow);
+        Assert.IsType<HostnameChangeWorkflow>(hostnameChanger);
+        Assert.IsType<TimezoneChangeWorkflow>(timezoneChanger);
         Assert.NotNull(appViewModel.Firewall);
         Assert.NotNull(appViewModel.SshManagement);
+        Assert.NotNull(appViewModel.SystemActions);
         Assert.DoesNotContain("Scenario", transport.GetType().Assembly.GetName().Name, StringComparison.Ordinal);
         Assert.DoesNotContain(
             typeof(DesktopComposition).Assembly.GetReferencedAssemblies(),

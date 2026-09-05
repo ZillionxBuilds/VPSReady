@@ -77,6 +77,43 @@ public sealed class AppViewModel : ObservableObject
             diagnostics);
     }
 
+    public AppViewModel(
+        IApplicationSession applicationSession,
+        IConnectionSessionLifecycle lifecycle,
+        IDiagnosticsWorkspace diagnosticsWorkspace,
+        IFirewallManagement firewallManagement,
+        ILocalEd25519KeyGenerator keyGenerator,
+        IExistingSshKeySelector keySelector,
+        IPublicKeyDeployment keyDeployment,
+        IKeyAuthenticationVerifier keyAuthentication,
+        IOpenSshConfigEditor configEditor,
+        IDiagnosticSink diagnostics,
+        IPackageIndexUpdater packageIndexUpdater,
+        IPackageUpgrader packageUpgrader,
+        IRebootWorkflow rebootWorkflow,
+        IHostnameChanger hostnameChanger,
+        ITimezoneChanger timezoneChanger)
+        : this(
+            applicationSession,
+            lifecycle,
+            diagnosticsWorkspace,
+            firewallManagement,
+            keyGenerator,
+            keySelector,
+            keyDeployment,
+            keyAuthentication,
+            configEditor,
+            diagnostics)
+    {
+        SystemActions = new SystemActionsViewModel(
+            applicationSession,
+            packageIndexUpdater,
+            packageUpgrader,
+            rebootWorkflow,
+            hostnameChanger,
+            timezoneChanger);
+    }
+
     private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)
     {
         this.applicationSession = applicationSession;
@@ -127,6 +164,7 @@ public sealed class AppViewModel : ObservableObject
     public ConnectionOverviewViewModel? ConnectionOverview { get; }
     public FirewallViewModel? Firewall { get; }
     public SshManagementViewModel? SshManagement { get; }
+    public SystemActionsViewModel? SystemActions { get; }
 
     /// <summary>Desktop hosts copy this already-sanitized report only after an explicit user action.</summary>
     public event Action<string>? SafeIssueReportReady;
@@ -367,7 +405,8 @@ public sealed record ShellPageViewModel(
     public bool IsActivityPage => Page == ShellPage.ActivityAndDiagnostics;
     public bool IsFirewallPage => Page == ShellPage.Firewall;
     public bool IsSshManagementPage => Page == ShellPage.SshKeysAndConfig;
-    public bool IsPlaceholderPage => Page is not ShellPage.Firewall and not ShellPage.SshKeysAndConfig;
+    public bool IsSystemActionsPage => Page == ShellPage.System;
+    public bool IsPlaceholderPage => Page is not ShellPage.Firewall and not ShellPage.SshKeysAndConfig and not ShellPage.System;
     public bool IsConnectionSurfacePage => Page is ShellPage.Connection or ShellPage.Overview;
 
     public static ShellPageViewModel Create(ShellPage page) => page switch
@@ -404,7 +443,7 @@ public sealed record ShellPageViewModel(
             page,
             "System",
             "System actions",
-            "System changes will require clear confirmation and verification. No system action can run from this disconnected shell.",
+            "System changes use a read, plan, explicit confirmation, apply and verification journey. Reboot recovery is bounded and revalidates host identity.",
             "Manage system",
             "Connect to a server before managing system settings."),
         ShellPage.ActivityAndDiagnostics => new(
