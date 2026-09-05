@@ -128,7 +128,9 @@ jobs:
 
       - name: E0 prospective-source policy
         shell: bash
-        run: bash eng/verify-ci-source-sha.sh
+        run: |
+          bash eng/verify-ci-source-sha.sh
+          bash eng/verify-release-candidate-ci.sh
 
       - name: E1 unit tests
         run: dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
