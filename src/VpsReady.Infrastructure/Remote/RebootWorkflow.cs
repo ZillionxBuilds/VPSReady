@@ -174,6 +174,10 @@ public sealed class RebootWorkflow : IRebootWorkflow
                 }
                 var after = await transport.ReadBootIdentityAsync(timeout, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                if (recoveryTime.Elapsed >= recoveryDeadline)
+                {
+                    break;
+                }
                 if (!after.IsAvailable || after.Token is null)
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Recovery, RemoteCommandCatalog.UbuntuBootIdentityRead, OperationState.Unknown, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);
@@ -192,6 +196,10 @@ public sealed class RebootWorkflow : IRebootWorkflow
 
                 var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                if (recoveryTime.Elapsed >= recoveryDeadline)
+                {
+                    break;
+                }
                 if (!verified.Succeeded || !IsExactRecord(verified.StandardOutput, "reconnect=verified"))
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);

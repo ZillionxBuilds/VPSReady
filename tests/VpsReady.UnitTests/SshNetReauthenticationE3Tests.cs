@@ -14,21 +14,28 @@ public sealed class SshNetReauthenticationE3Tests
         var portText = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PORT");
         if (string.IsNullOrEmpty(fixtureValue) || string.IsNullOrEmpty(user) || !int.TryParse(portText, out var port))
         {
-            return; // The E3 runner supplies the disposable contained fixture.
+            return; // The E3 runner supplies the disposable contained OpenSSH fixture.
         }
 
         var endpoint = new RemoteEndpoint("127.0.0.1", port, user);
         var sessionValue = new Credential(fixtureValue.ToCharArray());
-        await using var transport = new SshNetRemoteTransport(new MatchingTrustStore());
+        var trust = new MatchingTrustStore();
+        await using var transport = new SshNetRemoteTransport(trust);
         await transport.ConnectAsync(endpoint, sessionValue, TimeSpan.FromSeconds(10), CancellationToken.None);
-        await transport.ReconnectAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
         sessionValue.Clear();
+        await transport.ReconnectAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+        Assert.True(trust.Assessments >= 2);
 
         await transport.DisposeAsync();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => transport.ReconnectAsync(TimeSpan.FromSeconds(1), CancellationToken.None));
 
         await using var wrong = new SshNetRemoteTransport(new MatchingTrustStore());
         await Assert.ThrowsAsync<RemoteTransportException>(() => wrong.ConnectAsync(endpoint, new Credential(['x']), TimeSpan.FromSeconds(10), CancellationToken.None));
+
+        await using var clearedTransport = new SshNetRemoteTransport(new MatchingTrustStore());
+        var cleared = new Credential(['x']);
+        cleared.Clear();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => clearedTransport.ConnectAsync(endpoint, cleared, TimeSpan.FromSeconds(10), CancellationToken.None));
     }
 
     private sealed class Credential(char[] value) : IPasswordCredential
@@ -42,7 +49,13 @@ public sealed class SshNetReauthenticationE3Tests
 
     private sealed class MatchingTrustStore : IKnownHostTrustStore
     {
-        public Task<KnownHostTrustAssessment> AssessAsync(KnownHostIdentity identity, HostKeyFingerprint observedFingerprint, CancellationToken cancellationToken) => Task.FromResult(new KnownHostTrustAssessment(KnownHostTrustState.Matching, null, false));
+        public int Assessments { get; private set; }
+
+        public Task<KnownHostTrustAssessment> AssessAsync(KnownHostIdentity identity, HostKeyFingerprint observedFingerprint, CancellationToken cancellationToken)
+        {
+            Assessments++;
+            return Task.FromResult(new KnownHostTrustAssessment(KnownHostTrustState.Matching, null, false));
+        }
         public Task<KnownHostTrustAssessment> AcceptUnknownAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<KnownHostTrustAssessment> ReplaceChangedAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
