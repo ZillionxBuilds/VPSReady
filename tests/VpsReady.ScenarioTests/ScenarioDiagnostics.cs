@@ -318,6 +318,7 @@ public sealed class ScenarioOperationRunner
         ScenarioFaultKind.Cancellation => new OperationCanceledException(),
         ScenarioFaultKind.Timeout => new TimeoutException(),
         ScenarioFaultKind.Disconnect => new ScenarioDisconnectException("Injected deterministic scenario disconnect."),
+        ScenarioFaultKind.DropConnection => new ScenarioDisconnectException("Injected deterministic scenario drop."),
         _ => new ScenarioFaultException(fault),
     };
 }

@@ -22,5 +22,8 @@ public sealed class ProductionCompositionSafetyTests
         Assert.IsType<SshNetRemoteTransportFactory>(transportFactory);
         Assert.IsType<ApplicationSession>(applicationSession);
         Assert.DoesNotContain("Scenario", transport.GetType().Assembly.GetName().Name, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            typeof(DesktopComposition).Assembly.GetReferencedAssemblies(),
+            reference => string.Equals(reference.Name, "VpsReady.ScenarioTests", StringComparison.Ordinal));
     }
 }
