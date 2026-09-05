@@ -326,6 +326,10 @@ public sealed class ScenarioLocalFileState
 
     public Dictionary<string, string> Permissions { get; } = new(StringComparer.Ordinal);
 
+    public Dictionary<string, DateTimeOffset> LastWriteUtc { get; } = new(StringComparer.Ordinal);
+
+    public DateTimeOffset Now { get; set; } = new(2040, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     public HashSet<string> ReadOnlyPaths { get; } = new(StringComparer.Ordinal);
 
     public HashSet<string> PermissionDeniedPaths { get; } = new(StringComparer.Ordinal);
