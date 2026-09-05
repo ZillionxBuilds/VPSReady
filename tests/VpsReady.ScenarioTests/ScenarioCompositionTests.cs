@@ -60,6 +60,26 @@ public sealed class ScenarioCompositionTests
         Assert.Contains("Scenario", transportFactory.GetType().Assembly.GetName().Name, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ScenarioTransportFactoryCreatesDistinctOwnedWrappersOverTheSameMutableHost()
+    {
+        await using var services = ScenarioComposition.Create("scenario.c102.transport-ownership");
+        var factory = services.GetRequiredService<IRemoteTransportFactory>();
+        var first = Assert.IsType<ScenarioSessionTransport>(factory.Create());
+        var second = Assert.IsType<ScenarioSessionTransport>(factory.Create());
+
+        Assert.NotSame(first, second);
+        Assert.Equal("1", (await first.ExecuteAsync(CounterIncrement, CancellationToken.None)).StandardOutput);
+        Assert.Equal("1", (await second.ExecuteAsync(CounterRead, CancellationToken.None)).StandardOutput);
+
+        await first.DisposeAsync();
+
+        Assert.True(first.IsDisposed);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => first.ExecuteAsync(CounterRead, CancellationToken.None));
+        Assert.Equal("1", (await second.ExecuteAsync(CounterRead, CancellationToken.None)).StandardOutput);
+        Assert.False(second.IsDisposed);
+    }
+
     private sealed class ScenarioSensitiveReference : ISensitiveSessionReference
     {
         public bool Cleared { get; private set; }

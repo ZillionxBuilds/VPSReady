@@ -325,8 +325,8 @@ public sealed class ApplicationSession : IApplicationSession
 
         public void ClearSensitiveReferences()
         {
-            var secret = Interlocked.Exchange(ref sensitiveReference, null);
-            secret?.Clear();
+            var referenceToClear = Interlocked.Exchange(ref sensitiveReference, null);
+            referenceToClear?.Clear();
             Identity = null;
         }
 

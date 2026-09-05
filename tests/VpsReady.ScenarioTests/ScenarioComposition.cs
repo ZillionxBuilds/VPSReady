@@ -23,7 +23,7 @@ public static class ScenarioComposition
         services.AddSingleton(faults);
         services.AddSingleton<IRemoteTransport>(host);
         services.AddSingleton(host);
-        services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(provider.GetRequiredService<IRemoteTransport>()));
+        services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(provider.GetRequiredService<DeterministicScenarioHost>()));
         services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<ILocalFileStore, ScenarioLocalFileStore>();
         services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(scenarioId));
@@ -38,7 +38,32 @@ public static class ScenarioComposition
     }
 }
 
-internal sealed class ScenarioRemoteTransportFactory(IRemoteTransport transport) : IRemoteTransportFactory
+internal sealed class ScenarioRemoteTransportFactory(DeterministicScenarioHost host) : IRemoteTransportFactory
 {
-    public IRemoteTransport Create() => transport;
+    public IRemoteTransport Create() => new ScenarioSessionTransport(host);
+}
+
+/// <summary>
+/// A disposable, session-owned view over the shared mutable deterministic host.
+/// Disposing one session transport makes only that session unusable; the host
+/// remains available for a replacement connection identity and its state stays
+/// observable to every scenario transport.
+/// </summary>
+internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) : IRemoteTransport
+{
+    private bool disposed;
+
+    internal bool IsDisposed => disposed;
+
+    public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        return host.ExecuteAsync(command, cancellationToken);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        disposed = true;
+        return ValueTask.CompletedTask;
+    }
 }
