@@ -1,7 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Application;
+using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 using VpsReady.Desktop;
+using VpsReady.Infrastructure.Local;
 using VpsReady.Infrastructure.Remote;
 
 namespace VpsReady.UnitTests;
@@ -16,11 +18,13 @@ public sealed class ProductionCompositionSafetyTests
 
         var transportFactory = services.GetRequiredService<IRemoteTransportFactory>();
         var applicationSession = services.GetRequiredService<IApplicationSession>();
+        var keyGenerator = services.GetRequiredService<ILocalEd25519KeyGenerator>();
         await using var transport = transportFactory.Create();
 
         Assert.IsType<SshNetRemoteTransport>(transport);
         Assert.IsType<SshNetRemoteTransportFactory>(transportFactory);
         Assert.IsType<ApplicationSession>(applicationSession);
+        Assert.IsType<Ed25519OpenSshKeyPairGenerator>(keyGenerator);
         Assert.DoesNotContain("Scenario", transport.GetType().Assembly.GetName().Name, StringComparison.Ordinal);
         Assert.DoesNotContain(
             typeof(DesktopComposition).Assembly.GetReferencedAssemblies(),

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
 
 namespace VpsReady.Core.Diagnostics;
@@ -115,12 +116,18 @@ public static class DiagnosticEventCatalog
     public const string PayloadOmitted = "diagnostics.payload_omitted";
     public const string StartupFailed = "application.startup_failed";
     public const string UnhandledException = "application.unhandled_exception";
+    public const string LocalKeyGenerationStarted = "ssh.key_generation.started";
+    public const string LocalKeyGenerationSucceeded = "ssh.key_generation.succeeded";
+    public const string LocalKeyGenerationFailed = "ssh.key_generation.failed";
+    public const string LocalKeyGenerationCancelled = "ssh.key_generation.cancelled";
+    public const string LocalKeyGenerationRecoveryRequired = "ssh.key_generation.recovery_required";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
         OperationStarted, OperationRunning, OperationSucceeded, OperationWarning,
         OperationFailed, OperationCancelled, OperationRecoveryRequired, CommandCompleted, PayloadOmitted,
-        StartupFailed, UnhandledException,
+        StartupFailed, UnhandledException, LocalKeyGenerationStarted, LocalKeyGenerationSucceeded,
+        LocalKeyGenerationFailed, LocalKeyGenerationCancelled, LocalKeyGenerationRecoveryRequired,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -175,6 +182,7 @@ public static class DiagnosticErrorCatalog
 {
     private static readonly HashSet<string> Known = Enum.GetValues<OperationErrorCode>()
         .Select(errorCode => errorCode.ToStableCode())
+        .Concat(LocalEd25519KeyGenerationErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

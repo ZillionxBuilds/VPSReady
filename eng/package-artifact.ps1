@@ -35,6 +35,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "dotnet publish failed for $Rid."
 }
 
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $publishDirectory 'LICENSE') -Force
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'docs/development/THIRD_PARTY_NOTICES.md') -Destination (Join-Path $publishDirectory 'THIRD_PARTY_NOTICES.md') -Force
+
 $files = Get-ChildItem -File -Recurse $publishDirectory | ForEach-Object {
     [ordered]@{
         path = $_.FullName.Substring($publishDirectory.Length).TrimStart([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).Replace('\', '/')
