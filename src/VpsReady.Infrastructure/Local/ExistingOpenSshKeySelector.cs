@@ -399,12 +399,11 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         private const int PermissionDenied = 13;
         private const int PermissionNotPermitted = 1;
         private const int NoEntry = 2;
-        private const int NotDirectory = 20;
         private const int LinuxTooManySymbolicLinks = 40;
         private const int DarwinTooManySymbolicLinks = 62;
 
         public bool IsAccessDenied => error is PermissionDenied or PermissionNotPermitted;
-        public bool IsMissing => error is NoEntry or NotDirectory;
+        public bool IsMissing => error == NoEntry;
         public bool IsNoFollowViolation => error is LinuxTooManySymbolicLinks or DarwinTooManySymbolicLinks;
     }
 
