@@ -41,7 +41,7 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
     }
 
     [Fact]
-    public void CatalogBuildsOnlyBoundedSelectedNumberDeletion()
+    public void CatalogBuildsOnlyValidatedSemanticSelectedRuleDeletion()
     {
         Assert.True(UfwRuleRemovalRequest.TryCreate(Target(ActiveWithTarget), out var request));
 
@@ -50,12 +50,13 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
 
         Assert.Equal(RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove, command.Id.Value);
         Assert.True(DiagnosticCommandCatalog.IsKnown(command.Id.Value));
-        Assert.Equal("number=2", command.SafeArgumentSummary);
+        Assert.Equal("action=allow family=ipv4 port=8443 protocol=tcp source=0.0.0.0/0", command.SafeArgumentSummary);
         Assert.Equal(TimeSpan.FromSeconds(15), command.Timeout);
         Assert.Equal(OutputCapturePolicy.MetadataOnly, command.OutputCapturePolicy);
         Assert.Equal(0, command.MaximumOutputBytes);
         Assert.StartsWith("LC_ALL=C LANG=C; export LC_ALL LANG; ", shell, StringComparison.Ordinal);
-        Assert.Contains("ufw --force delete '2'", shell, StringComparison.Ordinal);
+        Assert.Contains("ufw --force delete 'allow' from '0.0.0.0/0' to any port '8443' proto 'tcp'", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("number=", command.SafeArgumentSummary, StringComparison.Ordinal);
         Assert.DoesNotContain("rule_id", command.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -92,7 +93,7 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         Assert.Equal(RemoteCommandCatalog.SshSessionPortRead, transport.Commands[0].Id.Value);
         Assert.Equal(RemoteCommandCatalog.UbuntuUfwRuleListRead, transport.Commands[1].Id.Value);
         Assert.Equal(RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove, transport.Commands[2].Id.Value);
-        Assert.Equal("number=2", transport.Commands[2].SafeArgumentSummary);
+        Assert.Equal("action=allow family=ipv4 port=8443 protocol=tcp source=0.0.0.0/0", transport.Commands[2].SafeArgumentSummary);
         Assert.Equal(RemoteCommandCatalog.UbuntuUfwRuleListRead, transport.Commands[3].Id.Value);
         Assert.DoesNotContain(result.Snapshot!.Rules, rule => Equals(rule.Identity, selected.Identity));
         var events = diagnostics.Events.Where(item => item.Correlation.OperationId == result.Result.OperationId).ToArray();

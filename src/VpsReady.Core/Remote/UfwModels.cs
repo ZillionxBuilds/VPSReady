@@ -141,22 +141,35 @@ public sealed record UfwRuleRemovalIntent(UfwRuleIdentity? SelectedIdentity, boo
 
 /// <summary>
 /// C304 command input created only from the exact rule in a fresh complete
-/// listing. The displayed number is deliberately not supplied by the caller.
+/// listing. It deliberately carries the typed semantic rule, not its mutable
+/// display number: UFW's full-rule delete form remains bound to this semantic
+/// identity at the server-side effect boundary even if rule numbers reorder.
 /// </summary>
 public sealed record UfwRuleRemovalRequest
 {
-    private UfwRuleRemovalRequest(int number)
+    private UfwRuleRemovalRequest(UfwRuleProtocol protocol, int port, string source, UfwRuleAction action, UfwIpFamily family)
     {
-        Number = number;
+        Protocol = protocol;
+        Port = port;
+        Source = source;
+        Action = action;
+        Family = family;
     }
 
-    public int Number { get; }
+    public UfwRuleProtocol Protocol { get; }
+
+    public int Port { get; }
+
+    public string Source { get; }
+
+    public UfwRuleAction Action { get; }
+
+    public UfwIpFamily Family { get; }
 
     public static bool TryCreate(UfwRule? freshRule, out UfwRuleRemovalRequest? request)
     {
         request = null;
         if (freshRule is null
-            || freshRule.Number is < 1 or > 999999
             || freshRule.Port is < 1 or > 65535
             || string.IsNullOrWhiteSpace(freshRule.Source)
             || !Enum.IsDefined(freshRule.Protocol)
@@ -179,9 +192,34 @@ public sealed record UfwRuleRemovalRequest
             return false;
         }
 
-        request = new UfwRuleRemovalRequest(freshRule.Number);
+        if (!UfwAllowRuleRequest.TryCreate(
+                new UfwAllowRuleInput(freshRule.Protocol, freshRule.Port, freshRule.Source, freshRule.Family),
+                out var validatedSemantic,
+                out _)
+            || validatedSemantic is null)
+        {
+            return false;
+        }
+
+        request = new UfwRuleRemovalRequest(
+            freshRule.Protocol,
+            freshRule.Port,
+            validatedSemantic.Source,
+            freshRule.Action,
+            freshRule.Family);
         return true;
     }
+
+    public bool MatchesSemantic(UfwRule rule) => rule is not null
+        && rule.Protocol == Protocol
+        && rule.Port == Port
+        && string.Equals(rule.Source, Source, StringComparison.Ordinal)
+        && rule.Action == Action
+        && rule.Family == Family;
+
+    public string ToCommandSource() => Source == "Anywhere"
+        ? Family == UfwIpFamily.Ipv4 ? "0.0.0.0/0" : "::/0"
+        : Source;
 }
 
 public enum UfwAllowRuleValidationError

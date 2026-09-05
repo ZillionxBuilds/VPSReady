@@ -34,14 +34,15 @@ public static class UbuntuFirewallCommandCatalog
     public static RemoteCommand CreateSelectedRuleRemovalRequest(UfwRuleRemovalRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.Number is < 1 or > 999999)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request), "A bounded positive UFW rule number is required.");
-        }
-
         return RemoteCommand.Create(
             RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove),
-            [new("number", request.Number.ToString(CultureInfo.InvariantCulture))],
+            [
+                new("action", request.Action.ToString().ToLowerInvariant()),
+                new("family", request.Family.ToString().ToLowerInvariant()),
+                new("port", request.Port.ToString(CultureInfo.InvariantCulture)),
+                new("protocol", request.Protocol.ToString().ToLowerInvariant()),
+                new("source", request.ToCommandSource()),
+            ],
             DefaultTimeout,
             OutputCapturePolicy.MetadataOnly,
             maximumOutputBytes: 0);
@@ -82,16 +83,20 @@ public static class UbuntuFirewallCommandCatalog
 
     private static string RequireSelectedRuleRemovalShellCommand(RemoteCommand command)
     {
-        if (!TryParseRuleNumber(command.SafeArgumentSummary, out var number))
+        if (!TryParseSelectedRuleRemoval(command.SafeArgumentSummary, out var request))
         {
-            throw new ArgumentException("Firewall command metadata is not a bounded selected-rule removal request.", nameof(command));
+            throw new ArgumentException("Firewall command metadata is not a validated selected-rule removal request.", nameof(command));
         }
 
-        var quotedNumber = RemoteCommandArguments.QuotePosixArgument(number.ToString(CultureInfo.InvariantCulture));
+        var selectedRule = request!;
+        var action = RemoteCommandArguments.QuotePosixArgument(selectedRule.Action.ToString().ToLowerInvariant());
+        var source = RemoteCommandArguments.QuotePosixArgument(selectedRule.ToCommandSource());
+        var port = RemoteCommandArguments.QuotePosixArgument(selectedRule.Port.ToString(CultureInfo.InvariantCulture));
+        var protocol = RemoteCommandArguments.QuotePosixArgument(selectedRule.Protocol.ToString().ToLowerInvariant());
         return PredictableLocalePrefix
             + "if ! command -v ufw >/dev/null 2>&1; then exit 127; "
-            + "elif [ \"$(id -u)\" -eq 0 ]; then ufw --force delete " + quotedNumber + "; "
-            + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw --force delete " + quotedNumber + "; "
+            + "elif [ \"$(id -u)\" -eq 0 ]; then ufw --force delete " + action + " from " + source + " to any port " + port + " proto " + protocol + "; "
+            + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw --force delete " + action + " from " + source + " to any port " + port + " proto " + protocol + "; "
             + "else exit 77; fi";
     }
 
@@ -123,13 +128,45 @@ public static class UbuntuFirewallCommandCatalog
         return UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(protocol, port, source, family), out request, out _);
     }
 
-    private static bool TryParseRuleNumber(string safeSummary, out int number)
+    private static bool TryParseSelectedRuleRemoval(string safeSummary, out UfwRuleRemovalRequest? request)
     {
-        number = 0;
-        var parts = safeSummary.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length == 1
-            && parts[0].StartsWith("number=", StringComparison.Ordinal)
-            && int.TryParse(parts[0]["number=".Length..], NumberStyles.None, CultureInfo.InvariantCulture, out number)
-            && number is >= 1 and <= 999999;
+        request = null;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var token in safeSummary.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separator = token.IndexOf('=');
+            if (separator <= 0 || !values.TryAdd(token[..separator], token[(separator + 1)..]))
+            {
+                return false;
+            }
+        }
+
+        if (values.Count != 5
+            || !values.TryGetValue("action", out var actionText)
+            || !values.TryGetValue("family", out var familyText)
+            || !values.TryGetValue("port", out var portText)
+            || !values.TryGetValue("protocol", out var protocolText)
+            || !values.TryGetValue("source", out var source)
+            || !Enum.TryParse<UfwRuleAction>(actionText, true, out var action)
+            || !Enum.TryParse<UfwIpFamily>(familyText, true, out var family)
+            || !Enum.TryParse<UfwRuleProtocol>(protocolText, true, out var protocol)
+            || !int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || !UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(protocol, port, source, family), out var semantic, out _)
+            || semantic is null)
+        {
+            return false;
+        }
+
+        // This request is reconstructed only from validated semantic fields;
+        // its original opaque identity remains strictly a local selection key.
+        var synthetic = new UfwRule(
+            UfwRuleIdentity.Create(1, protocol, port, semantic.Source, action, family),
+            1,
+            protocol,
+            port,
+            semantic.Source,
+            action,
+            family);
+        return UfwRuleRemovalRequest.TryCreate(synthetic, out request);
     }
 }

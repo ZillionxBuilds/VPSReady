@@ -7,10 +7,12 @@ namespace VpsReady.Infrastructure.Remote;
 
 /// <summary>
 /// C304's narrow destructive workflow. It removes only a confirmed rule that
-/// still has the exact opaque identity in a newly read complete listing. A
-/// normal flow never removes a TCP rule on the active SSH port, for either IP
-/// family, and never reports success before a further fresh listing proves the
-/// selected identity is absent.
+/// still has the exact opaque identity in a newly read complete listing. It
+/// then removes the unique semantic rule, rather than its mutable display
+/// number, so an intervening reorder cannot target another rule. A normal flow
+/// never removes a TCP rule on the active SSH port, for either IP family, and
+/// never reports success before a further fresh listing proves the intended
+/// semantic rule is absent.
 /// </summary>
 public sealed class UfwSelectedRuleRemovalWorkflow
 {
@@ -88,6 +90,13 @@ public sealed class UfwSelectedRuleRemovalWorkflow
                 return new UfwRuleRemovalOperationResult(invalidFreshRule, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: true, IsActiveSshProtected: false);
             }
 
+            if (preflight.Snapshot.Rules.Count(removalRequest!.MatchesSemantic) != 1)
+            {
+                var ambiguous = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, "The selected firewall rule is not uniquely identifiable after refresh, so no rule was removed.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Validation).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(ambiguous, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: true, IsActiveSshProtected: false);
+            }
+
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, "The confirmed current firewall rule is ready for removal.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
             var applyCommand = UbuntuFirewallCommandCatalog.CreateSelectedRuleRemovalRequest(removalRequest!);
             applyAttempted = true;
@@ -101,7 +110,7 @@ public sealed class UfwSelectedRuleRemovalWorkflow
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying selected firewall-rule removal from a fresh complete listing.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
             var verified = await ReadAsync(correlation, DiagnosticPhase.Verify, transport, listCommand, cancellationToken).ConfigureAwait(false);
-            if (!IsVerifiableActive(verified) || verified.Snapshot.Rules.Any(rule => Equals(rule.Identity, selectedIdentity)))
+            if (!IsVerifiableActive(verified) || verified.Snapshot.Rules.Any(removalRequest.MatchesSemantic))
             {
                 return await FailureAfterApplyAsync(correlation, transport, listCommand, IsVerifiableActive(verified) ? OperationErrorCode.Verification : ErrorForRead(verified), cancellationToken).ConfigureAwait(false);
             }

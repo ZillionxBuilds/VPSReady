@@ -119,7 +119,7 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             RemoteCommandCatalog.UbuntuUfwDetectionRead => FirewallDetection(),
             RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallRuleList(),
             RemoteCommandCatalog.UbuntuUfwAllowRuleAdd => AddUfwRule(command),
-            RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove => RemoveUfwRuleByNumber(command),
+            RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove => RemoveUfwRuleBySemantic(command),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -411,13 +411,13 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
     }
 
     /// <summary>
-    /// Mirrors C304 production semantics: the workflow has already bound a
-    /// selected opaque identity to a fresh numbered listing, and this command
-    /// receives only that fresh display number. It still models privilege and
-    /// SSH-port protection to keep the test host fail-closed if a workflow
-    /// regression bypasses its policy.
+    /// Mirrors C304 production semantics at the server-side effect boundary.
+    /// The command accepts a validated full semantic rule, never a mutable
+    /// display number. It deliberately does not duplicate client SSH-port
+    /// policy, so E2 can expose a regression where production would otherwise
+    /// delete an unintended SSH row after a concurrent reorder.
     /// </summary>
-    private RemoteCommandResult RemoveUfwRuleByNumber(RemoteCommand command)
+    private RemoteCommandResult RemoveUfwRuleBySemantic(RemoteCommand command)
     {
         if (State.Ufw.Status is ScenarioUfwStatus.Absent or ScenarioUfwStatus.Error)
         {
@@ -429,20 +429,34 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             return Failure(13, "Permission denied while removing a firewall rule.");
         }
 
-        if (!int.TryParse(GetArgument(command, "number"), NumberStyles.None, CultureInfo.InvariantCulture, out var number)
-            || number < 1
-            || number > State.Ufw.Rules.Count)
+        if (!Enum.TryParse<ScenarioRuleProtocol>(GetArgument(command, "protocol"), true, out var protocol)
+            || !Enum.TryParse<ScenarioIpFamily>(GetArgument(command, "family"), true, out var family)
+            || !int.TryParse(GetArgument(command, "port"), NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || port is < 1 or > 65535
+            || !Enum.TryParse<UfwRuleAction>(GetArgument(command, "action"), true, out var action))
+        {
+            return Failure(2, "Firewall rule removal arguments are invalid.");
+        }
+
+        var source = GetArgument(command, "source") ?? string.Empty;
+        source = (source, family) switch
+        {
+            ("0.0.0.0/0", ScenarioIpFamily.Ipv4) or ("::/0", ScenarioIpFamily.Ipv6) => "Anywhere",
+            _ => source,
+        };
+        var expectedAction = action.ToString().ToUpperInvariant();
+        var rule = State.Ufw.Rules.FirstOrDefault(candidate =>
+            candidate.Protocol == protocol
+            && candidate.Port == port
+            && string.Equals(candidate.Source, source, StringComparison.Ordinal)
+            && candidate.IpFamily == family
+            && string.Equals(candidate.Action, expectedAction, StringComparison.Ordinal));
+        if (rule is null)
         {
             return Failure(4, "The selected firewall rule is stale or missing.");
         }
 
-        var rule = State.Ufw.Rules[number - 1];
-        if (rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == State.Ssh.ActiveSshPort)
-        {
-            return Failure(13, "The active SSH rule cannot be removed through the normal scenario flow.");
-        }
-
-        State.Ufw.Rules.RemoveAt(number - 1);
+        State.Ufw.Rules.Remove(rule);
         return Result("changed=true");
     }
 

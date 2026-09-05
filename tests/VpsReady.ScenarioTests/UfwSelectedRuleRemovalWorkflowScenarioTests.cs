@@ -51,7 +51,7 @@ public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
     }
 
     [Fact]
-    public async Task DuplicateSemanticRowsCannotProduceFalseSuccessAfterNumberShift()
+    public async Task DuplicateSemanticRowsFailClosedBeforeAnyDeletion()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c304.duplicate-shift");
         state.Ufw.Status = ScenarioUfwStatus.Active;
@@ -64,10 +64,68 @@ public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
         var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));
 
         Assert.False(result.Result.Succeeded);
-        Assert.Equal("VERIFICATION_FAILED", result.Result.ErrorCode?.ToStableCode());
-        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
-        Assert.Single(state.Ufw.Rules, rule => rule.Port == 8443);
+        Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(2, state.Ufw.Rules.Count(rule => rule.Port == 8443));
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task ConcurrentReorderBeforeApplyDeletesTheIntendedSemanticRuleNotTheNewDisplayNumber()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c304.apply-reorder-semantic-bound");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("c304-target", ScenarioRuleProtocol.Tcp, 8443, "Anywhere", ScenarioIpFamily.Ipv4));
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("c304-other", ScenarioRuleProtocol.Udp, 5353, "Anywhere", ScenarioIpFamily.Ipv4));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 8443, ScenarioIpFamily.Ipv4);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(
+            new MutatingBeforeApplyTransport(host, () =>
+            {
+                var target = state.Ufw.Rules.Single(rule => rule.RuleId == "c304-target");
+                state.Ufw.Rules.Remove(target);
+                state.Ufw.Rules.Insert(0, target);
+            }),
+            new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.True(result.Result.Succeeded);
+        Assert.DoesNotContain(state.Ufw.Rules, rule => rule.RuleId == "c304-target");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v4");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v6");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "c304-other");
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded && item.Phase != DiagnosticPhase.Verify);
+    }
+
+    [Fact]
+    public async Task ActiveSshInsertionAtFormerDisplayNumberCannotCauseUnintendedDeletionOrSuccess()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c304.apply-active-ssh-insertion");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("c304-target", ScenarioRuleProtocol.Tcp, 8443, "Anywhere", ScenarioIpFamily.Ipv4));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 8443, ScenarioIpFamily.Ipv4);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(
+            new MutatingBeforeApplyTransport(host, () =>
+            {
+                var target = state.Ufw.Rules.Single(rule => rule.RuleId == "c304-target");
+                state.Ufw.Rules.Remove(target);
+                state.Ufw.Rules.Insert(2, new ScenarioFirewallRule("concurrent-ssh", ScenarioRuleProtocol.Tcp, state.Ssh.ActiveSshPort, "Anywhere", ScenarioIpFamily.Ipv4));
+            }),
+            new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("REMOTE_COMMAND_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.DoesNotContain(state.Ufw.Rules, rule => rule.RuleId == "c304-target");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "concurrent-ssh");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v4");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v6");
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired);
     }
 
     [Fact]
@@ -236,6 +294,36 @@ public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
                 },
                 _ => DiagnosticPhase.Apply,
             };
+            return host.ExecuteAsync(command, phase, cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class MutatingBeforeApplyTransport(DeterministicScenarioHost host, Action mutateBeforeApply) : IRemoteTransport
+    {
+        private int listReads;
+        private bool mutated;
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            var phase = command.Id.Value switch
+            {
+                RemoteCommandCatalog.SshSessionPortRead => DiagnosticPhase.Preflight,
+                RemoteCommandCatalog.UbuntuUfwRuleListRead => listReads++ switch
+                {
+                    0 => DiagnosticPhase.Preflight,
+                    1 => DiagnosticPhase.Verify,
+                    _ => DiagnosticPhase.Recovery,
+                },
+                _ => DiagnosticPhase.Apply,
+            };
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove && !mutated)
+            {
+                mutated = true;
+                mutateBeforeApply();
+            }
+
             return host.ExecuteAsync(command, phase, cancellationToken);
         }
 
