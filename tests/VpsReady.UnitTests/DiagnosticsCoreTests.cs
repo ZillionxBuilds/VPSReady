@@ -39,6 +39,45 @@ public sealed class DiagnosticsCoreTests
         Assert.Throws<ArgumentException>(() => correlation.ForStep("not a safe step"));
     }
 
+    [Theory]
+    [InlineData(DiagnosticStatus.Succeeded, null)]
+    [InlineData(DiagnosticStatus.Failed, "Review the error and verify the remote state before retrying.")]
+    [InlineData(DiagnosticStatus.Cancelled, "Verify the remote state before retrying the cancelled action.")]
+    [InlineData(DiagnosticStatus.RecoveryRequired, "Review the recovery guidance and verify the remote state before retrying.")]
+    public void ActivityProjectionProvidesBoundedStatusGuidanceWithoutEventPayload(DiagnosticStatus status, string? expectedGuidance)
+    {
+        const string seededServer = "c607-host.example.test";
+        const string seededCredential = "c607-password-not-for-activity";
+        const string seededKey = "ssh-ed25519 AAAAC607seededkey";
+        const string seededCommand = "sudo c607-unsafe-command";
+        const string seededPath = "/private/c607/unsafe-path";
+        const string seededOutput = "c607-raw-output";
+        var diagnosticEvent = new StructuredDiagnosticEvent(
+            DiagnosticEventCatalog.OperationFailed,
+            $"Category {seededServer}",
+            DiagnosticLevel.Error,
+            CorrelationIds.Create("apply"),
+            DiagnosticPhase.Apply,
+            status,
+            $"credential={seededCredential}; key={seededKey}; output={seededOutput}",
+            CommandId: seededCommand,
+            Action: seededPath);
+
+        var activity = diagnosticEvent.ToActivityEntry();
+
+        Assert.Equal(expectedGuidance, activity.NextSafeAction);
+        if (status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired)
+        {
+            Assert.NotEqual("No additional action is required.", activity.NextSafeAction);
+            Assert.False(string.IsNullOrWhiteSpace(activity.NextSafeAction));
+        }
+
+        foreach (var unsafeValue in new[] { seededServer, seededCredential, seededKey, seededCommand, seededPath, seededOutput })
+        {
+            Assert.DoesNotContain(unsafeValue, activity.NextSafeAction, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public async Task RedactionPipelineSanitizesEveryStructuredFieldBeforeItsSink()
     {
