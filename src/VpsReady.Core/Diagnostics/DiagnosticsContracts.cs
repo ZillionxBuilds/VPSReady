@@ -315,7 +315,8 @@ public sealed record ActivityEntry(
     string Message,
     string OperationId,
     TimeSpan? Duration,
-    string? NextSafeAction);
+    string? NextSafeAction,
+    string? RunId = null);
 
 /// <summary>
 /// Raw diagnostic input. Implementations of <see cref="IDiagnosticSink"/>
@@ -353,7 +354,8 @@ public sealed record StructuredDiagnosticEvent(
         Message,
         Correlation.OperationId,
         Duration,
-        NextSafeAction: null);
+        NextSafeAction: null,
+        RunId: Correlation.RunId);
 }
 
 public static class DiagnosticStatusExtensions
