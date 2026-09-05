@@ -70,6 +70,7 @@ public sealed partial class FailClosedRedactor : IRedactor
     {
         ArgumentNullException.ThrowIfNull(diagnosticEvent);
 
+        var category = Redact(diagnosticEvent.Category);
         var message = Redact(diagnosticEvent.Message);
         var action = diagnosticEvent.Action is null ? null : Redact(diagnosticEvent.Action).SafeText;
         var standardOutput = RedactOutput(diagnosticEvent.StandardOutput);
@@ -77,6 +78,7 @@ public sealed partial class FailClosedRedactor : IRedactor
         var context = RedactContext(diagnosticEvent.Context);
         return diagnosticEvent with
         {
+            Category = category.WasOmitted ? "Diagnostics" : category.SafeText,
             Message = message.SafeText,
             Action = action,
             StandardOutput = standardOutput,
@@ -126,12 +128,14 @@ public sealed partial class FailClosedRedactor : IRedactor
         }
 
         var result = new Dictionary<string, DiagnosticValue>(StringComparer.Ordinal);
+        var index = 0;
         foreach (var (key, value) in context)
         {
-            // A sensitive name wins even if a caller accidentally marked the value public.
-            var classification = IsSensitiveFieldName(key) ? DiagnosticDataClassification.Credential : value.Classification;
+            var classification = ClassifyContextField(key, value.Classification);
             var safe = Redact(value.Value, classification);
-            result[key] = new DiagnosticValue(classification, safe.SafeText);
+            var safeKey = ContainsSensitiveContent(key) ? $"sensitive_context_{index}" : NormalizeContextKey(key, index);
+            result[safeKey] = new DiagnosticValue(classification, safe.SafeText);
+            index++;
         }
 
         return result;
@@ -150,10 +154,42 @@ public sealed partial class FailClosedRedactor : IRedactor
         return PrivateKeyRegex().IsMatch(value)
             || AuthorizationHeaderRegex().IsMatch(value)
             || SensitiveKeyRegex().IsMatch(value)
-            || JsonSensitiveKeyRegex().IsMatch(value);
+            || JsonSensitiveKeyRegex().IsMatch(value)
+            || TrustOrConfigRegex().IsMatch(value)
+            || ServerIdentifierRegex().IsMatch(value)
+            || LocalPathRegex().IsMatch(value);
     }
 
-    private static bool IsSensitiveFieldName(string key) => SensitiveNameRegex().IsMatch(key);
+    private static DiagnosticDataClassification ClassifyContextField(string key, DiagnosticDataClassification declaredClassification)
+    {
+        if (HostFieldRegex().IsMatch(key))
+        {
+            return DiagnosticDataClassification.HostIdentifier;
+        }
+
+        if (UserFieldRegex().IsMatch(key))
+        {
+            return DiagnosticDataClassification.UserName;
+        }
+
+        if (PathFieldRegex().IsMatch(key))
+        {
+            return DiagnosticDataClassification.Path;
+        }
+
+        return SensitiveNameRegex().IsMatch(key) ? DiagnosticDataClassification.Credential : declaredClassification;
+    }
+
+    private static string NormalizeContextKey(string key, int index)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return $"context_{index}";
+        }
+
+        var normalized = new string(key.Select(character => char.IsLetterOrDigit(character) || character is '_' or '-' ? character : '_').ToArray());
+        return string.IsNullOrWhiteSpace(normalized) ? $"context_{index}" : normalized;
+    }
 
     private static RedactionResult Omit() => new(Omitted, true);
 
@@ -175,9 +211,27 @@ public sealed partial class FailClosedRedactor : IRedactor
     [GeneratedRegex("[\"']?(?:password|passphrase|token|secret|credential|private[_ -]?key)[\"']?\\s*:\\s*[\"']?[^,\\s}\"]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex JsonSensitiveKeyRegex();
 
+    [GeneratedRegex("known[_ -]?hosts|authorized[_ -]?keys|host[_ -]?key|hostkey|fingerprint|identityfile|identitiesonly|(?:^|\\s)HostName?\\s+|/\\.ssh(?:/|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex TrustOrConfigRegex();
+
+    [GeneratedRegex("\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}\\b|\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ServerIdentifierRegex();
+
+    [GeneratedRegex("(?:[A-Za-z]:\\\\|/(?:Users|home|etc|var|private|tmp)/)", RegexOptions.CultureInvariant)]
+    private static partial Regex LocalPathRegex();
+
     [GeneratedRegex("\\b(?:ghp|github_pat|sk)[_-][A-Za-z0-9_-]{12,}\\b", RegexOptions.CultureInvariant)]
     private static partial Regex TokenRegex();
 
-    [GeneratedRegex("password|passphrase|token|secret|credential|private[_ -]?key|authorization", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    [GeneratedRegex("password|passphrase|token|secret|credential|private[_ -]?key|authorization|trust|config|known[_ -]?hosts|authorized[_ -]?keys|fingerprint|host[_ -]?key", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex SensitiveNameRegex();
+
+    [GeneratedRegex("host|server|address|endpoint", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex HostFieldRegex();
+
+    [GeneratedRegex("user|account|login", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex UserFieldRegex();
+
+    [GeneratedRegex("path|file|directory", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex PathFieldRegex();
 }

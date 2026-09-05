@@ -14,12 +14,14 @@ namespace VpsReady.Infrastructure.Diagnostics;
 /// second time before any local write so callers cannot turn an export into a
 /// raw-data escape hatch.
 /// </summary>
-public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagnosticsWorkspace, IDisposable
+public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagnosticsWorkspace, IDisposable
 {
     private const string LogsDirectory = "logs";
     private const string RunsDirectory = "runs";
     private const string ExportsDirectory = "exports";
+    private const string OmittedPayloadMarker = "PAYLOAD_OMITTED_BY_REDACTION_POLICY";
     private const int MaximumActivityEntries = 500;
+    private const int MaximumJournalFileBytes = 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -54,6 +56,7 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
         cancellationToken.ThrowIfCancellationRequested();
         var safeEvent = redactor.Redact(diagnosticEvent) with { TimestampUtc = diagnosticEvent.OccurredAtUtc };
         ValidateSafeEvent(safeEvent);
+        AssertSafeEnvironment();
         var line = JsonSerializer.Serialize(JournalEvent.From(safeEvent, environment), JsonOptions) + Environment.NewLine;
 
         await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -63,8 +66,8 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
             var journalDate = clock.UtcNow.ToString("yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture);
             var logPath = ResolveStatePath($"{LogsDirectory}/app-{journalDate}.jsonl");
             var runPath = ResolveStatePath($"{RunsDirectory}/{safeEvent.Correlation.RunId}/events.jsonl");
-            await AppendLineAsync(logPath, line, cancellationToken).ConfigureAwait(false);
-            await AppendLineAsync(runPath, line, cancellationToken).ConfigureAwait(false);
+            await AppendLineAsync(logPath, line, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+            await AppendLineAsync(runPath, line, clock.UtcNow, cancellationToken).ConfigureAwait(false);
             _ = stateDirectory; // keeps path policy validation explicit before mutation.
 
             lock (activity)
@@ -131,9 +134,14 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
 
     public string CreateSafeIssueReport(string? runId = null)
     {
-        var selected = GetEventsForRun(runId);
+        AssertSafeEnvironment();
+        var selected = GetEventsForRun(ValidateRequestedRunId(runId));
+        foreach (var diagnosticEvent in selected)
+        {
+            AssertSafeEventForExport(diagnosticEvent);
+        }
         var terminal = selected.Length == 0 ? null : selected[^1];
-        var run = terminal?.Correlation.RunId ?? runId ?? "not-recorded";
+        var run = terminal?.Correlation.RunId ?? "not-recorded";
         var operation = terminal?.Correlation.OperationId ?? "not-recorded";
         var action = terminal?.Action ?? terminal?.Category ?? "Diagnostics";
         var error = terminal?.ErrorCode ?? "not-recorded";
@@ -165,6 +173,7 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
         cancellationToken.ThrowIfCancellationRequested();
+        AssertSafeEnvironment();
         var destination = Path.GetFullPath(destinationDirectory);
         if (!Path.IsPathFullyQualified(destination))
         {
@@ -173,9 +182,9 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
 
         Directory.CreateDirectory(destination);
         ApplyDirectoryPermissions(destination);
-        var selected = GetEventsForRun(runId);
+        var selected = GetEventsForRun(ValidateRequestedRunId(runId));
         var resolvedRunId = selected.Length == 0 ? runId : selected[0].Correlation.RunId;
-        var safeRunPart = string.IsNullOrWhiteSpace(resolvedRunId) ? "no-run" : ValidateOpaqueId(resolvedRunId);
+        var safeRunPart = string.IsNullOrWhiteSpace(resolvedRunId) ? "no-run" : ValidateRequestedRunId(resolvedRunId)!;
         var timestamp = clock.UtcNow.ToString("yyyyMMddTHHmmssZ", System.Globalization.CultureInfo.InvariantCulture);
         var bundleName = $"vpsready-support-{timestamp}-{safeRunPart[..Math.Min(safeRunPart.Length, 12)]}.zip";
         var bundlePath = Path.Combine(destination, bundleName);
@@ -247,40 +256,60 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
     private async Task CleanupRetentionAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var roots = new[] { ResolveStatePath(LogsDirectory), ResolveStatePath(RunsDirectory) };
-        var candidates = roots
-            .Where(Directory.Exists)
-            .SelectMany(root => Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
-            .Select(path => new FileInfo(path))
-            .Where(file => (file.Attributes & FileAttributes.ReparsePoint) == 0)
-            .OrderByDescending(file => file.LastWriteTimeUtc)
-            .ToList();
         var now = clock.UtcNow;
-        foreach (var file in candidates.OrderBy(file => file.LastWriteTimeUtc).ToArray())
+        var logDirectory = ResolveStatePath(LogsDirectory);
+        var runsDirectory = ResolveStatePath(RunsDirectory);
+        foreach (var file in GetJournalFiles(logDirectory, SearchOption.TopDirectoryOnly)
+                     .Concat(GetJournalFiles(runsDirectory, SearchOption.AllDirectories)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (candidates.Count <= RetentionPolicy.DiagnosticDefault.MinimumRetainedFiles || now - file.LastWriteTimeUtc <= RetentionPolicy.DiagnosticDefault.MaximumAge)
+            if (file.Length > MaximumJournalFileBytes)
             {
+                var lastWriteUtc = file.LastWriteTimeUtc;
+                var existing = await File.ReadAllTextAsync(file.FullName, cancellationToken).ConfigureAwait(false);
+                await WriteJournalAtomicallyAsync(file.FullName, LimitJournalContents(existing, string.Empty), cancellationToken).ConfigureAwait(false);
+                File.SetLastWriteTimeUtc(file.FullName, lastWriteUtc);
+            }
+        }
+
+        foreach (var file in GetJournalFiles(logDirectory, SearchOption.TopDirectoryOnly)
+                     .Where(file => now - file.LastWriteTimeUtc > RetentionPolicy.DiagnosticDefault.MaximumAge))
+        {
+            File.Delete(file.FullName);
+        }
+
+        foreach (var run in GetRunGroups(runsDirectory)
+                     .Where(run => now - run.LastUpdatedUtc > RetentionPolicy.DiagnosticDefault.MaximumAge))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DeleteRunGroup(run);
+        }
+
+        while (GetJournalFiles(logDirectory, SearchOption.TopDirectoryOnly).Sum(file => file.Length)
+               + GetRunGroups(runsDirectory).Sum(run => run.Bytes) > RetentionPolicy.DiagnosticDefault.MaximumTotalBytes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var removableRun = GetRunGroups(runsDirectory)
+                .OrderByDescending(run => run.LastUpdatedUtc)
+                .Skip(RetentionPolicy.DiagnosticDefault.MinimumRetainedFiles)
+                .OrderBy(run => run.LastUpdatedUtc)
+                .FirstOrDefault();
+            if (removableRun is not null)
+            {
+                DeleteRunGroup(removableRun);
                 continue;
             }
 
-            File.Delete(file.FullName);
-            candidates.Remove(file);
-        }
-
-        foreach (var file in candidates.OrderBy(file => file.LastWriteTimeUtc).ToArray())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (candidates.Count <= RetentionPolicy.DiagnosticDefault.MinimumRetainedFiles || candidates.Sum(item => item.Length) <= RetentionPolicy.DiagnosticDefault.MaximumTotalBytes)
+            var oldestLog = GetJournalFiles(logDirectory, SearchOption.TopDirectoryOnly)
+                .OrderBy(file => file.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (oldestLog is null)
             {
                 break;
             }
 
-            File.Delete(file.FullName);
-            candidates.Remove(file);
+            File.Delete(oldestLog.FullName);
         }
-
-        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public void Dispose() => writeGate.Dispose();
@@ -305,20 +334,27 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
 
     private string ResolveStatePath(string relativePath) => platformPaths.ResolvePath(LocalStorageArea.State, relativePath);
 
-    private static async Task AppendLineAsync(string path, string line, CancellationToken cancellationToken)
+    private static async Task AppendLineAsync(string path, string line, DateTimeOffset occurredAtUtc, CancellationToken cancellationToken)
     {
         var directory = Path.GetDirectoryName(path) ?? throw new IOException("A journal path must have a directory.");
         Directory.CreateDirectory(directory);
         ApplyDirectoryPermissions(directory);
+        var existing = File.Exists(path)
+            ? await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
+            : string.Empty;
+        await WriteJournalAtomicallyAsync(path, LimitJournalContents(existing, line), cancellationToken).ConfigureAwait(false);
+        File.SetLastWriteTimeUtc(path, occurredAtUtc.UtcDateTime);
+    }
+
+    private static async Task WriteJournalAtomicallyAsync(string path, string contents, CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(path) ?? throw new IOException("A journal path must have a directory.");
         var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            var existing = File.Exists(path)
-                ? await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
-                : string.Empty;
             await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             {
-                var bytes = Encoding.UTF8.GetBytes(existing + line);
+                var bytes = Encoding.UTF8.GetBytes(contents);
                 await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
                 await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
                 stream.Flush(flushToDisk: true);
@@ -343,6 +379,80 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
                 File.Delete(temporaryPath);
             }
         }
+    }
+
+    private static string LimitJournalContents(string existing, string appendedLine)
+    {
+        var cleanLine = appendedLine.TrimEnd('\r', '\n');
+        if (Encoding.UTF8.GetByteCount(cleanLine) >= MaximumJournalFileBytes)
+        {
+            throw new IOException("A single sanitized journal event exceeds the local journal safety limit.");
+        }
+
+        var lines = existing.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r'))
+            .ToList();
+        if (!string.IsNullOrEmpty(cleanLine))
+        {
+            lines.Add(cleanLine);
+        }
+
+        var startIndex = 0;
+        var byteCount = Encoding.UTF8.GetByteCount(string.Join('\n', lines) + "\n");
+        while (lines.Count - startIndex > 1 && byteCount > MaximumJournalFileBytes)
+        {
+            byteCount -= Encoding.UTF8.GetByteCount(lines[startIndex]) + 1;
+            startIndex++;
+        }
+
+        return lines.Count == startIndex ? string.Empty : string.Join('\n', lines.Skip(startIndex)) + "\n";
+    }
+
+    private static IEnumerable<FileInfo> GetJournalFiles(string directory, SearchOption searchOption)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateFiles(directory, "*.jsonl", searchOption)
+            .Select(path => new FileInfo(path))
+            .Where(file => (file.Attributes & FileAttributes.ReparsePoint) == 0);
+    }
+
+    private static JournalRunGroup[] GetRunGroups(string runsDirectory)
+    {
+        if (!Directory.Exists(runsDirectory))
+        {
+            return [];
+        }
+
+        return Directory.EnumerateDirectories(runsDirectory)
+            .Select(path => new DirectoryInfo(path))
+            .Select(directory =>
+            {
+                if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new IOException("Diagnostics retention refused a symbolic link or reparse point.");
+                }
+
+                var files = GetJournalFiles(directory.FullName, SearchOption.TopDirectoryOnly).ToArray();
+                return new JournalRunGroup(
+                    directory.FullName,
+                    files.Length == 0 ? new DateTimeOffset(directory.LastWriteTimeUtc) : files.Max(file => new DateTimeOffset(file.LastWriteTimeUtc)),
+                    files.Sum(file => file.Length));
+            })
+            .ToArray();
+    }
+
+    private static void DeleteRunGroup(JournalRunGroup run)
+    {
+        if ((File.GetAttributes(run.Directory) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException("Diagnostics retention refused a symbolic link or reparse point.");
+        }
+
+        Directory.Delete(run.Directory, recursive: true);
     }
 
     private static void DeleteDirectoryContents(string directory)
@@ -388,20 +498,42 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
             throw new ArgumentException("Only catalogued error codes may enter the journal.", nameof(diagnosticEvent));
         }
 
-        _ = ValidateOpaqueId(diagnosticEvent.Correlation.RunId);
-        _ = ValidateOpaqueId(diagnosticEvent.Correlation.OperationId);
-        _ = ValidateOpaqueId(diagnosticEvent.Correlation.SessionId);
+        ValidateOpaqueCorrelation(diagnosticEvent.Correlation);
     }
 
-    private static string ValidateOpaqueId(string value)
+    private static void ValidateOpaqueCorrelation(CorrelationIds correlation)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Any(character => !(char.IsLetterOrDigit(character) || character is '-' or '_')))
+        if (!IsFactoryOpaqueId(correlation.SessionId, "ses_")
+            || !IsFactoryOpaqueId(correlation.RunId, "run_")
+            || !IsFactoryOpaqueId(correlation.OperationId, "op_"))
         {
-            throw new ArgumentException("A diagnostic identifier must be opaque ASCII-safe text.", nameof(value));
+            throw new ArgumentException("Diagnostic correlation IDs must be factory-shaped opaque identifiers.", nameof(correlation));
+        }
+
+        _ = DiagnosticCorrelationFactory.ValidateStepId(correlation.StepId);
+    }
+
+    private static string? ValidateRequestedRunId(string? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (!IsFactoryOpaqueId(value, "run_"))
+        {
+            throw new ArgumentException("A requested diagnostic run ID must be an opaque factory-shaped identifier.", nameof(value));
         }
 
         return value;
     }
+
+    private static bool IsFactoryOpaqueId(string value, string prefix) =>
+        value.Length == prefix.Length + 24
+        && value.StartsWith(prefix, StringComparison.Ordinal)
+        && value[prefix.Length..].All(character => character is >= 'a' and <= 'f' or >= '0' and <= '9');
+
+    private sealed record JournalRunGroup(string Directory, DateTimeOffset LastUpdatedUtc, long Bytes);
 
     private static string CreateRunSummary(StructuredDiagnosticEvent[] selected, string? runId) => string.Join(
         Environment.NewLine,
@@ -417,12 +549,60 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
 
     private static void AssertSafeBundleContents(IReadOnlyDictionary<string, string> files)
     {
-        var joined = string.Join("\n", files.Values);
-        if (joined.Contains("-----BEGIN ", StringComparison.OrdinalIgnoreCase)
-            || joined.Contains(string.Concat("pass", "word", "="), StringComparison.OrdinalIgnoreCase)
-            || joined.Contains("authorization:", StringComparison.OrdinalIgnoreCase))
+        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(pair.Value)).Key;
+        if (unsafeFile is not null)
         {
-            throw new InvalidOperationException("Support-bundle export omitted an unsafe payload by policy.");
+            throw new InvalidOperationException($"Support-bundle export omitted unsafe payload from {unsafeFile} by policy.");
+        }
+    }
+
+    private void AssertSafeEventForExport(StructuredDiagnosticEvent diagnosticEvent)
+    {
+        EnsureSafeExportText(diagnosticEvent.Category);
+        EnsureSafeExportText(diagnosticEvent.Message);
+        if (diagnosticEvent.Action is not null)
+        {
+            EnsureSafeExportText(diagnosticEvent.Action);
+        }
+
+        if (diagnosticEvent.Context is not null)
+        {
+            foreach (var (key, value) in diagnosticEvent.Context)
+            {
+                EnsureSafeExportText(key);
+                EnsureSafeExportText(value.Value);
+            }
+        }
+
+        EnsureSafeOutput(diagnosticEvent.StandardOutput);
+        EnsureSafeOutput(diagnosticEvent.StandardError);
+    }
+
+    private void EnsureSafeOutput(BoundedOutput? output)
+    {
+        if (output?.SanitizedText is not null)
+        {
+            EnsureSafeExportText(output.SanitizedText);
+        }
+    }
+
+    private void EnsureSafeExportText(string value)
+    {
+        if (!string.Equals(value, OmittedPayloadMarker, StringComparison.Ordinal) && redactor.Redact(value).WasOmitted)
+        {
+            throw new InvalidOperationException("Support-bundle export refused diagnostic text that did not pass central redaction.");
+        }
+    }
+
+    private void AssertSafeEnvironment()
+    {
+        EnsureSafeExportText(environment.AppVersion);
+        EnsureSafeExportText(environment.BuildSha);
+        EnsureSafeExportText(environment.LocalOs);
+        EnsureSafeExportText(environment.LocalArchitecture);
+        if (environment.ArtifactRid is not null)
+        {
+            EnsureSafeExportText(environment.ArtifactRid);
         }
     }
 
@@ -441,6 +621,9 @@ public sealed class OperationJournalWorkspace : ISanitizedDiagnosticSink, IDiagn
         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         writer.Write(content);
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----|known[_ -]?hosts|authorized[_ -]?keys|(?:authorization|proxy-authorization)\\s*:\\s*\\S+|\\b(password|passphrase|token|secret|credential|private[_ -]?key)\\s*[=:]", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex UnsafeBundleContentRegex();
 
     private static void ApplyDirectoryPermissions(string directory)
     {

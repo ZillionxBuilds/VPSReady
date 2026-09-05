@@ -123,25 +123,95 @@ public sealed class OperationJournalWorkspaceTests
     }
 
     [Fact]
-    public async Task RetentionRemovesOldNonExportedJournalFilesButKeepsTheNewestTwenty()
+    public async Task JournalRejectsNonOpaqueCorrelationAndOmitsUntypedTrustConfigAndServerTextFromEverySurface()
+    {
+        var root = CreateTemporaryDirectory();
+        var exports = Path.Combine(root, "exports");
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var invalidCorrelation = new CorrelationIds("ses_untrusted-correlation", "run_untrusted-correlation", "op_untrusted-correlation", "verify");
+            var directEvent = new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                "Connection",
+                DiagnosticLevel.Error,
+                invalidCorrelation,
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Failed,
+                "Safe message.");
+
+            await Assert.ThrowsAsync<ArgumentException>(() => workspace.WriteSanitizedAsync(directEvent, CancellationToken.None));
+
+            var trustPayload = string.Concat("known", "_hosts");
+            var serverValue = string.Concat("c108", "-server", ".example", ".test");
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    $"{trustPayload} diagnostics",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    $"{trustPayload} entry references {serverValue}",
+                    Action: $"Inspect {trustPayload}",
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["trusted_host"] = new(DiagnosticDataClassification.PublicSafe, serverValue),
+                    }),
+                CancellationToken.None);
+
+            var activity = Assert.Single(workspace.GetActivity());
+            var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exports, CancellationToken.None);
+            AssertNoUnsafeData(activity.Message, trustPayload, serverValue);
+            AssertNoUnsafeData(await File.ReadAllTextAsync(journalPath), trustPayload, serverValue);
+            AssertNoUnsafeData(report, trustPayload, serverValue);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                AssertNoUnsafeData(reader.ReadToEnd(), trustPayload, serverValue);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RetentionEnforcesTheByteCapAndPreservesTheNewestTwentyRunGroups()
     {
         var root = CreateTemporaryDirectory();
         try
         {
             var paths = new FixedPlatformPaths(root);
-            var logs = paths.ResolvePath(LocalStorageArea.State, "logs");
-            Directory.CreateDirectory(logs);
-            for (var index = 0; index < 24; index++)
+            var runs = paths.ResolvePath(LocalStorageArea.State, "runs");
+            Directory.CreateDirectory(runs);
+            var clock = new FixedClock();
+            var oversizedJournal = string.Concat(Enumerable.Repeat("{\"event_id\":\"operation.started\"}\n", 40_000));
+            for (var index = 0; index < 55; index++)
             {
-                var path = Path.Combine(logs, $"old-{index:D2}.jsonl");
-                await File.WriteAllTextAsync(path, "{}\n");
-                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(-30 - index));
+                var runDirectory = Path.Combine(runs, $"run_{index:D24}");
+                Directory.CreateDirectory(runDirectory);
+                var path = Path.Combine(runDirectory, "events.jsonl");
+                await File.WriteAllTextAsync(path, oversizedJournal);
+                File.SetLastWriteTimeUtc(path, clock.UtcNow.AddMinutes(-index - 1).UtcDateTime);
             }
 
             using var workspace = new OperationJournalWorkspace(
                 paths,
                 new FailClosedRedactor(),
-                new FixedClock(),
+                clock,
                 new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch"),
                 new RecordingFolderOpener());
             await workspace.WriteSanitizedAsync(
@@ -155,10 +225,14 @@ public sealed class OperationJournalWorkspaceTests
                     "Safe journal retention probe."),
                 CancellationToken.None);
 
-            var retained = Directory.EnumerateFiles(Path.Combine(root, "state"), "*", SearchOption.AllDirectories).ToArray();
-            Assert.Equal(RetentionPolicy.DiagnosticDefault.MinimumRetainedFiles, retained.Length);
-            Assert.False(File.Exists(Path.Combine(logs, "old-23.jsonl")));
-            Assert.Contains(retained, path => Path.GetFileName(path).StartsWith("app-20400101", StringComparison.Ordinal));
+            var retainedRuns = Directory.EnumerateDirectories(runs).ToArray();
+            var retainedBytes = Directory.EnumerateFiles(Path.Combine(root, "state"), "*.jsonl", SearchOption.AllDirectories)
+                .Sum(path => new FileInfo(path).Length);
+            Assert.True(retainedRuns.Length >= RetentionPolicy.DiagnosticDefault.MinimumRetainedFiles);
+            Assert.True(retainedBytes <= RetentionPolicy.DiagnosticDefault.MaximumTotalBytes);
+            Assert.True(Directory.Exists(Path.Combine(runs, "run_000000000000000000000000")));
+            Assert.True(Directory.Exists(Path.Combine(runs, "run_000000000000000000000018")));
+            Assert.False(Directory.Exists(Path.Combine(runs, "run_000000000000000000000054")));
         }
         finally
         {
