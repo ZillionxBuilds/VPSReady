@@ -287,3 +287,62 @@ public interface IRemoteTransportFactory
 {
     IRemoteTransport Create();
 }
+
+/// <summary>
+/// A narrow, clearable password boundary. Implementations copy characters only
+/// into a caller-provided buffer; they never expose a password string through
+/// a DTO, log, diagnostic field, or <see cref="object.ToString"/> path.
+/// </summary>
+public interface IPasswordCredential
+{
+    int Length { get; }
+
+    void CopyTo(Span<char> destination);
+}
+
+/// <summary>
+/// Production SSH transports which can establish password-authenticated
+/// sessions. The caller supplies a finite timeout and the transport reports
+/// typed, safe connection failures rather than SSH-library exception details.
+/// </summary>
+public interface IPasswordSshTransport : IRemoteTransport
+{
+    Task ConnectAsync(
+        RemoteEndpoint endpoint,
+        IPasswordCredential password,
+        TimeSpan timeout,
+        CancellationToken cancellationToken);
+
+    KnownHostTrustAssessment? LastHostTrustAssessment { get; }
+}
+
+public enum RemoteTransportFailureKind
+{
+    Network,
+    ConnectionRefused,
+    Timeout,
+    Authentication,
+    HostTrust,
+}
+
+/// <summary>
+/// A safe transport failure contract for application workflows. It deliberately
+/// omits raw library exceptions, host values, and authentication material.
+/// </summary>
+public sealed class RemoteTransportException : Exception
+{
+    public RemoteTransportException(RemoteTransportFailureKind kind)
+        : base(GetSafeMessage(kind)) => Kind = kind;
+
+    public RemoteTransportFailureKind Kind { get; }
+
+    private static string GetSafeMessage(RemoteTransportFailureKind kind) => kind switch
+    {
+        RemoteTransportFailureKind.Network => "The SSH transport could not reach the server.",
+        RemoteTransportFailureKind.ConnectionRefused => "The SSH service refused the connection.",
+        RemoteTransportFailureKind.Timeout => "The SSH transport timed out.",
+        RemoteTransportFailureKind.Authentication => "SSH authentication was not accepted.",
+        RemoteTransportFailureKind.HostTrust => "The SSH host identity requires explicit review.",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown SSH transport failure kind."),
+    };
+}
