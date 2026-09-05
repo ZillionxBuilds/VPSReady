@@ -62,12 +62,13 @@
               <TextBox x:Name="ConnectionHost" Watermark="Host or IP" />
               <TextBox x:Name="ConnectionPort" Watermark="SSH port (default 22)" />
               <TextBox x:Name="ConnectionUser" Watermark="Username" />
-              <TextBox x:Name="ConnectionPassword" PasswordChar="●" Watermark="Password" />
+              <TextBlock Text="Password input is supplied through the host secure input boundary and is never read from a Text property." TextWrapping="Wrap" />
               <Button Click="TestConnectionAsync" Content="Test Connection" />
               <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.State}" />
               <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.OverviewStatus}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.OverviewState}" />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Command="{Binding ConnectionOverview.RefreshCommand}" Content="Refresh connection state" />
                 <Button Command="{Binding ConnectionOverview.DisconnectCommand}" Content="Disconnect" />

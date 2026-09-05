@@ -68,27 +68,20 @@ public partial class MainWindow : Window
             return;
         }
 
-        var passwordBox = this.FindControl<TextBox>("ConnectionPassword");
         var hostBox = this.FindControl<TextBox>("ConnectionHost");
         var portBox = this.FindControl<TextBox>("ConnectionPort");
         var userBox = this.FindControl<TextBox>("ConnectionUser");
-        var transient = passwordBox?.Text?.ToCharArray() ?? [];
         try
         {
             await connection.TestAsync(
                 hostBox?.Text,
                 portBox?.Text,
                 userBox?.Text,
-                transient,
                 timeout: null);
         }
         finally
         {
-            Array.Clear(transient);
-            if (passwordBox is not null)
-            {
-                passwordBox.Text = string.Empty;
-            }
+            connection.SecretInput.Clear();
         }
     }
 }

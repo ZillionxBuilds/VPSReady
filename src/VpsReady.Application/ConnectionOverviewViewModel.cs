@@ -14,6 +14,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private string overviewStatus = "Unknown — remote facts have not been refreshed.";
     private string? operationId;
     private ConnectionScreenState state = ConnectionScreenState.Disconnected;
+    private ConnectionScreenState overviewState = ConnectionScreenState.Unknown;
 
     public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session)
     {
@@ -41,12 +42,15 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public string Status { get => status; private set => SetProperty(ref status, value); }
     public string? OperationId { get => operationId; private set => SetProperty(ref operationId, value); }
     public string OverviewStatus { get => overviewStatus; private set => SetProperty(ref overviewStatus, value); }
+    public ConnectionScreenState OverviewState { get => overviewState; private set => SetProperty(ref overviewState, value); }
     public bool HasConnectedSession => session.Snapshot.IsConnected;
+    public ConnectionSecretInput SecretInput { get; } = new();
 
     /// <summary>Accepts transient characters only; it never stores a password string.</summary>
-    public async Task TestAsync(string? host, string? port, string? user, ReadOnlyMemory<char> secret, TimeSpan? timeout, CancellationToken cancellationToken = default)
+    public async Task TestAsync(string? host, string? port, string? user, TimeSpan? timeout, CancellationToken cancellationToken = default)
     {
-        var validation = ConnectionInputValidator.Validate(host, port, user, secret.Span, timeout);
+        using var transient = SecretInput.TakeForSubmission();
+        var validation = ConnectionInputValidator.Validate(host, port, user, transient.Characters, timeout);
         if (!validation.IsValid)
         {
             State = ConnectionScreenState.Failed;
@@ -62,6 +66,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         OverviewStatus = result.Result.Succeeded
             ? "Unknown — the verified session has no refreshed remote facts yet."
             : "Unknown — no remote facts are available after an unsuccessful connection test.";
+        OverviewState = ConnectionScreenState.Unknown;
         OnPropertyChanged(nameof(HasConnectedSession));
     }
 
@@ -72,19 +77,54 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
             State = ConnectionScreenState.Disconnected;
             Status = "No server is connected.";
             OverviewStatus = "Unknown — remote facts require a verified session and refresh.";
+            OverviewState = ConnectionScreenState.Unknown;
         }
         else if (State != ConnectionScreenState.Testing)
         {
             State = ConnectionScreenState.Connected;
             Status = "A verified server session is available. Overview values remain Unknown until refreshed.";
             OverviewStatus = "Unknown — remote facts have not been refreshed.";
+            OverviewState = ConnectionScreenState.Unknown;
         }
         OnPropertyChanged(nameof(HasConnectedSession));
     }
 
     private async Task DisconnectAsync()
     {
+        SecretInput.Clear();
         await lifecycle.DisconnectAsync().ConfigureAwait(false);
         Refresh();
     }
+}
+
+/// <summary>Clearable presentation boundary. UI hosts supply characters/spans; it never accepts or exposes a string.</summary>
+public sealed class ConnectionSecretInput : IDisposable
+{
+    private char[]? characters = [];
+    public int Length => characters?.Length ?? 0;
+    public void Replace(ReadOnlySpan<char> value)
+    {
+        Clear();
+        characters = value.ToArray();
+    }
+    public SubmittedConnectionSecret TakeForSubmission()
+    {
+        var value = characters ?? [];
+        characters = [];
+        return new SubmittedConnectionSecret(value);
+    }
+    public void Clear()
+    {
+        if (characters is { } value)
+        {
+            Array.Clear(value);
+        }
+        characters = [];
+    }
+    public void Dispose() => Clear();
+}
+public sealed class SubmittedConnectionSecret(char[] characters) : IDisposable
+{
+    public ReadOnlySpan<char> Characters => characters;
+    public void Dispose() => Array.Clear(characters);
 }
