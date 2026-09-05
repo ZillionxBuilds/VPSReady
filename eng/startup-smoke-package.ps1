@@ -76,7 +76,7 @@ function Assert-ChildPath([string]$Root, [string]$Candidate) {
     return $resolvedCandidate
 }
 
-function New-Report([string]$Status, [string]$Reason, [string]$ErrorCode, $Target, $Host) {
+function New-Report([string]$Status, [string]$Reason, [string]$ErrorCode, $Target, $ObservedHost) {
     [ordered]@{
         schema_version = 1
         evidence_class = 'E4 Packaging/actual matching CI host'
@@ -84,11 +84,11 @@ function New-Report([string]$Status, [string]$Reason, [string]$ErrorCode, $Targe
         source_sha = $ExpectedCommitSha
         runner_os_declared = $RunnerOs
         runner_architecture_declared = $RunnerArchitecture
-        host_os_observed = $Host.Os
-        host_architecture_observed = $Host.Architecture
+        host_os_observed = $ObservedHost.Os
+        host_architecture_observed = $ObservedHost.Architecture
         target_os = $Target.Os
         target_architecture = $Target.Architecture
-        matching_host = ($Target.Os -eq $Host.Os -and $Target.Architecture -eq $Host.Architecture)
+        matching_host = ($Target.Os -eq $ObservedHost.Os -and $Target.Architecture -eq $ObservedHost.Architecture)
         status = $Status
         result_reason = $Reason
         error_code = $ErrorCode
@@ -145,6 +145,10 @@ if ($SelfTest) {
         throw 'Startup-smoke target normalization self-test failed.'
     }
 
+    if ((Get-Variable -Name Host).Options -notmatch 'ReadOnly|Constant') {
+        throw 'Startup-smoke reserved Host variable self-test failed.'
+    }
+
     $safeFixture = [ordered]@{ status = 'NOT_RUN'; result_reason = 'RUNNER_ARCHITECTURE_MISMATCH'; error_code = 'NONE' } | ConvertTo-Json
     if ($safeFixture -match 'VPSREADY_(SEEDED|TEST)_SECRET|-----BEGIN [A-Z ]*PRIVATE KEY-----') {
         throw 'Startup-smoke report sanitization self-test failed.'
@@ -155,7 +159,7 @@ if ($SelfTest) {
 }
 
 $target = Get-RidTarget $Rid
-$host = Get-CurrentHost
+$observedHost = Get-CurrentHost
 $smokeRoot = Join-Path $repositoryRoot 'artifacts/startup-smoke'
 $ridDirectory = Assert-ChildPath $smokeRoot (Join-Path $smokeRoot $Rid)
 $reportPath = Join-Path $ridDirectory 'startup-smoke-report.json'
@@ -165,7 +169,7 @@ if (Test-Path -LiteralPath $ridDirectory) {
 }
 New-Item -ItemType Directory -Force -Path $ridDirectory | Out-Null
 
-$report = New-Report 'FAIL' 'STARTUP_SMOKE_NOT_COMPLETED' 'PACKAGING_STARTUP_SMOKE_FAILED' $target $host
+$report = New-Report 'FAIL' 'STARTUP_SMOKE_NOT_COMPLETED' 'PACKAGING_STARTUP_SMOKE_FAILED' $target $observedHost
 $process = $null
 
 try {
@@ -204,7 +208,7 @@ try {
     $report.archive_sha256 = $actualArchiveHash
     $report.app_version = [string]$manifest.app_version
 
-    if ($target.Os -ne $host.Os) {
+    if ($target.Os -ne $observedHost.Os) {
         $report.status = 'NOT_RUN'
         $report.result_reason = 'RUNNER_OS_MISMATCH'
         $report.error_code = 'NONE'
@@ -213,7 +217,7 @@ try {
         exit 0
     }
 
-    if ($target.Architecture -ne $host.Architecture) {
+    if ($target.Architecture -ne $observedHost.Architecture) {
         $report.status = 'NOT_RUN'
         $report.result_reason = 'RUNNER_ARCHITECTURE_MISMATCH'
         $report.error_code = 'NONE'

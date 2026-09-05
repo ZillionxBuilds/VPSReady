@@ -38,6 +38,14 @@ if grep -Fq '$Rid:' "$smoke"; then
   exit 1
 fi
 
+if grep -Eiq '\$host\b' "$smoke"; then
+  printf '%s\n' 'Startup-smoke script must not assign or reference the reserved PowerShell Host variable.' >&2
+  exit 1
+fi
+
+require_smoke 'Get-Variable -Name Host'
+require_smoke '$observedHost = Get-CurrentHost'
+
 for workflow in "$blind_ci" "$release_ci"; do
   grep -Fq 'startup-smoke-package.ps1' "$workflow" || { printf 'Startup-smoke workflow wiring missing in %s\n' "$workflow" >&2; exit 1; }
   grep -Fq 'verify-startup-smoke-suite.sh' "$workflow" || { printf 'Startup-smoke static guard missing in %s\n' "$workflow" >&2; exit 1; }
