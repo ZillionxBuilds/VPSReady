@@ -152,6 +152,7 @@ public sealed partial class FailClosedRedactor : IRedactor
         }
 
         return PrivateKeyRegex().IsMatch(value)
+            || OpenSshPublicKeyRegex().IsMatch(value)
             || AuthorizationHeaderRegex().IsMatch(value)
             || SensitiveKeyRegex().IsMatch(value)
             || JsonSensitiveKeyRegex().IsMatch(value)
@@ -201,6 +202,13 @@ public sealed partial class FailClosedRedactor : IRedactor
 
     [GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----", RegexOptions.CultureInvariant)]
     private static partial Regex PrivateKeyRegex();
+
+    // A full OpenSSH public-key line is sensitive deployment material. Match
+    // known and future OpenSSH algorithm tokens plus their base64 key blob,
+    // while deliberately allowing safe algorithm/fingerprint summaries such
+    // as "ssh-ed25519 SHA256:..." to remain actionable.
+    [GeneratedRegex("(?<![A-Za-z0-9@._+-])(?:ssh|ecdsa|sk)-[A-Za-z0-9@._+-]+\\s+[A-Za-z0-9+/]{16,}={0,2}(?=\\s|$)", RegexOptions.CultureInvariant)]
+    private static partial Regex OpenSshPublicKeyRegex();
 
     [GeneratedRegex("(?:authorization|proxy-authorization)\\s*:\\s*\\S+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex AuthorizationHeaderRegex();
