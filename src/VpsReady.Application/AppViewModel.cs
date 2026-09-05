@@ -32,6 +32,12 @@ public sealed class AppViewModel : ObservableObject
     {
     }
 
+    public AppViewModel(IApplicationSession applicationSession, IConnectionSessionLifecycle lifecycle, IDiagnosticsWorkspace diagnosticsWorkspace)
+        : this(applicationSession, false, null, diagnosticsWorkspace)
+    {
+        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
+    }
+
     private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)
     {
         this.applicationSession = applicationSession;
@@ -79,6 +85,7 @@ public sealed class AppViewModel : ObservableObject
     public string? StartupErrorId { get; }
 
     public ActivityDiagnosticsViewModel? ActivityDiagnostics { get; }
+    public ConnectionOverviewViewModel? ConnectionOverview { get; }
 
     /// <summary>Desktop hosts copy this already-sanitized report only after an explicit user action.</summary>
     public event Action<string>? SafeIssueReportReady;

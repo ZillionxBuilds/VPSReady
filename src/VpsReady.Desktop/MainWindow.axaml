@@ -56,6 +56,29 @@
               <TextBlock Text="{Binding SelectedPage.UnavailableReason}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
+          <Border IsVisible="{Binding ConnectionOverview}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="8">
+              <TextBlock FontWeight="SemiBold" Text="Connection and overview" />
+              <TextBox x:Name="ConnectionHost" Watermark="Host or IP" />
+              <TextBox x:Name="ConnectionPort" Watermark="SSH port (default 22)" />
+              <TextBox x:Name="ConnectionUser" Watermark="Username" />
+              <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" Padding="8">
+                <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" />
+              </Border>
+              <TextBlock Text="Password entry accepts basic ASCII keys only; IME input is rejected to avoid retaining an unreviewed managed text value." TextWrapping="Wrap" />
+              <Button Click="TestConnectionAsync" Content="Test Connection" />
+              <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.State}" />
+              <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.OverviewStatus}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.OverviewState}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding ConnectionOverview.RefreshCommand}" Content="Refresh connection state" />
+                <Button Command="{Binding ConnectionOverview.DisconnectCommand}" Content="Disconnect" />
+              </StackPanel>
+              <TextBlock Text="Use Activity &amp; Diagnostics to Copy Safe Issue Report; credentials, raw host data and raw command output are never shown there." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
           <Border IsVisible="{Binding SelectedPage.IsActivityPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="10">
               <TextBlock FontWeight="SemiBold" Text="Local Activity &amp; Diagnostics" />
