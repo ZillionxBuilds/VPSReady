@@ -122,7 +122,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 VerifyPrivatePermissions(paths.PrivateFinalPath);
                 faultInjector.ThrowIfInjected(KeyPairTransactionStage.FinalPairVerified);
 
-                DeleteTransactionDirectoryIfOwned(transactionDirectory);
+                DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
                 transactionDirectory = null;
 
                 var operation = OperationResult.Success(correlation.OperationId);
@@ -343,7 +343,11 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static void WriteManifest(string transactionDirectory, KeyPairPaths paths)
     {
-        var manifest = new TransactionManifest(ManifestVersion, Path.GetFileName(paths.PrivateFinalPath), Path.GetFileName(paths.PublicFinalPath));
+        var manifest = new TransactionManifest(
+            ManifestVersion,
+            GetTransactionId(transactionDirectory),
+            Path.GetFileName(paths.PrivateFinalPath),
+            Path.GetFileName(paths.PublicFinalPath));
         var manifestPath = Path.Combine(transactionDirectory, ManifestFileName);
         using var stream = new FileStream(manifestPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
         JsonSerializer.Serialize(stream, manifest);
@@ -561,11 +565,6 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         foreach (var directory in Directory.EnumerateDirectories(paths.ParentDirectory, $"{TransactionDirectoryPrefix}*", SearchOption.TopDirectoryOnly))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsOwnedTransactionDirectory(directory) || !TryReadManifest(directory, out var manifest) || !ManifestMatches(paths, manifest))
-            {
-                continue;
-            }
-
             _ = RecoverTransaction(paths, directory);
         }
 
@@ -584,7 +583,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
             if (IsOwnedTransactionDirectory(transactionDirectory)
                 && !Directory.EnumerateFileSystemEntries(transactionDirectory, "*", SearchOption.TopDirectoryOnly).Any())
             {
-                DeleteTransactionDirectoryIfOwned(transactionDirectory);
+                DeleteEmptyTransactionDirectoryIfOwned(transactionDirectory);
                 return RecoveryResult.Unchanged with { Recovery = OperationRecovery.Succeeded };
             }
 
@@ -601,12 +600,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static bool RecoverTransaction(KeyPairPaths paths, string transactionDirectory)
     {
-        if (!IsOwnedTransactionDirectory(transactionDirectory)
-            || !TryReadManifest(transactionDirectory, out var manifest)
-            || !ManifestMatches(paths, manifest))
-        {
-            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
-        }
+        ValidateOwnedMatchingTransaction(paths, transactionDirectory);
 
         var stagedPrivate = Path.Combine(transactionDirectory, StagedPrivateFileName);
         var stagedPublic = Path.Combine(transactionDirectory, StagedPublicFileName);
@@ -618,7 +612,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         if (privateFinalExists && publicFinalExists)
         {
             VerifyPairCorrespondence(paths.PrivateFinalPath, paths.PublicFinalPath);
-            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
             return true;
         }
 
@@ -626,7 +620,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         {
             VerifyPairCorrespondence(paths.PrivateFinalPath, stagedPublic);
             File.Delete(paths.PrivateFinalPath);
-            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
             return false;
         }
 
@@ -634,14 +628,14 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         {
             VerifyPairCorrespondence(stagedPrivate, paths.PublicFinalPath);
             File.Delete(paths.PublicFinalPath);
-            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
             return false;
         }
 
         if (!privateFinalExists && !publicFinalExists && stagedPrivateExists && stagedPublicExists)
         {
             VerifyPairCorrespondence(stagedPrivate, stagedPublic);
-            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
             return false;
         }
 
@@ -654,7 +648,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         if (!privateFinalExists && !publicFinalExists && stagedPrivateExists && !stagedPublicExists)
         {
             VerifyStagedPrivateKey(stagedPrivate);
-            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
             return false;
         }
 
@@ -663,7 +657,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         // manifest-matching, allow-listed transaction directory is safe to remove.
         if (!privateFinalExists && !publicFinalExists && !stagedPrivateExists && !stagedPublicExists)
         {
-            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            DeleteTransactionDirectoryIfOwned(paths, transactionDirectory);
             return false;
         }
 
@@ -676,12 +670,25 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         try
         {
             var path = Path.Combine(transactionDirectory, ManifestFileName);
-            if (!File.Exists(path) || new FileInfo(path).Length > 1024)
+            if (!IsRegularNonReparseFile(path))
             {
                 return false;
             }
 
-            manifest = JsonSerializer.Deserialize<TransactionManifest>(File.ReadAllText(path, Encoding.UTF8))!;
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024, FileOptions.SequentialScan);
+            if (stream.Length > 1024)
+            {
+                return false;
+            }
+
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: false);
+            var serialized = reader.ReadToEnd();
+            if (!IsRegularNonReparseFile(path))
+            {
+                return false;
+            }
+
+            manifest = JsonSerializer.Deserialize<TransactionManifest>(serialized)!;
             return manifest is not null;
         }
         catch (IOException)
@@ -694,8 +701,9 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         }
     }
 
-    private static bool ManifestMatches(KeyPairPaths paths, TransactionManifest manifest) =>
+    private static bool ManifestMatches(KeyPairPaths paths, string transactionDirectory, TransactionManifest manifest) =>
         manifest.Version == ManifestVersion
+        && string.Equals(manifest.TransactionId, GetTransactionId(transactionDirectory), StringComparison.Ordinal)
         && string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.Ordinal)
         && string.Equals(manifest.PublicFileName, Path.GetFileName(paths.PublicFinalPath), StringComparison.Ordinal)
         && IsSafeLeafName(manifest.PrivateFileName)
@@ -721,13 +729,56 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         }
     }
 
-    private static void DeleteTransactionDirectoryIfOwned(string transactionDirectory)
+    private static string GetTransactionId(string transactionDirectory)
     {
-        if (!IsOwnedTransactionDirectory(transactionDirectory))
+        var name = Path.GetFileName(transactionDirectory);
+        if (!name.StartsWith(TransactionDirectoryPrefix, StringComparison.Ordinal)
+            || !Guid.TryParseExact(name[TransactionDirectoryPrefix.Length..], "N", out var transactionId))
         {
             throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
         }
 
+        return transactionId.ToString("N");
+    }
+
+    private static void ValidateOwnedMatchingTransaction(KeyPairPaths paths, string transactionDirectory)
+    {
+        if (!IsOwnedTransactionDirectory(transactionDirectory)
+            || !TryReadManifest(transactionDirectory, out var manifest)
+            || !ManifestMatches(paths, transactionDirectory, manifest))
+        {
+            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+        }
+
+        ValidateTransactionEntries(transactionDirectory);
+    }
+
+    private static void DeleteTransactionDirectoryIfOwned(KeyPairPaths paths, string transactionDirectory)
+    {
+        ValidateOwnedMatchingTransaction(paths, transactionDirectory);
+        var entries = Directory.EnumerateFileSystemEntries(transactionDirectory, "*", SearchOption.TopDirectoryOnly).ToArray();
+        foreach (var entry in entries)
+        {
+            EnsureRegularNonReparseFile(entry);
+            File.Delete(entry);
+        }
+
+        Directory.Delete(transactionDirectory, recursive: false);
+    }
+
+    private static void DeleteEmptyTransactionDirectoryIfOwned(string transactionDirectory)
+    {
+        if (!IsOwnedTransactionDirectory(transactionDirectory)
+            || Directory.EnumerateFileSystemEntries(transactionDirectory, "*", SearchOption.TopDirectoryOnly).Any())
+        {
+            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+        }
+
+        Directory.Delete(transactionDirectory, recursive: false);
+    }
+
+    private static void ValidateTransactionEntries(string transactionDirectory)
+    {
         var allowedFiles = new HashSet<string>(StringComparer.Ordinal)
         {
             ManifestFileName,
@@ -735,17 +786,10 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
             StagedPublicFileName,
         };
         var entries = Directory.EnumerateFileSystemEntries(transactionDirectory, "*", SearchOption.TopDirectoryOnly).ToArray();
-        if (entries.Any(entry => !allowedFiles.Contains(Path.GetFileName(entry))))
+        if (entries.Any(entry => !allowedFiles.Contains(Path.GetFileName(entry)) || !IsRegularNonReparseFile(entry)))
         {
             throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
         }
-
-        foreach (var entry in entries)
-        {
-            File.Delete(entry);
-        }
-
-        Directory.Delete(transactionDirectory, recursive: false);
     }
 
     private static bool PathExists(string path)
@@ -773,10 +817,22 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static void EnsureRegularNonReparseFile(string path)
     {
-        var attributes = File.GetAttributes(path);
-        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        if (!IsRegularNonReparseFile(path))
         {
             throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+        }
+    }
+
+    private static bool IsRegularNonReparseFile(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            return (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+        }
+        catch (IOException)
+        {
+            return false;
         }
     }
 
@@ -817,7 +873,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private readonly record struct KeyPairPaths(string PrivateFinalPath, string PublicFinalPath, string ParentDirectory);
 
-    private sealed record TransactionManifest(int Version, string PrivateFileName, string PublicFileName);
+    private sealed record TransactionManifest(int Version, string TransactionId, string PrivateFileName, string PublicFileName);
 
     private readonly record struct RecoveryResult(
         bool Failed,

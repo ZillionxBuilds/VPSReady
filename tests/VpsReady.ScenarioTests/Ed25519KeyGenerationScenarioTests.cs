@@ -107,9 +107,7 @@ public sealed class Ed25519KeyGenerationScenarioTests
 
         var transactionDirectory = Path.Combine(workspace.Root, $".vpsready-keytxn-{Guid.NewGuid():N}");
         Directory.CreateDirectory(transactionDirectory);
-        await File.WriteAllTextAsync(
-            Path.Combine(transactionDirectory, "manifest.json"),
-            "{\"Version\":1,\"PrivateFileName\":\"id_ed25519\",\"PublicFileName\":\"id_ed25519.pub\"}");
+        await WriteManifestAsync(transactionDirectory);
         File.Move(workspace.PublicKeyPath, Path.Combine(transactionDirectory, "public.key"));
 
         var result = await generator.GenerateAsync(
@@ -176,6 +174,152 @@ public sealed class Ed25519KeyGenerationScenarioTests
     }
 
     [Fact]
+    public async Task RestartRecoveryFailsClosedAndPreservesAReparseManifest()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new ScenarioKeyWorkspace();
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+        var request = new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath);
+        Assert.True((await generator.GenerateAsync(
+            request,
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None)).Succeeded);
+
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        var externalManifest = Path.Combine(workspace.Root, "external-manifest.json");
+        await File.WriteAllTextAsync(externalManifest, CreateMatchingManifest(transactionDirectory));
+        File.CreateSymbolicLink(Path.Combine(transactionDirectory, "manifest.json"), externalManifest);
+        File.Move(workspace.PrivateKeyPath, Path.Combine(transactionDirectory, "private.key"));
+        File.Delete(workspace.PublicKeyPath);
+
+        var result = await generator.GenerateAsync(
+            request,
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(File.Exists(externalManifest));
+        Assert.True(File.Exists(Path.Combine(transactionDirectory, "private.key")));
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Theory]
+    [InlineData("private.key")]
+    [InlineData("public.key")]
+    public async Task RestartRecoveryFailsClosedAndPreservesReparseStagedEntries(string stagedFileName)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(transactionDirectory);
+        var externalFile = Path.Combine(workspace.Root, "external-staged-material");
+        await File.WriteAllTextAsync(externalFile, "external-user-material");
+        File.CreateSymbolicLink(Path.Combine(transactionDirectory, stagedFileName), externalFile);
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(File.Exists(externalFile));
+        Assert.True(File.Exists(Path.Combine(transactionDirectory, stagedFileName)));
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
+    public async Task RestartRecoveryFailsClosedAndPreservesPublicOnlyStaging()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(transactionDirectory);
+        var stagedPublic = Path.Combine(transactionDirectory, "public.key");
+        await File.WriteAllTextAsync(stagedPublic, "unverified-public-staging");
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(File.Exists(stagedPublic));
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
+    public async Task RestartRecoveryFailsClosedAndPreservesMismatchedOrNonOwnedTransactionDirectories()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var mismatchedTransaction = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(mismatchedTransaction, transactionId: Guid.NewGuid().ToString("N"));
+        var mismatchedGenerator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var mismatched = await mismatchedGenerator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(mismatched);
+        Assert.True(File.Exists(Path.Combine(mismatchedTransaction, "manifest.json")));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+
+        Directory.Delete(mismatchedTransaction, recursive: true);
+        var nonOwnedTransaction = Path.Combine(workspace.Root, ".vpsready-keytxn-not-a-guid");
+        Directory.CreateDirectory(nonOwnedTransaction);
+        var sentinel = Path.Combine(nonOwnedTransaction, "user-sentinel");
+        await File.WriteAllTextAsync(sentinel, "must-remain");
+
+        var nonOwned = await mismatchedGenerator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(nonOwned);
+        Assert.True(File.Exists(sentinel));
+        Assert.True(Directory.Exists(nonOwnedTransaction));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
+    public async Task RestartRecoveryFailsClosedAndPreservesUnexpectedUserFinals()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(transactionDirectory);
+        var originalPrivate = "preexisting-user-private-placeholder";
+        await File.WriteAllTextAsync(workspace.PrivateKeyPath, originalPrivate);
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.Equal(originalPrivate, await File.ReadAllTextAsync(workspace.PrivateKeyPath));
+        Assert.True(File.Exists(Path.Combine(transactionDirectory, "manifest.json")));
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
     public async Task CancellationCollisionAndPermissionAreDistinctSafeOutcomes()
     {
         await using var workspace = new ScenarioKeyWorkspace();
@@ -210,10 +354,39 @@ public sealed class Ed25519KeyGenerationScenarioTests
         Assert.Empty(Directory.EnumerateDirectories(workspace.Root, ".vpsready-keytxn-*"));
     }
 
-    private static Task WriteManifestAsync(string transactionDirectory) =>
+    private static string CreateTransactionDirectory(string root)
+    {
+        var transactionDirectory = Path.Combine(root, $".vpsready-keytxn-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(transactionDirectory);
+        return transactionDirectory;
+    }
+
+    private static void AssertRecoveryFailure(LocalEd25519KeyGenerationResult result)
+    {
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Recovery, result.GenerationErrorCode);
+        Assert.Equal(OperationRecovery.NotRequired, result.Operation.Recovery);
+    }
+
+    private static Task WriteManifestAsync(
+        string transactionDirectory,
+        string privateFileName = "id_ed25519",
+        string publicFileName = "id_ed25519.pub",
+        string? transactionId = null) =>
         File.WriteAllTextAsync(
             Path.Combine(transactionDirectory, "manifest.json"),
-            "{\"Version\":1,\"PrivateFileName\":\"id_ed25519\",\"PublicFileName\":\"id_ed25519.pub\"}");
+            CreateMatchingManifest(transactionDirectory, privateFileName, publicFileName, transactionId));
+
+    private static string CreateMatchingManifest(
+        string transactionDirectory,
+        string privateFileName = "id_ed25519",
+        string publicFileName = "id_ed25519.pub",
+        string? transactionId = null)
+    {
+        var transactionName = Path.GetFileName(transactionDirectory);
+        var derivedTransactionId = transactionName[".vpsready-keytxn-".Length..];
+        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\"}}";
+    }
 }
 
 internal sealed class ScenarioStageFault(KeyPairTransactionStage stage, Exception? exception = null) : IKeyPairTransactionFaultInjector

@@ -227,7 +227,7 @@ public sealed class Ed25519OpenSshKeyPairGeneratorScenarioTests
         Directory.CreateDirectory(interruptedTransaction);
         await File.WriteAllTextAsync(
             Path.Combine(interruptedTransaction, "manifest.json"),
-            "{\"Version\":1,\"PrivateFileName\":\"id_ed25519\",\"PublicFileName\":\"id_ed25519.pub\"}");
+            $"{{\"Version\":1,\"TransactionId\":\"{Path.GetFileName(interruptedTransaction)[".vpsready-keytxn-".Length..]}\",\"PrivateFileName\":\"id_ed25519\",\"PublicFileName\":\"id_ed25519.pub\"}}");
         File.Move(workspace.PublicKeyPath, Path.Combine(interruptedTransaction, "public.key"));
 
         var recovered = await normalGenerator.GenerateAsync(
