@@ -222,6 +222,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             schema_version = StructuredDiagnosticEvent.CurrentSchemaVersion,
             app_version = Safe(environment.AppVersion),
             build_sha = Safe(environment.BuildSha),
+            artifact_rid = environment.ArtifactRid is null ? null : Safe(environment.ArtifactRid),
             export_time_utc = clock.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             run_id = resolvedRunId is null ? null : Safe(resolvedRunId),
             files = checksums.Select(pair => new { path = pair.Key, sha256 = pair.Value }).OrderBy(item => item.path),
