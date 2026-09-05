@@ -111,6 +111,18 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Permission, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
         }
+        catch (NativeOpenException exception) when (exception.IsAccessDenied)
+        {
+            return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Permission, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
+        }
+        catch (NativeOpenException exception) when (exception.IsMissing)
+        {
+            return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Missing, OperationErrorCode.LocalIo, OperationVerification.NotRun).ConfigureAwait(false);
+        }
+        catch (NativeOpenException exception) when (exception.IsNoFollowViolation)
+        {
+            return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.InvalidTarget, OperationErrorCode.Validation, OperationVerification.NotRun).ConfigureAwait(false);
+        }
         catch (UnsafeKeySelectionPathException)
         {
             return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.InvalidTarget, OperationErrorCode.Validation, OperationVerification.NotRun).ConfigureAwait(false);
@@ -235,8 +247,17 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
                 directoryHandle = next;
             }
 
-            var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow);
-            return new FileStream(fileHandle, FileAccess.Read, 4096, isAsync: false);
+            var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow | UnixOpenFlags.NonBlocking);
+            try
+            {
+                VerifyRegularUnixFile(fileHandle);
+                return new FileStream(fileHandle, FileAccess.Read, 4096, isAsync: false);
+            }
+            catch
+            {
+                fileHandle.Dispose();
+                throw;
+            }
         }
         finally
         {
@@ -260,7 +281,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     {
         if (descriptor < 0)
         {
-            throw new UnsafeKeySelectionPathException();
+            throw new NativeOpenException(Marshal.GetLastPInvokeError());
         }
 
         return new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
@@ -277,7 +298,48 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             translated |= 0x10000;
         }
+        if ((flags & UnixOpenFlags.NonBlocking) != 0)
+        {
+            translated |= OperatingSystem.IsMacOS() ? 0x4 : 0x800;
+        }
         return translated;
+    }
+
+    private static void VerifyRegularUnixFile(SafeFileHandle handle)
+    {
+        const int statBufferLength = 256;
+        var statBuffer = Marshal.AllocHGlobal(statBufferLength);
+        try
+        {
+            var status = OperatingSystem.IsMacOS()
+                ? FStatMac(handle.DangerousGetHandle().ToInt32(), statBuffer)
+                : FStatLinux(handle.DangerousGetHandle().ToInt32(), statBuffer);
+            if (status != 0)
+            {
+                throw new NativeOpenException(Marshal.GetLastPInvokeError());
+            }
+
+            // Darwin places st_mode after the 32-bit device field. Linux lays it out
+            // differently on its two supported 64-bit ABIs; unsupported ABIs fail closed.
+            var mode = OperatingSystem.IsMacOS()
+                ? (ushort)Marshal.ReadInt16(statBuffer, 4)
+                : RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => Marshal.ReadInt32(statBuffer, 24),
+                    Architecture.Arm64 => Marshal.ReadInt32(statBuffer, 16),
+                    _ => throw new UnsafeKeySelectionPathException(),
+                };
+            const int fileTypeMask = 0xF000;
+            const int regularFile = 0x8000;
+            if ((mode & fileTypeMask) != regularFile)
+            {
+                throw new UnsafeKeySelectionPathException();
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(statBuffer);
+        }
     }
 
     private static void RejectReparsePointHierarchy(string path)
@@ -327,9 +389,24 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         ReadOnly = 0,
         NoFollow = 1,
         Directory = 2,
+        NonBlocking = 4,
     }
 
     private sealed class UnsafeKeySelectionPathException : IOException;
+
+    private sealed class NativeOpenException(int error) : IOException
+    {
+        private const int PermissionDenied = 13;
+        private const int PermissionNotPermitted = 1;
+        private const int NoEntry = 2;
+        private const int NotDirectory = 20;
+        private const int LinuxTooManySymbolicLinks = 40;
+        private const int DarwinTooManySymbolicLinks = 62;
+
+        public bool IsAccessDenied => error is PermissionDenied or PermissionNotPermitted;
+        public bool IsMissing => error is NoEntry or NotDirectory;
+        public bool IsNoFollowViolation => error is LinuxTooManySymbolicLinks or DarwinTooManySymbolicLinks;
+    }
 
 #pragma warning disable CA2101 // Unix open/openat paths are explicitly ANSI UTF-8 marshalled below.
     [DllImport("libc", EntryPoint = "open", SetLastError = true, CharSet = CharSet.Ansi)]
@@ -340,6 +417,10 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     private static extern int OpenMac([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
     [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "openat", SetLastError = true, CharSet = CharSet.Ansi)]
     private static extern int OpenAtMac(int directory, [MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+    [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int FStatLinux(int descriptor, IntPtr statBuffer);
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "fstat", SetLastError = true)]
+    private static extern int FStatMac(int descriptor, IntPtr statBuffer);
 #pragma warning restore CA2101
 }
 

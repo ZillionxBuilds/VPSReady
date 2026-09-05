@@ -72,6 +72,50 @@ public sealed class ExistingOpenSshKeySelectionScenarioTests
         Assert.Null(result.Location);
         Assert.Equal("external-must-not-be-read", await File.ReadAllTextAsync(externalKey));
     }
+
+    [Fact]
+    public async Task NativeOpenMapsPostValidationMissingAndPermissionOutcomes()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var missingWorkspace = new ScenarioKeyWorkspace();
+        await File.WriteAllTextAsync(missingWorkspace.PrivateKeyPath, "validated-placeholder");
+        var missing = await new ExistingOpenSshKeySelector(new ScenarioKeyDiagnosticSink(), new DeleteBeforeNativeOpenObserver()).SelectAsync(
+            new ExistingSshKeySelectionRequest(missingWorkspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Missing, missing.SelectionErrorCode);
+        Assert.Null(missing.Metadata);
+        Assert.Null(missing.Location);
+
+        await using var permissionWorkspace = new ScenarioKeyWorkspace();
+        await File.WriteAllTextAsync(permissionWorkspace.PrivateKeyPath, "validated-placeholder");
+        var permission = await new ExistingOpenSshKeySelector(new ScenarioKeyDiagnosticSink(), new RemoveAccessBeforeNativeOpenObserver()).SelectAsync(
+            new ExistingSshKeySelectionRequest(permissionWorkspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Permission, permission.SelectionErrorCode);
+        Assert.Null(permission.Metadata);
+        Assert.Null(permission.Location);
+    }
+
+    [Fact]
+    public async Task PostValidationDirectoryReplacementFailsBeforeAnyReadOrMetadata()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new ScenarioKeyWorkspace();
+        await File.WriteAllTextAsync(workspace.PrivateKeyPath, "validated-placeholder");
+        var result = await new ExistingOpenSshKeySelector(new ScenarioKeyDiagnosticSink(), new DirectoryReplacementObserver()).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.True(Directory.Exists(workspace.PrivateKeyPath));
+    }
 }
 
 internal sealed class LeafSwapObserver(string external) : IExistingSshKeySelectionObserver
@@ -90,6 +134,31 @@ internal sealed class ParentSwapObserver(string validatedParent, string external
         File.Delete(path);
         Directory.Delete(validatedParent);
         Directory.CreateSymbolicLink(validatedParent, externalParent);
+    }
+}
+
+internal sealed class DeleteBeforeNativeOpenObserver : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path) => File.Delete(path);
+}
+
+internal sealed class RemoveAccessBeforeNativeOpenObserver : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.None);
+        }
+    }
+}
+
+internal sealed class DirectoryReplacementObserver : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path)
+    {
+        File.Delete(path);
+        Directory.CreateDirectory(path);
     }
 }
 
