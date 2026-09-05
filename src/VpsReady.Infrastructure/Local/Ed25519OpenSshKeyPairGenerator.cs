@@ -391,6 +391,8 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static void VerifyPairCorrespondence(string privatePath, string publicPath)
     {
+        EnsureRegularNonReparseFile(privatePath);
+        EnsureRegularNonReparseFile(publicPath);
         var privateKey = ReadPrivateKey(privatePath);
         var expectedPublic = privateKey.GeneratePublicKey().GetEncoded();
         var actualPublic = ReadPublicKey(publicPath).GetEncoded();
@@ -638,6 +640,29 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
         if (!privateFinalExists && !publicFinalExists && stagedPrivateExists && stagedPublicExists)
         {
+            VerifyPairCorrespondence(stagedPrivate, stagedPublic);
+            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            return false;
+        }
+
+        // The private payload is written before its public counterpart. A crash or
+        // deterministic fault at that precise boundary leaves a restricted,
+        // manifest-owned private staging file and no user-visible final files.
+        // Validate that exact staged key before deleting only the transaction
+        // directory. Any unexpected final, public-only, malformed, or tampered
+        // state remains a hard recovery failure.
+        if (!privateFinalExists && !publicFinalExists && stagedPrivateExists && !stagedPublicExists)
+        {
+            VerifyStagedPrivateKey(stagedPrivate);
+            DeleteTransactionDirectoryIfOwned(transactionDirectory);
+            return false;
+        }
+
+        // A restart can occur immediately after the manifest is made durable and
+        // before a staged key is created. There is no payload to preserve, and the
+        // manifest-matching, allow-listed transaction directory is safe to remove.
+        if (!privateFinalExists && !publicFinalExists && !stagedPrivateExists && !stagedPublicExists)
+        {
             DeleteTransactionDirectoryIfOwned(transactionDirectory);
             return false;
         }
@@ -737,6 +762,21 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         catch (DirectoryNotFoundException)
         {
             return false;
+        }
+    }
+
+    private static void VerifyStagedPrivateKey(string path)
+    {
+        EnsureRegularNonReparseFile(path);
+        _ = ReadPrivateKey(path);
+    }
+
+    private static void EnsureRegularNonReparseFile(string path)
+    {
+        var attributes = File.GetAttributes(path);
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+        {
+            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
         }
     }
 
