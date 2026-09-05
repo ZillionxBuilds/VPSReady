@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Diagnostics;
 using VpsReady.Infrastructure.Local;
 using VpsReady.Infrastructure.Remote;
 
@@ -103,6 +105,66 @@ public sealed class PublicKeyDeploymentWorkflowTests
         Assert.Throws<ArgumentOutOfRangeException>(() => RemoteCommandCatalog.RequireKnown("ubuntu.ssh.authorized-keys.unknown"));
     }
 
+    [Fact]
+    public async Task DeploymentPersistsSafeCorrelatedCommandEventsThroughTheProductionJournalAndSafeIssueReport()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "VpsReady.C404", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c404build", "test-os", "test-arch"),
+                new NoOpFolderOpener());
+            await using var keyWorkspace = new KeyWorkspace();
+            var key = await CreateMaterialAsync(keyWorkspace);
+            var copiedMaterial = key.CopyForUse();
+            var materialText = new string(copiedMaterial);
+            CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(copiedMaterial.AsSpan()));
+            var commandIds = new[]
+            {
+                RemoteCommandCatalog.UbuntuAuthorizedKeysInspect,
+                RemoteCommandCatalog.UbuntuAuthorizedKeysInstall,
+                RemoteCommandCatalog.UbuntuAuthorizedKeysVerify,
+            };
+
+            Assert.All(commandIds, commandId => Assert.True(DiagnosticCommandCatalog.IsKnown(commandId)));
+            var result = await new PublicKeyDeploymentWorkflow(new RedactingDiagnosticSink(redactor, journal))
+                .DeployAsync(new RecordingDeploymentTransport(alreadyPresent: false), key);
+
+            Assert.True(result.Result.Succeeded);
+            var activity = journal.GetActivity();
+            Assert.NotEmpty(activity);
+            Assert.All(activity, entry => Assert.Equal(result.Result.OperationId, entry.OperationId));
+
+            var journalPath = Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl");
+            var persisted = await File.ReadAllTextAsync(journalPath);
+            Assert.All(commandIds, commandId => Assert.Contains($"\"commandId\": \"{commandId}\"", persisted, StringComparison.Ordinal));
+            AssertSingleCorrelationValue(persisted, "sessionId");
+            AssertSingleCorrelationValue(persisted, "runId");
+            Assert.Equal(result.Result.OperationId, AssertSingleCorrelationValue(persisted, "operationId"));
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("ssh-ed25519", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(materialText, persisted, StringComparison.Ordinal);
+
+            var report = journal.CreateSafeIssueReport();
+            Assert.Contains(result.Result.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains("DeployPublicKey / Verify", report, StringComparison.Ordinal);
+            Assert.Contains("Succeeded / not-recorded", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("ssh-ed25519", report, StringComparison.Ordinal);
+            Assert.DoesNotContain(materialText, report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static async Task<PublicKeyDeploymentMaterial> CreateMaterialAsync(KeyWorkspace workspace)
     {
         var generated = await new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink()).GenerateAsync(
@@ -155,5 +217,43 @@ public sealed class PublicKeyDeploymentWorkflowTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FixedPlatformPaths(string root) : IPlatformPaths
+    {
+        public string GetStateDirectory() => GetDirectory(LocalStorageArea.State);
+
+        public string GetDirectory(LocalStorageArea area) => area switch
+        {
+            LocalStorageArea.State => Path.Combine(root, "state"),
+            LocalStorageArea.Configuration => Path.Combine(root, "configuration"),
+            LocalStorageArea.Ssh => Path.Combine(root, "ssh"),
+            _ => throw new ArgumentOutOfRangeException(nameof(area), area, "Unknown storage area."),
+        };
+
+        public string ResolvePath(LocalStorageArea area, string relativePath) => LocalPathPolicy.ResolveUnder(GetDirectory(area), relativePath);
+    }
+
+    private sealed class FixedClock : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = new(2040, 1, 1, 12, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class NoOpFolderOpener : IDiagnosticFolderOpener
+    {
+        public Task OpenAsync(string directory, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+
+    private static string AssertSingleCorrelationValue(string persisted, string propertyName)
+    {
+        var values = Regex.Matches(persisted, $"\\\"{propertyName}\\\": \\\"([^\\\"]+)\\\"")
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return Assert.Single(values);
     }
 }
