@@ -59,6 +59,8 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
         var correlation = CorrelationIds.Create("reboot");
         var apply = UbuntuPackageCommandCatalog.CreateRebootRequest();
         var applyAttempted = false;
+        var activePhase = DiagnosticPhase.Validate;
+        string? activeCommandId = null;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.RebootStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
@@ -72,6 +74,7 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
                 return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Preflight, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
             }
 
+            activePhase = DiagnosticPhase.Preflight;
             var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
             if (!privilege.Result.Succeeded)
             {
@@ -84,6 +87,8 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
             }
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
+            activePhase = DiagnosticPhase.Apply;
+            activeCommandId = apply.Id.Value;
             applyAttempted = true;
             try
             {
@@ -101,23 +106,25 @@ public sealed class RebootWorkflow(IPrivilegePreflight preflight, IDiagnosticSin
             }
 
             await ReportAsync(correlation, DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, apply.Id.Value, null).ConfigureAwait(false);
+            activePhase = DiagnosticPhase.Recovery;
+            activeCommandId = RemoteCommandCatalog.SshReconnectVerify;
             return await ReconnectAndVerifyAsync(reconnectTransport, correlation, apply.Id.Value, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            return await CancelledAsync(correlation, 0, RebootReconnectOutcome.Cancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+            return await CancelledAsync(correlation, 0, RebootReconnectOutcome.Cancelled, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.TimedOut).ConfigureAwait(false);
+            return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.TimedOut).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await FailureAsync(correlation, ToError(exception.Kind), exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootErrorCatalog.HostTrust : RebootErrorCatalog.Command, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootReconnectOutcome.HostTrustRejected : RebootReconnectOutcome.Failed).ConfigureAwait(false);
+            return await FailureAsync(correlation, ToError(exception.Kind), exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootErrorCatalog.HostTrust : RebootErrorCatalog.Command, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootReconnectOutcome.HostTrustRejected : RebootReconnectOutcome.Failed).ConfigureAwait(false);
         }
         catch
         {
-            return await FailureAsync(correlation, OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.Failed).ConfigureAwait(false);
+            return await FailureAsync(correlation, OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.Failed).ConfigureAwait(false);
         }
     }
 

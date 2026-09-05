@@ -90,4 +90,25 @@ public sealed class RebootWorkflowScenarioTests
         Assert.True(repeated.Result.Succeeded);
         Assert.Equal(RebootReconnectOutcome.Reconnected, repeated.ReconnectOutcome);
     }
+
+    [Fact]
+    public async Task InjectedRecoveryThrowRetainsRecoveryDiagnosticPhaseAndFailedRecoveryState()
+    {
+        await using var services = ScenarioComposition.Create("c504-recovery-throw");
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
+        faults.Inject(DiagnosticPhase.Recovery, ScenarioFaultKind.Throw, "reconnect-unexpected", RemoteCommandCatalog.SshReconnectVerify);
+
+        var result = await new RebootWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(RebootErrorCatalog.Unexpected, result.ErrorCode);
+        Assert.Equal(OperationRecovery.Failed, result.Result.Recovery);
+        var terminal = Assert.Single(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId && item.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticPhase.Recovery, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshReconnectVerify, terminal.CommandId);
+    }
 }

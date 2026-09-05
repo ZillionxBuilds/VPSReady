@@ -121,6 +121,22 @@ public sealed class RebootWorkflowTests
         Assert.False(result.Result.Succeeded);
     }
 
+    [Fact]
+    public async Task UnexpectedRecoveryExceptionRetainsRecoveryPhaseAndFailedRecoveryState()
+    {
+        var sink = new Sink();
+        var transport = new RebootTransport(Ok("reboot=started"), new InvalidOperationException("injected recovery failure"));
+        var result = await new RebootWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(RebootErrorCatalog.Unexpected, result.ErrorCode);
+        Assert.Equal(OperationRecovery.Failed, result.Result.Recovery);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticPhase.Recovery, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshReconnectVerify, terminal.CommandId);
+    }
+
     private static RemoteCommandResult Ok(string output) => new(0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class AllowedPreflight : IPrivilegePreflight
