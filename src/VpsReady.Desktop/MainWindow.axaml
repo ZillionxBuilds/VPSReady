@@ -56,6 +56,33 @@
               <TextBlock Text="{Binding SelectedPage.UnavailableReason}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
+          <Border IsVisible="{Binding SelectedPage.IsActivityPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Local Activity &amp; Diagnostics" />
+              <TextBlock Text="Activity is redacted before display and stored only on this device. VPSReady never uploads diagnostics automatically." TextWrapping="Wrap" />
+              <TextBox Watermark="Filter safe activity" Text="{Binding ActivityDiagnostics.Filter}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding ActivityDiagnostics.RefreshCommand}" Content="Refresh activity" />
+                <Button Command="{Binding ActivityDiagnostics.ClearCommand}" Content="Clear diagnostics" />
+                <Button Command="{Binding ActivityDiagnostics.OpenFolderCommand}" Content="Open log folder" />
+                <Button Command="{Binding ActivityDiagnostics.CopySafeIssueReportCommand}" Content="Copy Safe Issue Report" />
+                <Button Command="{Binding ActivityDiagnostics.ExportSanitizedSupportBundleCommand}" Content="Export Sanitized Support Bundle" />
+              </StackPanel>
+              <TextBlock Text="{Binding ActivityDiagnostics.Status}" TextWrapping="Wrap" />
+              <TextBlock FontFamily="Consolas" Text="{Binding ActivityDiagnostics.LogDirectory}" TextWrapping="Wrap" />
+              <ItemsControl ItemsSource="{Binding ActivityDiagnostics.Entries}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Margin="0,4,0,4">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Action}" />
+                      <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                      <TextBlock FontFamily="Consolas" Text="{Binding OperationId}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
           <Border IsVisible="{Binding HasStartupFailure}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="6">
               <TextBlock FontWeight="SemiBold" Text="Startup was limited safely" />

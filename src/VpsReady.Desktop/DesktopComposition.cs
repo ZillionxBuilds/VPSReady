@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -22,9 +24,24 @@ public static class DesktopComposition
         services.AddSingleton<ISecureLocalStorage, SecureLocalStorage>();
         services.AddSingleton<IProcessRunner, SystemProcessRunner>();
         services.AddSingleton<IRedactor, FailClosedRedactor>();
-        services.AddSingleton<ISanitizedDiagnosticSink, NullSanitizedDiagnosticSink>();
+        services.AddSingleton(new DiagnosticEnvironment(
+            Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0-dev",
+            GetBuildSha(),
+            RuntimeInformation.OSDescription,
+            RuntimeInformation.ProcessArchitecture.ToString(),
+            RuntimeInformation.RuntimeIdentifier));
+        services.AddSingleton<IDiagnosticFolderOpener, PlatformDiagnosticFolderOpener>();
+        services.AddSingleton<OperationJournalWorkspace>();
+        services.AddSingleton<ISanitizedDiagnosticSink>(provider => provider.GetRequiredService<OperationJournalWorkspace>());
+        services.AddSingleton<IDiagnosticsWorkspace>(provider => provider.GetRequiredService<OperationJournalWorkspace>());
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
+        services.AddSingleton<SafeUnhandledExceptionReporter>();
         services.AddSingleton<IRemoteTransportFactory, SshNetRemoteTransportFactory>();
         return services.BuildServiceProvider(validateScopes: true);
     }
+
+    private static string GetBuildSha() => typeof(DesktopComposition).Assembly
+        .GetCustomAttributes<AssemblyMetadataAttribute>()
+        .FirstOrDefault(attribute => string.Equals(attribute.Key, "VpsReadyBuildSha", StringComparison.Ordinal))?.Value
+        ?? "not-recorded";
 }
