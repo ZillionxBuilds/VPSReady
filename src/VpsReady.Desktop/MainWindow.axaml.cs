@@ -141,6 +141,78 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void RefreshPackageIndexAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.RefreshPackageIndexAsync();
+        }
+    }
+
+    private async void PlanPackageUpgradeAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.PlanUpgradeAsync();
+        }
+    }
+
+    private async void ApplyPackageUpgradeAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.UpgradeAsync();
+        }
+    }
+
+    private async void InspectRebootRequiredAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.InspectRebootRequiredAsync();
+        }
+    }
+
+    private async void RebootSystemAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.RebootAsync();
+        }
+    }
+
+    private async void PlanHostnameAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.PlanHostnameAsync();
+        }
+    }
+
+    private async void ApplyHostnameAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.ApplyHostnameAsync();
+        }
+    }
+
+    private async void PlanTimezoneAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.PlanTimezoneAsync();
+        }
+    }
+
+    private async void ApplyTimezoneAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.ApplyTimezoneAsync();
+        }
+    }
+
     private async void GenerateSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (viewModel?.SshManagement is not { } ssh)

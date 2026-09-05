@@ -57,6 +57,17 @@ public sealed class AppViewModelTests
     }
 
     [Fact]
+    public void SystemPageIsNoLongerAPlaceholderWhenItsDesktopJourneyIsComposed()
+    {
+        var page = ShellPageViewModel.Create(ShellPage.System);
+
+        Assert.True(page.IsSystemActionsPage);
+        Assert.False(page.IsPlaceholderPage);
+        Assert.Contains("plan", page.Description, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("revalidates host identity", page.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ActivitySelectedDetailShowsProjectedGuidanceWithoutSeededDiagnosticPayload()
     {
         const string seededServer = "c607-detail-host.example.test";
