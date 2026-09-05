@@ -38,13 +38,20 @@ public enum ScenarioIpFamily
 
 public enum ScenarioFaultKind
 {
+    /// <summary>
+    /// Delays one command, then allows its normal handler to run. The delay is
+    /// still constrained by the command's finite timeout.
+    /// </summary>
+    Delay,
     Throw,
     Timeout,
     Cancellation,
     Disconnect,
+    DropConnection,
     PermissionDenied,
     NonZeroExit,
     MalformedOutput,
+    PartialOutput,
     VerificationMismatch,
 }
 
@@ -350,7 +357,8 @@ public sealed record ScenarioFault(
     string? CommandId = null,
     int ExitCode = 1,
     string StandardError = "Injected deterministic scenario fault.",
-    TimeSpan Delay = default);
+    TimeSpan Delay = default,
+    string StandardOutput = "<partial scenario output>");
 
 public sealed class ScenarioFaultException(ScenarioFault fault) : Exception($"Injected scenario fault '{fault.FaultId}' at phase '{fault.Phase}'.")
 {

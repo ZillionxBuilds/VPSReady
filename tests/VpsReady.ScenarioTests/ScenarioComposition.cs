@@ -17,18 +17,38 @@ public static class ScenarioComposition
     public static ServiceProvider Create(string scenarioId, Action<ScenarioHostState>? configure = null)
     {
         var state = ScenarioHostState.CreateDefault(scenarioId);
+        return Create(state, configure, new SimulatedScenarioMode(scenarioId));
+    }
+
+    /// <summary>
+    /// Composes a named, deterministic profile for automated or simulated-manual
+    /// tests. The registered banner is deliberately unambiguous so a test UI
+    /// cannot be mistaken for a real remote environment.
+    /// </summary>
+    public static ServiceProvider CreateProfile(string profileId, Action<ScenarioHostState>? configure = null)
+    {
+        var state = ScenarioProfiles.Create(profileId);
+        return Create(state, configure, new SimulatedScenarioMode(profileId));
+    }
+
+    private static ServiceProvider Create(
+        ScenarioHostState state,
+        Action<ScenarioHostState>? configure,
+        SimulatedScenarioMode simulatedMode)
+    {
         configure?.Invoke(state);
         var faults = new ScenarioFaultPlan();
         var host = new DeterministicScenarioHost(state, faults);
         var services = new ServiceCollection();
         services.AddSingleton(state);
+        services.AddSingleton(simulatedMode);
         services.AddSingleton(faults);
         services.AddSingleton<IRemoteTransport>(host);
         services.AddSingleton(host);
         services.AddSingleton<IRemoteTransportFactory>(provider => new ScenarioRemoteTransportFactory(provider.GetRequiredService<DeterministicScenarioHost>()));
         services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<ILocalFileStore, ScenarioLocalFileStore>();
-        services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(scenarioId));
+        services.AddSingleton<IPlatformPaths>(new ScenarioPlatformPaths(state.ScenarioId));
         services.AddSingleton<ISecureLocalStorage, SecureLocalStorage>();
         services.AddSingleton<IClock, ScenarioClock>();
         services.AddSingleton<ScenarioProcessRunner>();

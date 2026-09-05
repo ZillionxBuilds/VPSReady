@@ -32,6 +32,11 @@ public sealed class ScenarioFaultPlan
             throw new ArgumentException("A stable fault ID is required.", nameof(fault));
         }
 
+        if (fault.Kind == ScenarioFaultKind.Delay && fault.Delay <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(fault), "A delayed fault requires a finite positive delay.");
+        }
+
         lock (sync)
         {
             faults.Add(fault);
@@ -45,9 +50,10 @@ public sealed class ScenarioFaultPlan
         string? commandId = null,
         int exitCode = 1,
         string standardError = "Injected deterministic scenario fault.",
-        TimeSpan delay = default)
+        TimeSpan delay = default,
+        string standardOutput = "<partial scenario output>")
     {
-        Inject(new ScenarioFault(phase, faultId, kind, commandId, exitCode, standardError, delay));
+        Inject(new ScenarioFault(phase, faultId, kind, commandId, exitCode, standardError, delay, standardOutput));
     }
 
     public bool TryTake(DiagnosticPhase phase, string? commandId, out ScenarioFault? fault)
@@ -98,13 +104,16 @@ public sealed class ScenarioFaultPlan
 
         return fault.Kind switch
         {
+            ScenarioFaultKind.Delay => null,
             ScenarioFaultKind.Throw => throw new ScenarioFaultException(fault),
             ScenarioFaultKind.Timeout => throw new TimeoutException($"Injected timeout '{fault.FaultId}'."),
             ScenarioFaultKind.Cancellation => throw new OperationCanceledException($"Injected cancellation '{fault.FaultId}'.", cancellationToken),
             ScenarioFaultKind.Disconnect => throw new ScenarioDisconnectException($"Injected disconnect '{fault.FaultId}'."),
+            ScenarioFaultKind.DropConnection => throw new ScenarioDisconnectException($"Injected dropped connection '{fault.FaultId}'."),
             ScenarioFaultKind.PermissionDenied => new RemoteCommandResult(13, string.Empty, "Permission denied (injected scenario fault).", fault.Delay),
             ScenarioFaultKind.NonZeroExit => new RemoteCommandResult(fault.ExitCode == 0 ? 1 : fault.ExitCode, string.Empty, fault.StandardError, fault.Delay),
             ScenarioFaultKind.MalformedOutput => new RemoteCommandResult(0, "<malformed scenario output>", fault.StandardError, fault.Delay),
+            ScenarioFaultKind.PartialOutput => new RemoteCommandResult(0, fault.StandardOutput, string.Empty, fault.Delay),
             ScenarioFaultKind.VerificationMismatch => new RemoteCommandResult(4, "verification=mismatch", fault.StandardError, fault.Delay),
             _ => throw new ArgumentOutOfRangeException(nameof(fault), fault.Kind, "Unknown scenario fault kind."),
         };
