@@ -117,6 +117,7 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             RemoteCommandCatalog.UbuntuUfwAvailabilityRead => Result($"ufw={(State.Ufw.Status == ScenarioUfwStatus.Absent ? "unavailable" : "available")}"),
             RemoteCommandCatalog.UbuntuUfwStatusRead => FactUfwStatus(),
             RemoteCommandCatalog.UbuntuUfwDetectionRead => FirewallDetection(),
+            RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallRuleList(),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -314,14 +315,21 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         _ => Result($"Status: {State.Ufw.Status.ToString().ToLowerInvariant()}"),
     };
 
+    private RemoteCommandResult FirewallRuleList() => State.Ufw.Status switch
+    {
+        ScenarioUfwStatus.Absent => Result("ufw=unavailable"),
+        ScenarioUfwStatus.Error => Failure(1, State.Ufw.ErrorMessage),
+        ScenarioUfwStatus.Active => Result(State.Ufw.NumberedStatusOverride ?? ActiveNumberedUfwStatus()),
+        _ => Result($"Status: {State.Ufw.Status.ToString().ToLowerInvariant()}"),
+    };
+
     private string ActiveNumberedUfwStatus()
     {
         var rules = State.Ufw.Rules
-            .OrderBy(rule => rule.RuleId, StringComparer.Ordinal)
             .Select((rule, index) => string.Join(
                 ' ',
                 $"[{index + 1,2}]",
-                $"{rule.Port.ToString(CultureInfo.InvariantCulture)}/{rule.Protocol.ToString().ToLowerInvariant()}",
+                $"{rule.Port.ToString(CultureInfo.InvariantCulture)}/{rule.Protocol.ToString().ToLowerInvariant()}" + (rule.IpFamily == ScenarioIpFamily.Ipv6 ? " (v6)" : string.Empty),
                 $"{rule.Action} IN",
                 rule.Source + (rule.IpFamily == ScenarioIpFamily.Ipv6 ? " (v6)" : string.Empty)));
         return string.Join(Environment.NewLine,

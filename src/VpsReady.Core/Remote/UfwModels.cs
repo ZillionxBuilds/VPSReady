@@ -28,3 +28,64 @@ public sealed record UfwSnapshot(UfwFirewallState State, IReadOnlyList<UfwRule> 
 {
     public static UfwSnapshot StateOnly(UfwFirewallState state) => new(state, Array.Empty<UfwRule>());
 }
+
+/// <summary>
+/// The parser's safety result for one fresh numbered-rule read.  It deliberately
+/// contains typed fields only: the untrusted remote transcript is discarded at
+/// the parser boundary and is never kept in a selection or refresh result.
+/// </summary>
+public enum UfwRuleListReadStatus
+{
+    Complete,
+    RemoteFailure,
+    Malformed,
+    Unsupported,
+    Ambiguous,
+    Partial,
+}
+
+public sealed record UfwRuleListRead(UfwSnapshot Snapshot, UfwRuleListReadStatus Status)
+{
+    public bool IsComplete => Status == UfwRuleListReadStatus.Complete;
+}
+
+public enum UfwRuleSelectionStatus
+{
+    Current,
+    Stale,
+    Unavailable,
+}
+
+/// <summary>
+/// Applies a complete numbered listing atomically.  A failed or incomplete
+/// read never replaces a previously safe list, so a future mutating card cannot
+/// accidentally act from partially parsed remote output.
+/// </summary>
+public sealed record UfwRuleRefreshResult(UfwSnapshot Snapshot, UfwRuleListReadStatus ReadStatus, bool Replaced)
+{
+    public UfwRuleSelectionStatus GetSelectionStatus(UfwRuleIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        if (!Replaced)
+        {
+            return UfwRuleSelectionStatus.Unavailable;
+        }
+
+        return Snapshot.Rules.Any(rule => Equals(rule.Identity, identity))
+            ? UfwRuleSelectionStatus.Current
+            : UfwRuleSelectionStatus.Stale;
+    }
+}
+
+public static class UfwRuleRefresh
+{
+    public static UfwRuleRefreshResult Apply(UfwSnapshot previous, UfwRuleListRead freshRead)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(freshRead);
+
+        return freshRead.IsComplete
+            ? new UfwRuleRefreshResult(freshRead.Snapshot, freshRead.Status, Replaced: true)
+            : new UfwRuleRefreshResult(previous, freshRead.Status, Replaced: false);
+    }
+}

@@ -233,6 +233,13 @@ public sealed class ScenarioFirewallState
 
     public string ErrorMessage { get; set; } = "UFW scenario error.";
 
+    /// <summary>
+    /// Scenario-only hostile transcript hook. Production composition cannot
+    /// reference this type. It lets E2 prove that a malformed/ambiguous remote
+    /// listing cannot replace the last complete typed snapshot.
+    /// </summary>
+    public string? NumberedStatusOverride { get; set; }
+
     public List<ScenarioFirewallRule> Rules { get; } = [];
 
     public bool HasActiveSshAllow(int activePort)

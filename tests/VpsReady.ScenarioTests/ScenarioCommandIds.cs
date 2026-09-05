@@ -93,6 +93,7 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuUfwAvailabilityRead,
         RemoteCommandCatalog.UbuntuUfwStatusRead,
         RemoteCommandCatalog.UbuntuUfwDetectionRead,
+        RemoteCommandCatalog.UbuntuUfwRuleListRead,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 
