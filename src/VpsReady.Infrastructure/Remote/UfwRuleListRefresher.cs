@@ -24,10 +24,58 @@ public sealed class UfwRuleListRefresher
         UfwSnapshot previous,
         CancellationToken cancellationToken = default)
     {
+        var correlation = CorrelationIds.Create("ufw_rule_list_refresh");
+        return await RefreshCoreAsync(transport, previous, correlation, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// C307 needs the same opaque correlation identifier shown in Activity for
+    /// a user-triggered refresh. This preserves the existing refresh behavior
+    /// while projecting a typed outcome rather than remote text or exceptions.
+    /// </summary>
+    public async Task<UfwRuleRefreshOperationResult> RefreshOperationAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        CancellationToken cancellationToken = default)
+    {
+        var correlation = CorrelationIds.Create("ufw_rule_list_refresh");
+        try
+        {
+            var refresh = await RefreshCoreAsync(transport, previous, correlation, cancellationToken).ConfigureAwait(false);
+            var result = refresh.Replaced
+                ? OperationResult.Success(correlation.OperationId, OperationState.Unchanged)
+                : OperationResult.Failure(correlation.OperationId, ErrorForRead(refresh.ReadStatus), OperationState.Unchanged);
+            return new UfwRuleRefreshOperationResult(result, refresh);
+        }
+        catch (OperationCanceledException)
+        {
+            return new UfwRuleRefreshOperationResult(
+                OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged),
+                new UfwRuleRefreshResult(previous, UfwRuleListReadStatus.Partial, Replaced: false));
+        }
+        catch (TimeoutException)
+        {
+            return new UfwRuleRefreshOperationResult(
+                OperationResult.Failure(correlation.OperationId, OperationErrorCode.Timeout, OperationState.Unknown),
+                new UfwRuleRefreshResult(previous, UfwRuleListReadStatus.RemoteFailure, Replaced: false));
+        }
+        catch
+        {
+            return new UfwRuleRefreshOperationResult(
+                OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unknown),
+                new UfwRuleRefreshResult(previous, UfwRuleListReadStatus.RemoteFailure, Replaced: false));
+        }
+    }
+
+    private async Task<UfwRuleRefreshResult> RefreshCoreAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        CorrelationIds correlation,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(previous);
 
-        var correlation = CorrelationIds.Create("ufw_rule_list_refresh");
         var command = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.UbuntuUfwRuleListRead);
         await ReportAsync(correlation, DiagnosticEventCatalog.OperationStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, "Firewall rule refresh started.", CancellationToken.None, command.Id.Value).ConfigureAwait(false);
         try
@@ -73,6 +121,13 @@ public sealed class UfwRuleListRefresher
         }
     }
 
+    private static OperationErrorCode ErrorForRead(UfwRuleListReadStatus status) => status switch
+    {
+        UfwRuleListReadStatus.RemoteFailure => OperationErrorCode.Command,
+        UfwRuleListReadStatus.Complete => OperationErrorCode.Unexpected,
+        _ => OperationErrorCode.Parse,
+    };
+
     private async Task ReportAsync(
         CorrelationIds correlation,
         string eventId,
@@ -106,3 +161,6 @@ public sealed class UfwRuleListRefresher
         }
     }
 }
+
+/// <summary>Safe refresh outcome sharing the exact diagnostic correlation ID.</summary>
+public sealed record UfwRuleRefreshOperationResult(OperationResult Result, UfwRuleRefreshResult Refresh);

@@ -49,14 +49,57 @@
         <StackPanel Margin="32" MaxWidth="760" Spacing="18">
           <TextBlock FontSize="24" FontWeight="SemiBold" Text="{Binding SelectedPage.Heading}" TextWrapping="Wrap" />
           <TextBlock FontSize="16" Text="{Binding SelectedPage.Description}" TextWrapping="Wrap" />
-          <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+          <Border IsVisible="{Binding SelectedPage.IsPlaceholderPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="8">
               <TextBlock FontWeight="SemiBold" Text="Action unavailable" />
               <Button IsEnabled="{Binding SelectedPage.IsActionAvailable}" HorizontalAlignment="Left" Content="{Binding SelectedPage.UnavailableAction}" />
               <TextBlock Text="{Binding SelectedPage.UnavailableReason}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
-          <Border IsVisible="{Binding ConnectionOverview}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+          <Border IsVisible="{Binding SelectedPage.IsFirewallPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Safe firewall management" />
+              <TextBlock Text="Rules and state are refreshed from the verified session. Firewall changes require explicit confirmation and are only successful after verification." TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Firewall.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Firewall.State}" />
+              <TextBlock Text="{Binding Firewall.FirewallState}" />
+              <TextBlock IsVisible="{Binding Firewall.OperationId}" FontFamily="Consolas" Text="{Binding Firewall.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding Firewall.ErrorCode}" FontFamily="Consolas" Text="{Binding Firewall.ErrorCode}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="RefreshFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Refresh firewall state" />
+                <Button Command="{Binding Firewall.CancelCommand}" IsEnabled="{Binding Firewall.CanCancel}" Content="Cancel operation" />
+              </StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Current verified rules" />
+              <TextBlock Text="{Binding Firewall.RuleListingStatus}" TextWrapping="Wrap" />
+              <ListBox ItemsSource="{Binding Firewall.Rules}" SelectedItem="{Binding Firewall.SelectedRule, Mode=TwoWay}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="application:FirewallRuleRow">
+                    <TextBlock Text="{Binding Display}" TextWrapping="Wrap" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock FontWeight="SemiBold" Text="Add allow rule" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <RadioButton GroupName="FirewallProtocol" IsChecked="{Binding Firewall.IsTcp, Mode=TwoWay}" Content="TCP" />
+                <RadioButton GroupName="FirewallProtocol" IsChecked="{Binding Firewall.IsUdp, Mode=TwoWay}" Content="UDP" />
+                <RadioButton GroupName="FirewallFamily" IsChecked="{Binding Firewall.IsIpv4, Mode=TwoWay}" Content="IPv4" />
+                <RadioButton GroupName="FirewallFamily" IsChecked="{Binding Firewall.IsIpv6, Mode=TwoWay}" Content="IPv6" />
+              </StackPanel>
+              <TextBox Watermark="Port (1–65535)" Text="{Binding Firewall.AddPort, Mode=TwoWay}" />
+              <TextBox Watermark="Source (Anywhere, IP, or CIDR)" Text="{Binding Firewall.AddSource, Mode=TwoWay}" />
+              <Button Click="AddFirewallRuleAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Add verified allow rule" />
+              <TextBlock FontWeight="SemiBold" Text="Risky actions" />
+              <CheckBox IsChecked="{Binding Firewall.IsRemoveConfirmed, Mode=TwoWay}" Content="I confirm removal of the selected current rule." />
+              <TextBlock AutomationProperties.Name="Firewall removal eligibility" Text="{Binding Firewall.RemovalEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="RemoveFirewallRuleAsync" IsEnabled="{Binding Firewall.CanRemoveSelected}" Content="Remove selected rule" />
+              <CheckBox IsChecked="{Binding Firewall.IsEnableConfirmed, Mode=TwoWay}" Content="I confirm enabling the firewall after its SSH access plan is verified." />
+              <Button Click="EnableFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Enable firewall" />
+              <CheckBox IsChecked="{Binding Firewall.IsDisableConfirmed, Mode=TwoWay}" Content="I confirm disabling the firewall." />
+              <Button Click="DisableFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Disable firewall" />
+              <TextBlock Text="The normal flow blocks removal of any TCP rule on the active SSH port. Use Activity &amp; Diagnostics and the operation ID for a Safe Issue Report; no raw remote command or secret is shown." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding SelectedPage.IsConnectionSurfacePage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="8">
               <TextBlock FontWeight="SemiBold" Text="Connection and overview" />
               <TextBox x:Name="ConnectionHost" Watermark="Host or IP" />

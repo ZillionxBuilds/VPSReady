@@ -85,6 +85,46 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void RefreshFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.RefreshAsync();
+        }
+    }
+
+    private async void AddFirewallRuleAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.AddAsync();
+        }
+    }
+
+    private async void RemoveFirewallRuleAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.RemoveSelectedAsync();
+        }
+    }
+
+    private async void EnableFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.EnableAsync();
+        }
+    }
+
+    private async void DisableFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.DisableAsync();
+        }
+    }
+
     private void ConnectionPasswordKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
         var connection = viewModel?.ConnectionOverview;

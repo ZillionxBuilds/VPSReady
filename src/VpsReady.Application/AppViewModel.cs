@@ -38,6 +38,18 @@ public sealed class AppViewModel : ObservableObject
         ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
     }
 
+    public AppViewModel(
+        IApplicationSession applicationSession,
+        IConnectionSessionLifecycle lifecycle,
+        IDiagnosticsWorkspace diagnosticsWorkspace,
+        IFirewallManagement firewallManagement,
+        IDiagnosticSink? firewallDiagnostics = null)
+        : this(applicationSession, false, null, diagnosticsWorkspace)
+    {
+        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
+        Firewall = new FirewallViewModel(applicationSession, firewallManagement, firewallDiagnostics);
+    }
+
     private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)
     {
         this.applicationSession = applicationSession;
@@ -86,6 +98,7 @@ public sealed class AppViewModel : ObservableObject
 
     public ActivityDiagnosticsViewModel? ActivityDiagnostics { get; }
     public ConnectionOverviewViewModel? ConnectionOverview { get; }
+    public FirewallViewModel? Firewall { get; }
 
     /// <summary>Desktop hosts copy this already-sanitized report only after an explicit user action.</summary>
     public event Action<string>? SafeIssueReportReady;
@@ -288,6 +301,9 @@ public sealed record ShellPageViewModel(
     bool IsActionAvailable = false)
 {
     public bool IsActivityPage => Page == ShellPage.ActivityAndDiagnostics;
+    public bool IsFirewallPage => Page == ShellPage.Firewall;
+    public bool IsPlaceholderPage => Page is not ShellPage.Firewall;
+    public bool IsConnectionSurfacePage => Page is ShellPage.Connection or ShellPage.Overview;
 
     public static ShellPageViewModel Create(ShellPage page) => page switch
     {

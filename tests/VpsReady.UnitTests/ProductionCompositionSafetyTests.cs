@@ -19,12 +19,16 @@ public sealed class ProductionCompositionSafetyTests
         var transportFactory = services.GetRequiredService<IRemoteTransportFactory>();
         var applicationSession = services.GetRequiredService<IApplicationSession>();
         var keyGenerator = services.GetRequiredService<ILocalEd25519KeyGenerator>();
+        var firewallManagement = services.GetRequiredService<IFirewallManagement>();
+        var appViewModel = services.GetRequiredService<AppViewModel>();
         await using var transport = transportFactory.Create();
 
         Assert.IsType<SshNetRemoteTransport>(transport);
         Assert.IsType<SshNetRemoteTransportFactory>(transportFactory);
         Assert.IsType<ApplicationSession>(applicationSession);
         Assert.IsType<Ed25519OpenSshKeyPairGenerator>(keyGenerator);
+        Assert.IsType<FirewallManagement>(firewallManagement);
+        Assert.NotNull(appViewModel.Firewall);
         Assert.DoesNotContain("Scenario", transport.GetType().Assembly.GetName().Name, StringComparison.Ordinal);
         Assert.DoesNotContain(
             typeof(DesktopComposition).Assembly.GetReferencedAssemblies(),
