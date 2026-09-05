@@ -160,6 +160,11 @@ public static class DiagnosticEventCatalog
     public const string HostnameChangeSucceeded = "system.hostname_change.succeeded";
     public const string HostnameChangeFailed = "system.hostname_change.failed";
     public const string HostnameChangeCancelled = "system.hostname_change.cancelled";
+    public const string TimezoneChangeStarted = "system.timezone_change.started";
+    public const string TimezoneChangePlanned = "system.timezone_change.planned";
+    public const string TimezoneChangeSucceeded = "system.timezone_change.succeeded";
+    public const string TimezoneChangeFailed = "system.timezone_change.failed";
+    public const string TimezoneChangeCancelled = "system.timezone_change.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -176,6 +181,7 @@ public static class DiagnosticEventCatalog
         PackageUpgradeStarted, PackageUpgradePlanned, PackageUpgradeSucceeded, PackageUpgradeFailed, PackageUpgradeCancelled,
         RebootStarted, RebootSucceeded, RebootFailed, RebootCancelled, RebootRecoveryRequired,
         HostnameChangeStarted, HostnameChangePlanned, HostnameChangeSucceeded, HostnameChangeFailed, HostnameChangeCancelled,
+        TimezoneChangeStarted, TimezoneChangePlanned, TimezoneChangeSucceeded, TimezoneChangeFailed, TimezoneChangeCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -223,6 +229,10 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuHostnameChangeRead = "ubuntu.hostname.change.read";
     public const string UbuntuHostnameChangeApply = "ubuntu.hostname.change.apply";
     public const string UbuntuHostnameChangeVerify = "ubuntu.hostname.change.verify";
+    public const string UbuntuTimezoneCurrentRead = "ubuntu.timezone.current.read";
+    public const string UbuntuTimezoneAvailableList = "ubuntu.timezone.available.list";
+    public const string UbuntuTimezoneApply = "ubuntu.timezone.apply";
+    public const string UbuntuTimezoneVerifyRead = "ubuntu.timezone.verify.read";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -262,6 +272,10 @@ public static class DiagnosticCommandCatalog
         UbuntuHostnameChangeRead,
         UbuntuHostnameChangeApply,
         UbuntuHostnameChangeVerify,
+        UbuntuTimezoneCurrentRead,
+        UbuntuTimezoneAvailableList,
+        UbuntuTimezoneApply,
+        UbuntuTimezoneVerifyRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -281,6 +295,7 @@ public static class DiagnosticErrorCatalog
         .Concat(PackageUpgradeErrorCatalog.All)
         .Concat(RebootErrorCatalog.All)
         .Concat(HostnameChangeErrorCatalog.All)
+        .Concat(TimezoneChangeErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

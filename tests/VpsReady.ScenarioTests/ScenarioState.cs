@@ -191,6 +191,9 @@ public sealed class ScenarioUbuntuState
 
     public string Timezone { get; set; } = "Etc/UTC";
 
+    /// <summary>Server-owned authoritative choices used by the timezone workflow's strict membership check.</summary>
+    public List<string> AvailableTimezones { get; } = ["Etc/UTC", "Asia/Bangkok", "Europe/London", "America/New_York"];
+
     public string Uptime { get; set; } = "1 day, 2 hours";
 
     public string RemoteUser { get; set; } = "scenario";
