@@ -60,6 +60,8 @@ public static class RemoteCommandCatalog
     public const string UbuntuAuthorizedKeysInspect = DiagnosticCommandCatalog.UbuntuAuthorizedKeysInspect;
     public const string UbuntuAuthorizedKeysInstall = DiagnosticCommandCatalog.UbuntuAuthorizedKeysInstall;
     public const string UbuntuAuthorizedKeysVerify = DiagnosticCommandCatalog.UbuntuAuthorizedKeysVerify;
+    public const string UbuntuAptIndexUpdate = DiagnosticCommandCatalog.UbuntuAptIndexUpdate;
+    public const string UbuntuAptIndexVerify = DiagnosticCommandCatalog.UbuntuAptIndexVerify;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -87,6 +89,8 @@ public static class RemoteCommandCatalog
         UbuntuAuthorizedKeysInspect,
         UbuntuAuthorizedKeysInstall,
         UbuntuAuthorizedKeysVerify,
+        UbuntuAptIndexUpdate,
+        UbuntuAptIndexVerify,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

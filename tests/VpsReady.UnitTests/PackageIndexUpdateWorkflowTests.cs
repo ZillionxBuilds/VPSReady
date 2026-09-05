@@ -1,0 +1,82 @@
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Remote;
+
+namespace VpsReady.UnitTests;
+
+[Trait("Category", "E1")]
+public sealed class PackageIndexUpdateWorkflowTests
+{
+    [Fact]
+    public void CatalogIsBoundedAndContainsNoUpgradePath()
+    {
+        var update = UbuntuPackageCommandCatalog.CreateUpdateRequest();
+        var verify = UbuntuPackageCommandCatalog.CreateVerifyRequest();
+        var shell = UbuntuPackageCommandCatalog.RequireShellCommand(update) + UbuntuPackageCommandCatalog.RequireShellCommand(verify);
+        Assert.True(DiagnosticCommandCatalog.IsKnown(update.Id.Value));
+        Assert.All(PackageIndexUpdateErrorCatalog.All, code => Assert.True(DiagnosticErrorCatalog.IsKnown(code), code));
+        Assert.DoesNotContain("upgrade", shell, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("install", shell, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", update.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UpdateIsSuccessfulOnlyAfterVerificationWithCorrelatedSafeDiagnostics()
+    {
+        var sink = new RecordingSink();
+        var transport = new SequenceTransport(Success("ignored"), Success("apt_index=refreshed"));
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink).UpdateAsync(transport);
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate, RemoteCommandCatalog.UbuntuAptIndexVerify], transport.Commands.Select(command => command.Id.Value));
+        Assert.All(sink.Events, item => Assert.Equal(result.Result.OperationId, item.Correlation.OperationId));
+        Assert.All(sink.Events, item => Assert.Null(item.StandardOutput));
+    }
+
+    [Theory]
+    [InlineData(100, PackageIndexUpdateErrorCatalog.Locked)]
+    [InlineData(1, PackageIndexUpdateErrorCatalog.Command)]
+    public async Task AptExitIsTypedAndVerificationNeverRuns(int exitCode, string expected)
+    {
+        var transport = new SequenceTransport(new RemoteCommandResult(exitCode, string.Empty, "private-output", TimeSpan.Zero));
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), new RecordingSink()).UpdateAsync(transport);
+        Assert.Equal(expected, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.Apt, result.Result.ErrorCode);
+        Assert.Single(transport.Commands);
+    }
+
+    [Fact]
+    public async Task VerificationFailureAndCancellationNeverReportSuccess()
+    {
+        var verification = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), new RecordingSink()).UpdateAsync(
+            new SequenceTransport(Success("done"), Success("unexpected")));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var cancellation = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), new RecordingSink()).UpdateAsync(
+            new SequenceTransport(Success("done")), cancelled.Token);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Verification, verification.ErrorCode);
+        Assert.False(verification.Result.Succeeded);
+        Assert.True(cancellation.Result.Cancelled);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, cancellation.ErrorCode);
+    }
+
+    private static RemoteCommandResult Success(string output) => new(0, output, string.Empty, TimeSpan.Zero);
+
+    private sealed class AllowedPreflight : IPrivilegePreflight
+    {
+        public Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new PrivilegePreflightResult(OperationResult.Success("op_preflight", OperationState.Unchanged), new PrivilegeCapability(true, SudoCapability.NotRequired), null));
+    }
+    private sealed class SequenceTransport(params RemoteCommandResult[] responses) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> responses = new(responses);
+        public List<RemoteCommand> Commands { get; } = [];
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return Task.FromResult(responses.Dequeue()); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+    private sealed class RecordingSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+    }
+}
