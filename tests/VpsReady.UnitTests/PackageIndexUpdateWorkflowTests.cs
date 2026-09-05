@@ -60,11 +60,48 @@ public sealed class PackageIndexUpdateWorkflowTests
         Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, cancellation.ErrorCode);
     }
 
+    [Fact]
+    public async Task PreflightCancellationUsesThePackageCancellationResultAndOneCorrelationScope()
+    {
+        var sink = new RecordingSink();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(sink), sink).UpdateAsync(
+            new SequenceTransport(Success("root=true\nsudo=not_required")),
+            cancelled.Token);
+
+        var packageStart = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateStarted);
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.DoesNotContain(sink.Events, item => item.CommandId == RemoteCommandCatalog.UbuntuAptIndexUpdate);
+        Assert.Contains(sink.Events, item => item.EventId == DiagnosticEventCatalog.PrivilegePreflightFailed && item.Status == DiagnosticStatus.Cancelled);
+        Assert.All(sink.Events, item =>
+        {
+            Assert.Equal(packageStart.Correlation.SessionId, item.Correlation.SessionId);
+            Assert.Equal(packageStart.Correlation.RunId, item.Correlation.RunId);
+            Assert.Equal(packageStart.Correlation.OperationId, item.Correlation.OperationId);
+        });
+    }
+
+    [Fact]
+    public async Task PreflightTimeoutSurfacesThePackageTimeoutWithoutStartingApt()
+    {
+        var sink = new RecordingSink();
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(sink), sink).UpdateAsync(new TimeoutTransport());
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Timeout, result.ErrorCode);
+        Assert.DoesNotContain(sink.Events, item => item.CommandId == RemoteCommandCatalog.UbuntuAptIndexUpdate);
+    }
+
     private static RemoteCommandResult Success(string output) => new(0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class AllowedPreflight : IPrivilegePreflight
     {
-        public Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CancellationToken cancellationToken = default) =>
+        public Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CorrelationIds? correlation = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(new PrivilegePreflightResult(OperationResult.Success("op_preflight", OperationState.Unchanged), new PrivilegeCapability(true, SudoCapability.NotRequired), null));
     }
     private sealed class SequenceTransport(params RemoteCommandResult[] responses) : IRemoteTransport
@@ -72,6 +109,14 @@ public sealed class PackageIndexUpdateWorkflowTests
         private readonly Queue<RemoteCommandResult> responses = new(responses);
         public List<RemoteCommand> Commands { get; } = [];
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return Task.FromResult(responses.Dequeue()); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class TimeoutTransport : IRemoteTransport
+    {
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) =>
+            Task.FromException<RemoteCommandResult>(new TimeoutException());
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
     private sealed class RecordingSink : IDiagnosticSink

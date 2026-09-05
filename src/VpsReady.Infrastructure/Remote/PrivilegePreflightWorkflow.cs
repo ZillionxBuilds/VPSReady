@@ -13,10 +13,14 @@ public sealed class PrivilegePreflightWorkflow(IDiagnosticSink diagnostics) : IP
 {
     private const string ActionName = "PrivilegePreflight";
 
-    public async Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CancellationToken cancellationToken = default)
+    public async Task<PrivilegePreflightResult> CheckAsync(
+        IRemoteTransport transport,
+        PrivilegeOperationIntent intent,
+        CorrelationIds? correlation = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(transport);
-        var correlation = CorrelationIds.Create("privilege_preflight");
+        correlation ??= CorrelationIds.Create("privilege_preflight");
         if (intent == PrivilegeOperationIntent.ReadOnly)
         {
             var skipped = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
@@ -27,7 +31,7 @@ public sealed class PrivilegePreflightWorkflow(IDiagnosticSink diagnostics) : IP
         var command = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.UbuntuPrivilegeRead);
         try
         {
-            await ReportAsync(correlation, DiagnosticEventCatalog.PrivilegePreflightStarted, DiagnosticPhase.Preflight, DiagnosticStatus.Started, command.Id.Value, null).ConfigureAwait(false);
+            await ReportAsync(correlation.ForStep("preflight"), DiagnosticEventCatalog.PrivilegePreflightStarted, DiagnosticPhase.Preflight, DiagnosticStatus.Started, command.Id.Value, null).ConfigureAwait(false);
             var response = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
             if (!response.Succeeded)
             {
@@ -46,14 +50,18 @@ public sealed class PrivilegePreflightWorkflow(IDiagnosticSink diagnostics) : IP
             }
 
             var succeeded = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PrivilegePreflightSucceeded, DiagnosticPhase.Preflight, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
+            await ReportAsync(correlation.ForStep("preflight"), DiagnosticEventCatalog.PrivilegePreflightSucceeded, DiagnosticPhase.Preflight, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
             return new PrivilegePreflightResult(succeeded, parsed.Value, null);
         }
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PrivilegePreflightFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, command.Id.Value, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            await ReportAsync(correlation.ForStep("preflight"), DiagnosticEventCatalog.PrivilegePreflightFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, command.Id.Value, OperationErrorCode.Cancelled).ConfigureAwait(false);
             return new PrivilegePreflightResult(cancelled, null, PrivilegePreflightErrorCatalog.Cancelled);
+        }
+        catch (TimeoutException)
+        {
+            return await FailAsync(correlation, OperationErrorCode.Timeout, PrivilegePreflightErrorCatalog.Timeout, command.Id.Value).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
@@ -68,7 +76,7 @@ public sealed class PrivilegePreflightWorkflow(IDiagnosticSink diagnostics) : IP
     private async Task<PrivilegePreflightResult> FailAsync(CorrelationIds correlation, OperationErrorCode error, string code, string? commandId, PrivilegeCapability? capability = null)
     {
         var result = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
-        await ReportAsync(correlation, DiagnosticEventCatalog.PrivilegePreflightFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
+        await ReportAsync(correlation.ForStep("preflight"), DiagnosticEventCatalog.PrivilegePreflightFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
         return new PrivilegePreflightResult(result, capability, code);
     }
 

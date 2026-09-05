@@ -17,10 +17,10 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
-            var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, cancellationToken).ConfigureAwait(false);
+            var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
             if (!privilege.Result.Succeeded)
             {
-                return await FailAsync(correlation, OperationErrorCode.Privilege, PackageIndexUpdateErrorCatalog.Privilege, DiagnosticPhase.Preflight, null, OperationState.Unchanged).ConfigureAwait(false);
+                return await CompletePreflightFailureAsync(correlation, privilege.Result).ConfigureAwait(false);
             }
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, update.Id.Value, null).ConfigureAwait(false);
@@ -68,6 +68,33 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         var result = OperationResult.Failure(correlation.OperationId, error, state, error == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun);
         await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateFailed, phase, DiagnosticStatus.Failed, command, error).ConfigureAwait(false);
         return new PackageIndexUpdateResult(result, code);
+    }
+
+    private async Task<PackageIndexUpdateResult> CompletePreflightFailureAsync(CorrelationIds correlation, OperationResult preflight)
+    {
+        if (preflight.Cancelled)
+        {
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateCancelled, DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            return new PackageIndexUpdateResult(cancelled, PackageIndexUpdateErrorCatalog.Cancelled);
+        }
+
+        var error = preflight.ErrorCode switch
+        {
+            OperationErrorCode.Timeout => OperationErrorCode.Timeout,
+            OperationErrorCode.Privilege => OperationErrorCode.Privilege,
+            OperationErrorCode.Unexpected => OperationErrorCode.Unexpected,
+            { } inherited => inherited,
+            null => OperationErrorCode.Unexpected,
+        };
+        var code = error switch
+        {
+            OperationErrorCode.Timeout => PackageIndexUpdateErrorCatalog.Timeout,
+            OperationErrorCode.Privilege => PackageIndexUpdateErrorCatalog.Privilege,
+            OperationErrorCode.Unexpected => PackageIndexUpdateErrorCatalog.Unexpected,
+            _ => PackageIndexUpdateErrorCatalog.Command,
+        };
+        return await FailAsync(correlation, error, code, DiagnosticPhase.Preflight, null, OperationState.Unchanged).ConfigureAwait(false);
     }
 
     private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string? commandId, OperationErrorCode? error)

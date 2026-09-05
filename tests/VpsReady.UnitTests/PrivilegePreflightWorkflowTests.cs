@@ -67,7 +67,7 @@ public sealed class PrivilegePreflightWorkflowTests
         var cancellation = await new PrivilegePreflightWorkflow(new RecordingSink()).CheckAsync(
             new RecordingTransport(new RemoteCommandResult(0, "root=true\nsudo=not_required", string.Empty, TimeSpan.Zero, OutputCapturePolicy.SanitizedTruncated)),
             PrivilegeOperationIntent.Mutation,
-            cancelled.Token);
+            cancellationToken: cancelled.Token);
 
         Assert.Equal(OperationErrorCode.Privilege, denied.Result.ErrorCode);
         Assert.Equal(PrivilegePreflightErrorCatalog.Command, denied.ErrorCode);
