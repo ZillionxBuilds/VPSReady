@@ -61,6 +61,25 @@ public sealed class TimezoneChangeWorkflowTests
     }
 
     [Fact]
+    public async Task StandardOneComponentIanaLinkInAvailableListRemainsSelectable()
+    {
+        var transport = new Transport(Ok("CET\n"), Ok("CET\nEtc/UTC\nAsia/Bangkok\n"), Ok("applied"), Ok("Asia/Bangkok\n"));
+        var workflow = new TimezoneChangeWorkflow(new AllowedPreflight(), new Sink());
+
+        var plan = await workflow.PlanAsync(transport, "Asia/Bangkok");
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true);
+
+        Assert.True(plan.IsReady);
+        Assert.Equal("CET", plan.CurrentTimezone);
+        Assert.True(result.Result.Succeeded);
+        Assert.True(UbuntuTimezoneCommandCatalog.IsIanaIdentifier("CET"));
+
+        var selectedAlias = await workflow.PlanAsync(new Transport(Ok("Etc/UTC"), Ok("CET\nEtc/UTC")), "CET");
+        Assert.True(selectedAlias.IsReady);
+        Assert.Equal("CET", selectedAlias.SelectedTimezone);
+    }
+
+    [Fact]
     public async Task ConfirmationAndVerificationMismatchNeverClaimSuccess()
     {
         var workflow = new TimezoneChangeWorkflow(new AllowedPreflight(), new Sink());

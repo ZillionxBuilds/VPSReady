@@ -62,6 +62,10 @@ public static partial class UbuntuTimezoneCommandCatalog
         return $"if [ \"$(id -u)\" -eq 0 ]; then timedatectl set-timezone {quoted}; else sudo -n timedatectl set-timezone {quoted}; fi";
     }
 
-    [GeneratedRegex("^(?:UTC|[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)+)$", RegexOptions.CultureInvariant)]
+    // timedatectl may return IANA link aliases such as CET as well as
+    // Region/City names. Exact membership in the freshly read remote catalog
+    // remains mandatory before apply; this grammar only rejects values that
+    // cannot be made shell-safe.
+    [GeneratedRegex("^[A-Za-z][A-Za-z0-9._+-]*(?:/[A-Za-z0-9._+-]+)*$", RegexOptions.CultureInvariant)]
     private static partial Regex TimezonePattern();
 }
