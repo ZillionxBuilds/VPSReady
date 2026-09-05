@@ -119,6 +119,7 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             RemoteCommandCatalog.UbuntuUfwDetectionRead => FirewallDetection(),
             RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallRuleList(),
             RemoteCommandCatalog.UbuntuUfwAllowRuleAdd => AddUfwRule(command),
+            RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove => RemoveUfwRuleByNumber(command),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -407,6 +408,42 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
 
         State.Ufw.Rules.Remove(rule);
         return Result($"changed=true removed_rule_id={rule.RuleId}");
+    }
+
+    /// <summary>
+    /// Mirrors C304 production semantics: the workflow has already bound a
+    /// selected opaque identity to a fresh numbered listing, and this command
+    /// receives only that fresh display number. It still models privilege and
+    /// SSH-port protection to keep the test host fail-closed if a workflow
+    /// regression bypasses its policy.
+    /// </summary>
+    private RemoteCommandResult RemoveUfwRuleByNumber(RemoteCommand command)
+    {
+        if (State.Ufw.Status is ScenarioUfwStatus.Absent or ScenarioUfwStatus.Error)
+        {
+            return Failure(127, "ufw is unavailable in this scenario.");
+        }
+
+        if (!HasPrivilege())
+        {
+            return Failure(13, "Permission denied while removing a firewall rule.");
+        }
+
+        if (!int.TryParse(GetArgument(command, "number"), NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            || number < 1
+            || number > State.Ufw.Rules.Count)
+        {
+            return Failure(4, "The selected firewall rule is stale or missing.");
+        }
+
+        var rule = State.Ufw.Rules[number - 1];
+        if (rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == State.Ssh.ActiveSshPort)
+        {
+            return Failure(13, "The active SSH rule cannot be removed through the normal scenario flow.");
+        }
+
+        State.Ufw.Rules.RemoveAt(number - 1);
+        return Result("changed=true");
     }
 
     private RemoteCommandResult EnableUfw()

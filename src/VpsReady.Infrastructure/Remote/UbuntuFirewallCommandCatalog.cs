@@ -31,6 +31,22 @@ public static class UbuntuFirewallCommandCatalog
             maximumOutputBytes: 0);
     }
 
+    public static RemoteCommand CreateSelectedRuleRemovalRequest(UfwRuleRemovalRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Number is < 1 or > 999999)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "A bounded positive UFW rule number is required.");
+        }
+
+        return RemoteCommand.Create(
+            RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove),
+            [new("number", request.Number.ToString(CultureInfo.InvariantCulture))],
+            DefaultTimeout,
+            OutputCapturePolicy.MetadataOnly,
+            maximumOutputBytes: 0);
+    }
+
     /// <summary>
     /// Resolves only the C303 allow-rule command from validated compact metadata.
     /// This is the sole production shell construction path for the card.
@@ -38,6 +54,11 @@ public static class UbuntuFirewallCommandCatalog
     public static string RequireShellCommand(RemoteCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (string.Equals(command.Id.Value, RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove, StringComparison.Ordinal))
+        {
+            return RequireSelectedRuleRemovalShellCommand(command);
+        }
+
         if (!string.Equals(command.Id.Value, RemoteCommandCatalog.UbuntuUfwAllowRuleAdd, StringComparison.Ordinal))
         {
             throw new ArgumentOutOfRangeException(nameof(command), command.Id.Value, "The command is not a known Ubuntu firewall command.");
@@ -56,6 +77,21 @@ public static class UbuntuFirewallCommandCatalog
             + "if ! command -v ufw >/dev/null 2>&1; then exit 127; "
             + "elif [ \"$(id -u)\" -eq 0 ]; then ufw allow from " + source + " to any port " + port + " proto " + protocol + "; "
             + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw allow from " + source + " to any port " + port + " proto " + protocol + "; "
+            + "else exit 77; fi";
+    }
+
+    private static string RequireSelectedRuleRemovalShellCommand(RemoteCommand command)
+    {
+        if (!TryParseRuleNumber(command.SafeArgumentSummary, out var number))
+        {
+            throw new ArgumentException("Firewall command metadata is not a bounded selected-rule removal request.", nameof(command));
+        }
+
+        var quotedNumber = RemoteCommandArguments.QuotePosixArgument(number.ToString(CultureInfo.InvariantCulture));
+        return PredictableLocalePrefix
+            + "if ! command -v ufw >/dev/null 2>&1; then exit 127; "
+            + "elif [ \"$(id -u)\" -eq 0 ]; then ufw --force delete " + quotedNumber + "; "
+            + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw --force delete " + quotedNumber + "; "
             + "else exit 77; fi";
     }
 
@@ -85,5 +121,15 @@ public static class UbuntuFirewallCommandCatalog
         }
 
         return UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(protocol, port, source, family), out request, out _);
+    }
+
+    private static bool TryParseRuleNumber(string safeSummary, out int number)
+    {
+        number = 0;
+        var parts = safeSummary.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 1
+            && parts[0].StartsWith("number=", StringComparison.Ordinal)
+            && int.TryParse(parts[0]["number=".Length..], NumberStyles.None, CultureInfo.InvariantCulture, out number)
+            && number is >= 1 and <= 999999;
     }
 }
