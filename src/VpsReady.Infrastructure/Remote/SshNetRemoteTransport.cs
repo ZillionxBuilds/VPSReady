@@ -622,13 +622,13 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         }
     }
 
-    internal KnownHostTrustAssessment AssessHostKey(RemoteEndpoint target, string sha256Fingerprint)
+    internal KnownHostTrustAssessment AssessHostKey(RemoteEndpoint target, string sha256Fingerprint, string algorithm = "unknown")
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(sha256Fingerprint);
         var assessment = trustStore.AssessAsync(
                 new KnownHostIdentity(target.Host, target.Port),
-                new HostKeyFingerprint($"SHA256:{sha256Fingerprint}"),
+                new HostKeyFingerprint($"SHA256:{sha256Fingerprint}", algorithm),
                 CancellationToken.None)
             .ConfigureAwait(false)
             .GetAwaiter()
@@ -643,7 +643,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         try
         {
             var currentEndpoint = endpoint ?? throw new InvalidOperationException("The SSH endpoint is not available for trust assessment.");
-            var assessment = AssessHostKey(currentEndpoint, eventArgs.FingerPrintSHA256);
+            var assessment = AssessHostKey(currentEndpoint, eventArgs.FingerPrintSHA256, eventArgs.HostKeyName);
             eventArgs.CanTrust = assessment.IsTrusted;
         }
         catch

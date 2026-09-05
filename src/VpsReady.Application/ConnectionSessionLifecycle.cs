@@ -34,6 +34,18 @@ public sealed record ConnectionTestResult(
     OperationResult Result,
     bool ReusedExistingSession);
 
+/// <summary>
+/// The narrowly scoped data the dedicated trust-review screen may display.
+/// It deliberately omits user names, passwords, prior fingerprints, raw
+/// transport errors, and diagnostic payloads.
+/// </summary>
+public sealed record HostTrustReview(
+    string Host,
+    int Port,
+    string Algorithm,
+    string Fingerprint,
+    bool IsChanged);
+
 public interface IConnectionSessionLifecycle
 {
     event EventHandler<ConnectionTestProgress>? ProgressChanged;
@@ -41,6 +53,12 @@ public interface IConnectionSessionLifecycle
     Task<ConnectionTestResult> TestConnectionAsync(
         ValidatedConnectionInput input,
         CancellationToken cancellationToken = default);
+
+    HostTrustReview? PendingHostTrustReview { get; }
+
+    Task<OperationResult> AcceptPendingUnknownHostKeyAsync(CancellationToken cancellationToken = default);
+
+    Task<OperationResult> ReplacePendingChangedHostKeyAsync(CancellationToken cancellationToken = default);
 
     Task DisconnectAsync();
 }
@@ -57,22 +75,35 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
     private readonly IApplicationSession session;
     private readonly IRemoteTransportFactory transportFactory;
     private readonly IDiagnosticSink diagnostics;
+    private readonly IKnownHostTrustStore? trustStore;
     private readonly SemaphoreSlim testGate = new(1, 1);
     private readonly object cancellationLock = new();
     private CancellationTokenSource? activeTestCancellation;
+    private KnownHostTrustChallenge? pendingTrustChallenge;
     private bool disposed;
 
     public ConnectionSessionLifecycle(
         IApplicationSession session,
         IRemoteTransportFactory transportFactory,
-        IDiagnosticSink diagnostics)
+        IDiagnosticSink diagnostics,
+        IKnownHostTrustStore? trustStore = null)
     {
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.transportFactory = transportFactory ?? throw new ArgumentNullException(nameof(transportFactory));
         this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+        this.trustStore = trustStore;
     }
 
     public event EventHandler<ConnectionTestProgress>? ProgressChanged;
+
+    public HostTrustReview? PendingHostTrustReview => pendingTrustChallenge is { } challenge
+        ? new HostTrustReview(
+            challenge.Identity.Host,
+            challenge.Identity.Port,
+            challenge.ObservedFingerprint.Algorithm,
+            challenge.ObservedFingerprint.Value,
+            challenge.State == KnownHostTrustState.Changed)
+        : null;
 
     public async Task<ConnectionTestResult> TestConnectionAsync(
         ValidatedConnectionInput input,
@@ -92,6 +123,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
 
         IRemoteTransport? candidate = null;
         var sensitiveReferenceTransferred = false;
+        pendingTrustChallenge = null;
         using var timeoutCancellation = new CancellationTokenSource(input.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -182,6 +214,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         }
         catch (RemoteTransportException exception)
         {
+            CapturePendingTrustChallenge(candidate, exception.Kind);
             var failed = OperationResult.Failure(correlation.OperationId, ToOperationError(exception.Kind), OperationState.Unknown);
             await ReportTerminalAsync(correlation, failed, CancellationToken.None).ConfigureAwait(false);
             return new ConnectionTestResult(correlation.OperationId, failed, false);
@@ -220,6 +253,84 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
 
         active?.Cancel();
         await session.DisconnectAsync().ConfigureAwait(false);
+    }
+
+    public Task<OperationResult> AcceptPendingUnknownHostKeyAsync(CancellationToken cancellationToken = default) =>
+        ReviewPendingHostKeyAsync(KnownHostTrustState.Unknown, cancellationToken);
+
+    public Task<OperationResult> ReplacePendingChangedHostKeyAsync(CancellationToken cancellationToken = default) =>
+        ReviewPendingHostKeyAsync(KnownHostTrustState.Changed, cancellationToken);
+
+    private async Task<OperationResult> ReviewPendingHostKeyAsync(
+        KnownHostTrustState requiredState,
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        var correlation = CorrelationIds.Create("host_trust_review");
+        if (!await testGate.WaitAsync(0, CancellationToken.None).ConfigureAwait(false))
+        {
+            var busy = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unknown);
+            await ReportTerminalAsync(correlation, busy, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+            return busy;
+        }
+
+        try
+        {
+            var challenge = pendingTrustChallenge;
+            if (challenge is null || challenge.State != requiredState || trustStore is null)
+            {
+                var unavailable = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unchanged);
+                await ReportTerminalAsync(correlation, unavailable, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+                return unavailable;
+            }
+
+            await ReportAsync(
+                correlation,
+                DiagnosticEventCatalog.OperationStarted,
+                DiagnosticPhase.Apply,
+                DiagnosticStatus.Started,
+                "Host-key trust review started.",
+                CancellationToken.None,
+                action: "ReviewHostTrust").ConfigureAwait(false);
+
+            var assessment = requiredState == KnownHostTrustState.Unknown
+                ? await trustStore.AcceptUnknownAsync(challenge, cancellationToken).ConfigureAwait(false)
+                : await trustStore.ReplaceChangedAsync(challenge, cancellationToken).ConfigureAwait(false);
+            if (!assessment.IsTrusted)
+            {
+                var rejected = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unchanged);
+                await ReportTerminalAsync(correlation, rejected, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+                return rejected;
+            }
+
+            pendingTrustChallenge = null;
+            var accepted = OperationResult.Success(correlation.OperationId, OperationState.Applied);
+            await ReportTerminalAsync(correlation, accepted, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+            return accepted;
+        }
+        catch (OperationCanceledException)
+        {
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
+            await ReportTerminalAsync(correlation, cancelled, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+            return cancelled;
+        }
+        catch (InvalidOperationException)
+        {
+            pendingTrustChallenge = null;
+            var stale = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unchanged);
+            await ReportTerminalAsync(correlation, stale, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+            return stale;
+        }
+        catch
+        {
+            var failed = OperationResult.Failure(correlation.OperationId, OperationErrorCode.LocalIo, OperationState.Unchanged);
+            await ReportTerminalAsync(correlation, failed, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+            return failed;
+        }
+        finally
+        {
+            testGate.Release();
+        }
     }
 
     private async Task<OperationResult> VerifyExistingSessionAsync(
@@ -284,7 +395,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         }
     }
 
-    private async Task ReportTerminalAsync(CorrelationIds correlation, OperationResult result, CancellationToken cancellationToken)
+    private async Task ReportTerminalAsync(CorrelationIds correlation, OperationResult result, CancellationToken cancellationToken, string action = ActionName)
     {
         var status = result.Completion switch
         {
@@ -305,8 +416,9 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
             status,
             result.UserMessage,
             cancellationToken,
-            RemoteCommandCatalog.SshConnectionTest,
-            result.ErrorCode).ConfigureAwait(false);
+            action == ActionName ? RemoteCommandCatalog.SshConnectionTest : null,
+            result.ErrorCode,
+            action: action).ConfigureAwait(false);
         Publish(
             correlation.OperationId,
             result.Completion == OperationCompletion.Succeeded
@@ -327,7 +439,8 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         string? commandId = null,
         OperationErrorCode? errorCode = null,
         TimeSpan? duration = null,
-        int? exitCode = null)
+        int? exitCode = null,
+        string action = ActionName)
     {
         try
         {
@@ -342,7 +455,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                     message,
                     commandId,
                     errorCode?.ToStableCode(),
-                    ActionName,
+                    action,
                     duration,
                     ExitCode: exitCode),
                 cancellationToken).ConfigureAwait(false);
@@ -356,6 +469,16 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
 
     private void Publish(string operationId, ConnectionTestProgressState state, OperationErrorCode? errorCode = null) =>
         ProgressChanged?.Invoke(this, new ConnectionTestProgress(operationId, state, errorCode?.ToStableCode()));
+
+    private void CapturePendingTrustChallenge(IRemoteTransport? candidate, RemoteTransportFailureKind failure)
+    {
+        if (failure == RemoteTransportFailureKind.HostTrust
+            && candidate is IPasswordSshTransport { LastHostTrustAssessment.Challenge: { } challenge }
+            && challenge.State is KnownHostTrustState.Unknown or KnownHostTrustState.Changed)
+        {
+            pendingTrustChallenge = challenge;
+        }
+    }
 
     private void SetActiveCancellation(CancellationTokenSource cancellation)
     {

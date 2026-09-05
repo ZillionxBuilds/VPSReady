@@ -159,6 +159,90 @@ public sealed class M2BlindIntegrationScenarioTests
     }
 
     [Fact]
+    public async Task DesktopTrustJourneyFailsClosedUntilReviewedThenRequiresVerifiedRetryAndReconnect()
+    {
+        var seededValue = string.Concat("desktop", "-trust", "-seeded", "-value");
+        const string host = "desktop-trust.private.invalid";
+        const string user = "desktop-trust-user";
+
+        await using var unknownServices = ScenarioComposition.CreateProfile(ScenarioProfiles.SshUnknownTrust);
+        var unknownState = unknownServices.GetRequiredService<ScenarioHostState>();
+        var unknownRecorder = unknownServices.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var unknownSession = unknownServices.GetRequiredService<IApplicationSession>();
+        await using var unknownLifecycle = new ConnectionSessionLifecycle(
+            unknownSession,
+            unknownServices.GetRequiredService<IRemoteTransportFactory>(),
+            unknownServices.GetRequiredService<IDiagnosticSink>(),
+            unknownServices.GetRequiredService<IKnownHostTrustStore>());
+        var unknownViewModel = new ConnectionOverviewViewModel(unknownLifecycle, unknownSession);
+        unknownViewModel.SecretInput.Replace(seededValue);
+
+        await unknownViewModel.TestAsync(host, "2222", user, TimeSpan.FromSeconds(1));
+
+        Assert.Equal(ConnectionScreenState.TrustRequired, unknownViewModel.State);
+        Assert.False(unknownSession.Snapshot.IsConnected);
+        Assert.True(unknownViewModel.HasHostTrustReview);
+        Assert.True(unknownViewModel.IsUnknownHostKey);
+        Assert.Equal("ssh-ed25519", unknownViewModel.TrustAlgorithm);
+        Assert.Equal("SHA256:scenario-host-key", unknownViewModel.TrustFingerprint);
+        Assert.Equal(host, unknownViewModel.TrustHost);
+        Assert.Equal(2222, unknownViewModel.TrustPort);
+        Assert.Equal(0, unknownState.Ssh.ConnectionAttempts);
+
+        await unknownViewModel.AcceptUnknownHostKeyAsync();
+
+        Assert.Equal(ScenarioHostKeyState.Matching, unknownState.Ssh.HostKey);
+        Assert.False(unknownSession.Snapshot.IsConnected);
+        Assert.Equal(ConnectionScreenState.Disconnected, unknownViewModel.State);
+        Assert.False(unknownViewModel.HasHostTrustReview);
+
+        unknownViewModel.SecretInput.Replace(seededValue);
+        await unknownViewModel.TestAsync(host, "2222", user, TimeSpan.FromSeconds(1));
+        Assert.Equal(ConnectionScreenState.Connected, unknownViewModel.State);
+        Assert.True(unknownSession.Snapshot.IsConnected);
+        Assert.Equal(1, unknownState.Ssh.ConnectionAttempts);
+
+        await unknownLifecycle.DisconnectAsync();
+        unknownViewModel.SecretInput.Replace(seededValue);
+        await unknownViewModel.TestAsync(host, "2222", user, TimeSpan.FromSeconds(1));
+        Assert.Equal(ConnectionScreenState.Connected, unknownViewModel.State);
+        Assert.Equal(2, unknownState.Ssh.ConnectionAttempts);
+
+        var unknownDiagnosticText = string.Concat(unknownRecorder.ToJsonLines(), "\n", string.Join("\n", unknownRecorder.ActivityMessages));
+        Assert.Contains(unknownRecorder.Events, entry => entry.Action == "ReviewHostTrust" && entry.Status == DiagnosticStatus.Succeeded);
+        Assert.DoesNotContain(seededValue, unknownDiagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain(host, unknownDiagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain(user, unknownDiagnosticText, StringComparison.Ordinal);
+        Assert.DoesNotContain("SHA256:scenario-host-key", unknownDiagnosticText, StringComparison.Ordinal);
+
+        await using var changedServices = ScenarioComposition.CreateProfile(ScenarioProfiles.SshChangedTrust);
+        var changedState = changedServices.GetRequiredService<ScenarioHostState>();
+        var changedSession = changedServices.GetRequiredService<IApplicationSession>();
+        await using var changedLifecycle = new ConnectionSessionLifecycle(
+            changedSession,
+            changedServices.GetRequiredService<IRemoteTransportFactory>(),
+            changedServices.GetRequiredService<IDiagnosticSink>(),
+            changedServices.GetRequiredService<IKnownHostTrustStore>());
+        var changedViewModel = new ConnectionOverviewViewModel(changedLifecycle, changedSession);
+        changedViewModel.SecretInput.Replace(seededValue);
+
+        await changedViewModel.TestAsync(host, "2222", user, TimeSpan.FromSeconds(1));
+
+        Assert.Equal(ConnectionScreenState.TrustRequired, changedViewModel.State);
+        Assert.True(changedViewModel.IsChangedHostKey);
+        await changedViewModel.AcceptUnknownHostKeyAsync();
+        Assert.Equal(ScenarioHostKeyState.Changed, changedState.Ssh.HostKey);
+        Assert.False(changedSession.Snapshot.IsConnected);
+
+        await changedViewModel.ReplaceChangedHostKeyAsync();
+        Assert.Equal(ScenarioHostKeyState.Matching, changedState.Ssh.HostKey);
+        changedViewModel.SecretInput.Replace(seededValue);
+        await changedViewModel.TestAsync(host, "2222", user, TimeSpan.FromSeconds(1));
+        Assert.Equal(ConnectionScreenState.Connected, changedViewModel.State);
+        Assert.True(changedSession.Snapshot.IsConnected);
+    }
+
+    [Fact]
     public async Task PartialAndUnsupportedFactsStayUnknownPerFieldWithoutChangingValidFacts()
     {
         var partial = AggregateFixture("ubuntu/server-facts.partial.json");

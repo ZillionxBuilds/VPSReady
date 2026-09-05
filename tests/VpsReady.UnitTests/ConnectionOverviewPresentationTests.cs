@@ -87,11 +87,42 @@ public sealed class ConnectionOverviewPresentationTests
         Assert.NotEqual(ConnectionScreenState.Unknown, ConnectionScreenState.Connected);
     }
 
-    private sealed class FakeLifecycle(OperationResult result) : IConnectionSessionLifecycle
+    [Fact]
+    public async Task UnknownHostTrustReviewIsDedicatedAndRequiresAnExplicitDecisionBeforeRetry()
+    {
+        var review = new HostTrustReview("review-only.example", 2222, "ssh-ed25519", "SHA256:review-only", false);
+        var lifecycle = new FakeLifecycle(OperationResult.Failure("op_trust", OperationErrorCode.HostTrust), review);
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, new ApplicationSession());
+        viewModel.AppendSecretCharacter('a');
+
+        await viewModel.TestAsync("review-only.example", "2222", "user", TimeSpan.FromSeconds(1));
+
+        Assert.True(viewModel.HasHostTrustReview);
+        Assert.True(viewModel.IsUnknownHostKey);
+        Assert.False(viewModel.IsChangedHostKey);
+        Assert.Equal("ssh-ed25519", viewModel.TrustAlgorithm);
+        Assert.Equal("SHA256:review-only", viewModel.TrustFingerprint);
+        Assert.Equal("review-only.example", viewModel.TrustHost);
+        Assert.Equal(2222, viewModel.TrustPort);
+        Assert.DoesNotContain("review-only.example", viewModel.Status, StringComparison.Ordinal);
+
+        await viewModel.AcceptUnknownHostKeyAsync();
+
+        Assert.True(lifecycle.AcceptedUnknown);
+        Assert.False(viewModel.HasHostTrustReview);
+        Assert.Equal(ConnectionScreenState.Disconnected, viewModel.State);
+        Assert.Contains("Re-enter the password", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    private sealed class FakeLifecycle(OperationResult result, HostTrustReview? pendingReview = null) : IConnectionSessionLifecycle
     {
         public event EventHandler<ConnectionTestProgress>? ProgressChanged;
 
         public char[] ReceivedCharacters { get; private set; } = [];
+
+        public bool AcceptedUnknown { get; private set; }
+
+        public HostTrustReview? PendingHostTrustReview { get; private set; } = pendingReview;
 
         public Task<ConnectionTestResult> TestConnectionAsync(ValidatedConnectionInput input, CancellationToken cancellationToken = default)
         {
@@ -101,6 +132,17 @@ public sealed class ConnectionOverviewPresentationTests
         }
 
         public Task DisconnectAsync() => Task.CompletedTask;
+
+        public Task<OperationResult> AcceptPendingUnknownHostKeyAsync(CancellationToken cancellationToken = default)
+        {
+            AcceptedUnknown = true;
+            PendingHostTrustReview = null;
+            return Task.FromResult(OperationResult.Success("op_trust_review"));
+        }
+
+        public Task<OperationResult> ReplacePendingChangedHostKeyAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(OperationResult.Failure("op_trust_review", OperationErrorCode.HostTrust));
+
         public void Publish(string operationId, ConnectionTestProgressState state) => ProgressChanged?.Invoke(this, new ConnectionTestProgress(operationId, state));
     }
 }

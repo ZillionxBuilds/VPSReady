@@ -47,7 +47,7 @@ public sealed record KnownHostIdentity
 /// </summary>
 public sealed record HostKeyFingerprint
 {
-    public HostKeyFingerprint(string value)
+    public HostKeyFingerprint(string value, string algorithm = "unknown")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         if (value.Any(char.IsControl) || value.Any(char.IsWhiteSpace) || value.Length > 512)
@@ -55,10 +55,23 @@ public sealed record HostKeyFingerprint
             throw new ArgumentException("A host-key fingerprint must be a compact display value.", nameof(value));
         }
 
+        ArgumentException.ThrowIfNullOrWhiteSpace(algorithm);
+        if (algorithm.Any(char.IsControl) || algorithm.Any(char.IsWhiteSpace) || algorithm.Length > 128)
+        {
+            throw new ArgumentException("A host-key algorithm must be a compact display value.", nameof(algorithm));
+        }
+
         Value = value;
+        Algorithm = algorithm;
     }
 
     public string Value { get; }
+
+    /// <summary>
+    /// Observed SSH host-key algorithm. It is available only to the dedicated
+    /// review surface alongside this fingerprint and is never diagnostic text.
+    /// </summary>
+    public string Algorithm { get; }
 
     public override string ToString() => "[host key fingerprint]";
 }
@@ -88,7 +101,7 @@ public sealed class KnownHostTrustChallenge
     /// fingerprint, so an older review cannot overwrite a newer reviewed
     /// replacement. The prior value remains opaque to callers.
     /// </summary>
-    internal KnownHostTrustChallenge(
+    public KnownHostTrustChallenge(
         KnownHostIdentity identity,
         HostKeyFingerprint observedFingerprint,
         KnownHostTrustState state,
