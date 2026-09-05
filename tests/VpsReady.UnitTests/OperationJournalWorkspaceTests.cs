@@ -12,6 +12,41 @@ namespace VpsReady.UnitTests;
 public sealed class OperationJournalWorkspaceTests
 {
     [Fact]
+    public async Task SupportBundleExportRejectsRelativeDestinationBeforeNormalizationWithoutCreatingAnExport()
+    {
+        var root = CreateTemporaryDirectory();
+        var relativeDestination = Path.Combine("vpsready-relative-export", Guid.NewGuid().ToString("N"));
+        var normalizedDestination = Path.GetFullPath(relativeDestination);
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                new FailClosedRedactor(),
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c607build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() => workspace.ExportSanitizedSupportBundleAsync(
+                runId: null,
+                destinationDirectory: relativeDestination,
+                CancellationToken.None));
+
+            Assert.Equal("destinationDirectory", exception.ParamName);
+            Assert.False(Directory.Exists(normalizedDestination));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            if (Directory.Exists(normalizedDestination))
+            {
+                Directory.Delete(normalizedDestination, recursive: true);
+            }
+
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task JournalAndSupportBundleAreBoundedSanitizedChecksummedAndExplicitlyLocal()
     {
         var root = CreateTemporaryDirectory();

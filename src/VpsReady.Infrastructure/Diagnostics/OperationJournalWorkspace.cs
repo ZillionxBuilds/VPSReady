@@ -174,12 +174,12 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
         cancellationToken.ThrowIfCancellationRequested();
         AssertSafeEnvironment();
-        var destination = Path.GetFullPath(destinationDirectory);
-        if (!Path.IsPathFullyQualified(destination))
+        if (!Path.IsPathFullyQualified(destinationDirectory))
         {
             throw new ArgumentException("A support-bundle destination must be an absolute local path.", nameof(destinationDirectory));
         }
 
+        var destination = Path.GetFullPath(destinationDirectory);
         Directory.CreateDirectory(destination);
         ApplyDirectoryPermissions(destination);
         var selected = GetEventsForRun(ValidateRequestedRunId(runId));
