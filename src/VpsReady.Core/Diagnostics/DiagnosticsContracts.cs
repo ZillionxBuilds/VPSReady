@@ -113,11 +113,14 @@ public static class DiagnosticEventCatalog
     public const string OperationRecoveryRequired = "operation.recovery_required";
     public const string CommandCompleted = "command.completed";
     public const string PayloadOmitted = "diagnostics.payload_omitted";
+    public const string StartupFailed = "application.startup_failed";
+    public const string UnhandledException = "application.unhandled_exception";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
         OperationStarted, OperationRunning, OperationSucceeded, OperationWarning,
         OperationFailed, OperationCancelled, OperationRecoveryRequired, CommandCompleted, PayloadOmitted,
+        StartupFailed, UnhandledException,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -243,6 +246,38 @@ public interface IDiagnosticExporter
 {
     Task<string> ExportAsync(string runId, string destinationDirectory, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Local-only activity and support-material contract. Implementations must not
+/// perform network I/O, auto-upload, or expose raw diagnostic payloads.
+/// </summary>
+public interface IDiagnosticsWorkspace
+{
+    IReadOnlyList<ActivityEntry> GetActivity(string? filter = null);
+
+    string GetLogDirectory();
+
+    Task ClearDiagnosticsAsync(CancellationToken cancellationToken);
+
+    Task OpenLogFolderAsync(CancellationToken cancellationToken);
+
+    string CreateSafeIssueReport(string? runId = null);
+
+    Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(
+        string? runId,
+        string destinationDirectory,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>Build and host metadata that is safe to place in a local support bundle.</summary>
+public sealed record DiagnosticEnvironment(
+    string AppVersion,
+    string BuildSha,
+    string LocalOs,
+    string LocalArchitecture,
+    string? ArtifactRid = null);
+
+public sealed record SupportBundleExportResult(string BundlePath, string Sha256, string? RunId);
 
 public static class BoundedOutputCapture
 {

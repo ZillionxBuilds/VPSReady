@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using VpsReady.Core.Diagnostics;
 
 namespace VpsReady.Application;
 
@@ -26,11 +27,22 @@ public sealed class AppViewModel : ObservableObject
     {
     }
 
-    private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId)
+    public AppViewModel(IApplicationSession applicationSession, IDiagnosticsWorkspace diagnosticsWorkspace)
+        : this(applicationSession, false, null, diagnosticsWorkspace)
+    {
+    }
+
+    private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)
     {
         this.applicationSession = applicationSession;
         HasStartupFailure = hasStartupFailure;
         StartupErrorId = startupErrorId;
+        ActivityDiagnostics = diagnosticsWorkspace is null
+            ? null
+            : new ActivityDiagnosticsViewModel(
+                diagnosticsWorkspace,
+                report => SafeIssueReportReady?.Invoke(report),
+                () => SupportBundleExportRequested?.Invoke());
 
         if (applicationSession is not null)
         {
@@ -65,6 +77,14 @@ public sealed class AppViewModel : ObservableObject
     /// Opaque identifier for support. It is intentionally not derived from an exception.
     /// </summary>
     public string? StartupErrorId { get; }
+
+    public ActivityDiagnosticsViewModel? ActivityDiagnostics { get; }
+
+    /// <summary>Desktop hosts copy this already-sanitized report only after an explicit user action.</summary>
+    public event Action<string>? SafeIssueReportReady;
+
+    /// <summary>Desktop hosts choose a user-approved local destination before export.</summary>
+    public event Action? SupportBundleExportRequested;
 
     public IReadOnlyList<ShellNavigationItem> NavigationItems => navigationItems;
 
@@ -102,6 +122,118 @@ public sealed class AppViewModel : ObservableObject
     }
 
     private void OnSessionStateChanged(object? sender, EventArgs e) => OnPropertyChanged(nameof(Status));
+}
+
+/// <summary>Presentation state for the local-only Activity and Diagnostics surface.</summary>
+public sealed class ActivityDiagnosticsViewModel : ObservableObject
+{
+    private readonly IDiagnosticsWorkspace workspace;
+    private readonly Action<string> copySafeIssueReport;
+    private readonly Action requestSupportBundleExport;
+    private string filter = string.Empty;
+    private string status = "No local diagnostic events have been recorded in this session.";
+
+    public ActivityDiagnosticsViewModel(
+        IDiagnosticsWorkspace workspace,
+        Action<string> copySafeIssueReport,
+        Action? requestSupportBundleExport = null)
+    {
+        this.workspace = workspace;
+        this.copySafeIssueReport = copySafeIssueReport;
+        this.requestSupportBundleExport = requestSupportBundleExport ?? (() => { });
+        RefreshCommand = new DelegateCommand(Refresh);
+        ClearCommand = new DelegateCommand(() => _ = ClearAsync());
+        OpenFolderCommand = new DelegateCommand(() => _ = OpenFolderAsync());
+        CopySafeIssueReportCommand = new DelegateCommand(CopySafeIssueReport);
+        ExportSanitizedSupportBundleCommand = new DelegateCommand(() => this.requestSupportBundleExport());
+        Refresh();
+    }
+
+    public ICommand RefreshCommand { get; }
+
+    public ICommand ClearCommand { get; }
+
+    public ICommand OpenFolderCommand { get; }
+
+    public ICommand CopySafeIssueReportCommand { get; }
+
+    public ICommand ExportSanitizedSupportBundleCommand { get; }
+
+    public string Filter
+    {
+        get => filter;
+        set
+        {
+            if (SetProperty(ref filter, value))
+            {
+                Refresh();
+            }
+        }
+    }
+
+    public string Status
+    {
+        get => status;
+        private set => SetProperty(ref status, value);
+    }
+
+    public IReadOnlyList<ActivityEntry> Entries { get; private set; } = [];
+
+    public string LogDirectory => workspace.GetLogDirectory();
+
+    private void Refresh()
+    {
+        Entries = workspace.GetActivity(Filter);
+        OnPropertyChanged(nameof(Entries));
+        OnPropertyChanged(nameof(LogDirectory));
+        Status = Entries.Count == 0 ? "No matching safe activity entries are available." : $"{Entries.Count} safe activity entr{(Entries.Count == 1 ? "y" : "ies")} available.";
+    }
+
+    private async Task ClearAsync()
+    {
+        try
+        {
+            await workspace.ClearDiagnosticsAsync(CancellationToken.None).ConfigureAwait(false);
+            Refresh();
+            Status = "Local diagnostics were cleared. Exported bundles were not deleted.";
+        }
+        catch
+        {
+            Status = "VPSReady could not clear local diagnostics safely. Review the local log folder.";
+        }
+    }
+
+    private async Task OpenFolderAsync()
+    {
+        try
+        {
+            await workspace.OpenLogFolderAsync(CancellationToken.None).ConfigureAwait(false);
+            Status = "Opened the local diagnostics folder.";
+        }
+        catch
+        {
+            Status = "VPSReady could not open the local diagnostics folder. Use the displayed local path.";
+        }
+    }
+
+    private void CopySafeIssueReport()
+    {
+        copySafeIssueReport(workspace.CreateSafeIssueReport());
+        Status = "A sanitized issue report was copied. The repository is public; review any attachment before sharing.";
+    }
+
+    public async Task ExportSanitizedSupportBundleAsync(string destinationDirectory)
+    {
+        try
+        {
+            var exported = await workspace.ExportSanitizedSupportBundleAsync(null, destinationDirectory, CancellationToken.None).ConfigureAwait(false);
+            Status = $"Sanitized support bundle created locally: {Path.GetFileName(exported.BundlePath)}. Review it before sharing.";
+        }
+        catch
+        {
+            Status = "VPSReady could not export a sanitized support bundle safely. No bundle was shared.";
+        }
+    }
 }
 
 public enum ShellPage
@@ -148,6 +280,8 @@ public sealed record ShellPageViewModel(
     string UnavailableReason,
     bool IsActionAvailable = false)
 {
+    public bool IsActivityPage => Page == ShellPage.ActivityAndDiagnostics;
+
     public static ShellPageViewModel Create(ShellPage page) => page switch
     {
         ShellPage.Connection => new(

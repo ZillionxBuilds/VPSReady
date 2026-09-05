@@ -15,5 +15,9 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
+    <VpsReadyBuildSha Condition="'$(VpsReadyBuildSha)' == ''">not-recorded</VpsReadyBuildSha>
   </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="VpsReadyBuildSha" Value="$(VpsReadyBuildSha)" />
+  </ItemGroup>
 </Project>
