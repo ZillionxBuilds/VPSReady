@@ -66,6 +66,14 @@ public sealed class PasswordSessionSecret : ISensitiveSessionReference
             Array.Clear(value);
         }
     }
+
+    /// <summary>
+    /// Prevent accidental diagnostic or UI interpolation from turning a
+    /// credential holder into plaintext. The password buffer has no readable
+    /// public API; the future transport card consumes it at the narrowest
+    /// possible boundary.
+    /// </summary>
+    public override string ToString() => "[credential redacted]";
 }
 
 public interface IApplicationSession : IAsyncDisposable
