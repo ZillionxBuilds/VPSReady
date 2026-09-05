@@ -8,6 +8,10 @@ public static class UbuntuHostnameCommandCatalog
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
 
+    // RFC hostnames permit 253 ASCII payload bytes. Remote command output may
+    // add one LF, or a CRLF terminator, which remains parser-only material.
+    internal const int HostnameReadMaximumBytes = 255;
+
     public static RemoteCommand CreateReadRequest() => Create(RemoteCommandCatalog.UbuntuHostnameChangeRead, "hostname-read");
 
     public static RemoteCommand CreateApplyRequest() => Create(RemoteCommandCatalog.UbuntuHostnameChangeApply, "hostname-change");

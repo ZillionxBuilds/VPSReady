@@ -504,7 +504,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             using var sshCommand = connectedClient.CreateCommand(UbuntuHostnameCommandCatalog.RequireShellCommand(command));
             sshCommand.CommandTimeout = command.Timeout;
             await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
-            var raw = await SshNetBoundedOutputCapture.ReadEphemeralSingleLineAsync(sshCommand.OutputStream, 253, linkedCancellation.Token).ConfigureAwait(false);
+            var raw = await SshNetBoundedOutputCapture.ReadEphemeralSingleLineAsync(sshCommand.OutputStream, UbuntuHostnameCommandCatalog.HostnameReadMaximumBytes, linkedCancellation.Token).ConfigureAwait(false);
             await SshNetBoundedOutputCapture.ReadAsync(sshCommand.ExtendedOutputStream, OutputCapturePolicy.MetadataOnly, 0, linkedCancellation.Token).ConfigureAwait(false);
             return sshCommand.ExitStatus == 0 && HostnameChangeValidator.TryNormalize(raw, out var hostname)
                 ? new HostnameReadResult(hostname, true)
