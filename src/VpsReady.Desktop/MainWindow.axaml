@@ -56,6 +56,20 @@
               <TextBlock Text="{Binding SelectedPage.UnavailableReason}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
+          <Border IsVisible="{Binding ConnectionOverview}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="8">
+              <TextBlock FontWeight="SemiBold" Text="Connection and overview" />
+              <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.State}" />
+              <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
+              <TextBlock Text="Remote facts are Unknown until an authenticated refresh completes; this screen never invents server values." TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding ConnectionOverview.RefreshCommand}" Content="Refresh connection state" />
+                <Button Command="{Binding ConnectionOverview.DisconnectCommand}" Content="Disconnect" />
+              </StackPanel>
+              <TextBlock Text="Use Activity &amp; Diagnostics to Copy Safe Issue Report; credentials, raw host data and raw command output are never shown there." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
           <Border IsVisible="{Binding SelectedPage.IsActivityPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="10">
               <TextBlock FontWeight="SemiBold" Text="Local Activity &amp; Diagnostics" />
