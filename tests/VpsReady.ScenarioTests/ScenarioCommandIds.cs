@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using VpsReady.Core.Remote;
 
 namespace VpsReady.ScenarioTests;
 
@@ -75,7 +76,23 @@ public static class ScenarioCommandIds
         RebootRequired,
         Reboot,
         Reconnect,
-    }.ToFrozenSet(StringComparer.Ordinal);
+    }
+    .Concat(new[]
+    {
+        RemoteCommandCatalog.UbuntuOsReleaseRead,
+        RemoteCommandCatalog.UbuntuKernelArchitectureRead,
+        RemoteCommandCatalog.UbuntuHostnameRead,
+        RemoteCommandCatalog.UbuntuUptimeRead,
+        RemoteCommandCatalog.UbuntuCurrentUserRead,
+        RemoteCommandCatalog.UbuntuPrivilegeRead,
+        RemoteCommandCatalog.UbuntuCpuRead,
+        RemoteCommandCatalog.UbuntuMemoryRead,
+        RemoteCommandCatalog.UbuntuRootDiskRead,
+        RemoteCommandCatalog.SshSessionPortRead,
+        RemoteCommandCatalog.UbuntuUfwAvailabilityRead,
+        RemoteCommandCatalog.UbuntuUfwStatusRead,
+    })
+    .ToFrozenSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string commandId) => All.Contains(commandId);
 }

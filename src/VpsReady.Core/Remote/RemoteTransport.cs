@@ -37,10 +37,34 @@ public sealed record RemoteCommandId
 public static class RemoteCommandCatalog
 {
     public const string SshConnectionTest = DiagnosticCommandCatalog.SshConnectionTest;
+    public const string UbuntuOsReleaseRead = DiagnosticCommandCatalog.UbuntuOsReleaseRead;
+    public const string UbuntuKernelArchitectureRead = DiagnosticCommandCatalog.UbuntuKernelArchitectureRead;
+    public const string UbuntuHostnameRead = DiagnosticCommandCatalog.UbuntuHostnameRead;
+    public const string UbuntuUptimeRead = DiagnosticCommandCatalog.UbuntuUptimeRead;
+    public const string UbuntuCurrentUserRead = DiagnosticCommandCatalog.UbuntuCurrentUserRead;
+    public const string UbuntuPrivilegeRead = DiagnosticCommandCatalog.UbuntuPrivilegeRead;
+    public const string UbuntuCpuRead = DiagnosticCommandCatalog.UbuntuCpuRead;
+    public const string UbuntuMemoryRead = DiagnosticCommandCatalog.UbuntuMemoryRead;
+    public const string UbuntuRootDiskRead = DiagnosticCommandCatalog.UbuntuRootDiskRead;
+    public const string SshSessionPortRead = DiagnosticCommandCatalog.SshSessionPortRead;
+    public const string UbuntuUfwAvailabilityRead = DiagnosticCommandCatalog.UbuntuUfwAvailabilityRead;
+    public const string UbuntuUfwStatusRead = DiagnosticCommandCatalog.UbuntuUfwStatusRead;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
         SshConnectionTest,
+        UbuntuOsReleaseRead,
+        UbuntuKernelArchitectureRead,
+        UbuntuHostnameRead,
+        UbuntuUptimeRead,
+        UbuntuCurrentUserRead,
+        UbuntuPrivilegeRead,
+        UbuntuCpuRead,
+        UbuntuMemoryRead,
+        UbuntuRootDiskRead,
+        SshSessionPortRead,
+        UbuntuUfwAvailabilityRead,
+        UbuntuUfwStatusRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -130,11 +154,14 @@ public static class RemoteCommandArguments
 /// </summary>
 public sealed record RemoteCommand
 {
+    public const int DefaultMaximumOutputBytes = 64 * 1024;
+
     public RemoteCommand(
         RemoteCommandId id,
         string safeArgumentSummary,
         TimeSpan timeout,
-        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly)
+        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly,
+        int maximumOutputBytes = DefaultMaximumOutputBytes)
     {
         ArgumentNullException.ThrowIfNull(id);
         if (timeout <= TimeSpan.Zero || timeout == System.Threading.Timeout.InfiniteTimeSpan)
@@ -148,10 +175,17 @@ public sealed record RemoteCommand
             throw new ArgumentOutOfRangeException(nameof(outputCapturePolicy));
         }
 
+        if (maximumOutputBytes < 0
+            || (outputCapturePolicy == OutputCapturePolicy.SanitizedTruncated && maximumOutputBytes == 0))
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumOutputBytes), "Sanitized command output requires a positive bounded maximum.");
+        }
+
         Id = id;
         SafeArgumentSummary = safeArgumentSummary;
         Timeout = timeout;
         OutputCapturePolicy = outputCapturePolicy;
+        MaximumOutputBytes = maximumOutputBytes;
     }
 
     public RemoteCommandId Id { get; }
@@ -162,12 +196,20 @@ public sealed record RemoteCommand
 
     public OutputCapturePolicy OutputCapturePolicy { get; }
 
+    /// <summary>
+    /// Maximum UTF-8 byte count a transport may retain for either standard
+    /// stream. A value of zero is valid only for a metadata-only/no-output
+    /// request that has no remote stream to capture.
+    /// </summary>
+    public int MaximumOutputBytes { get; }
+
     public static RemoteCommand Create(
         RemoteCommandId id,
         IEnumerable<KeyValuePair<string, string>> arguments,
         TimeSpan timeout,
-        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly) =>
-        new(id, RemoteCommandArguments.FormatSafeSummary(arguments), timeout, outputCapturePolicy);
+        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly,
+        int maximumOutputBytes = DefaultMaximumOutputBytes) =>
+        new(id, RemoteCommandArguments.FormatSafeSummary(arguments), timeout, outputCapturePolicy, maximumOutputBytes);
 
     private static void ValidateExistingSummary(string safeArgumentSummary)
     {
