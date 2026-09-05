@@ -41,6 +41,18 @@ public static class ScenarioFixtures
         return File.ReadAllText(path);
     }
 
+    public static string LoadText(string relativePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        if (Path.IsPathRooted(relativePath) || relativePath.Contains("..", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Fixture paths must be relative to the approved fixture root.", nameof(relativePath));
+        }
+
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", relativePath.Replace('/', Path.DirectorySeparatorChar));
+        return File.ReadAllText(path);
+    }
+
     public static ScenarioFixtureDescriptor Get(string fixtureId) =>
         Catalog.First(fixture => string.Equals(fixture.Id, fixtureId, StringComparison.Ordinal));
 

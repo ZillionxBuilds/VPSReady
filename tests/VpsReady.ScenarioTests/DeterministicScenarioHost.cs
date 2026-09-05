@@ -101,15 +101,15 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
             ScenarioCommandIds.UbuntuHostnameSet => SetHostname(command),
             ScenarioCommandIds.UbuntuTimezoneRead => Result(State.Timezone),
             ScenarioCommandIds.UbuntuTimezoneSet => SetTimezone(command),
-            RemoteCommandCatalog.UbuntuOsReleaseRead => Result($"ID={State.Ubuntu.Distribution.ToLowerInvariant()}\nVERSION={State.Ubuntu.Version}"),
+            RemoteCommandCatalog.UbuntuOsReleaseRead => Result($"ID={State.Ubuntu.Distribution.ToLowerInvariant()}\nVERSION=\"{State.Ubuntu.Version}\""),
             RemoteCommandCatalog.UbuntuKernelArchitectureRead => Result($"Linux {State.Ubuntu.Kernel} {State.Ubuntu.Architecture}"),
             RemoteCommandCatalog.UbuntuHostnameRead => Result(State.Hostname),
-            RemoteCommandCatalog.UbuntuUptimeRead => Result(State.Ubuntu.Uptime),
+            RemoteCommandCatalog.UbuntuUptimeRead => Result("93600.00 1200.00"),
             RemoteCommandCatalog.UbuntuCurrentUserRead => Result(State.Ssh.UserName),
             RemoteCommandCatalog.UbuntuPrivilegeRead => PrivilegeFacts(),
-            RemoteCommandCatalog.UbuntuCpuRead => Result(State.Ubuntu.CpuSummary),
-            RemoteCommandCatalog.UbuntuMemoryRead => Result(State.Ubuntu.MemorySummary),
-            RemoteCommandCatalog.UbuntuRootDiskRead => Result(State.Ubuntu.DiskSummary),
+            RemoteCommandCatalog.UbuntuCpuRead => Result("processor\t: 0\nmodel name\t: Scenario CPU\n\nprocessor\t: 1\nmodel name\t: Scenario CPU"),
+            RemoteCommandCatalog.UbuntuMemoryRead => Result("MemTotal:       2097152 kB\nMemAvailable:    1048576 kB"),
+            RemoteCommandCatalog.UbuntuRootDiskRead => Result("/dev/vda1 20G 10G 10G 50% /"),
             RemoteCommandCatalog.SshSessionPortRead => Result(State.Ssh.ActiveSshPort.ToString(CultureInfo.InvariantCulture)),
             RemoteCommandCatalog.UbuntuUfwAvailabilityRead => Result($"ufw={(State.Ufw.Status == ScenarioUfwStatus.Absent ? "unavailable" : "available")}"),
             RemoteCommandCatalog.UbuntuUfwStatusRead => FactUfwStatus(),
@@ -298,7 +298,7 @@ public sealed partial class DeterministicScenarioHost : IRemoteTransport
         {
             ScenarioUfwStatus.Absent => Result("ufw=unavailable"),
             ScenarioUfwStatus.Error => Failure(1, State.Ufw.ErrorMessage),
-            _ => Result($"status={State.Ufw.Status.ToString().ToLowerInvariant()}"),
+            _ => Result($"Status: {State.Ufw.Status.ToString().ToLowerInvariant()}"),
         };
     }
 

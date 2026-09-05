@@ -32,7 +32,7 @@ public sealed class UbuntuFactCommandCatalogScenarioTests
         Assert.Equal("scenario-ubuntu", results[RemoteCommandCatalog.UbuntuHostnameRead].StandardOutput);
         Assert.Contains("root=true", results[RemoteCommandCatalog.UbuntuPrivilegeRead].StandardOutput, StringComparison.Ordinal);
         Assert.Equal("2202", results[RemoteCommandCatalog.SshSessionPortRead].StandardOutput);
-        Assert.Equal("status=active", results[RemoteCommandCatalog.UbuntuUfwStatusRead].StandardOutput);
+        Assert.Equal("Status: active", results[RemoteCommandCatalog.UbuntuUfwStatusRead].StandardOutput);
         Assert.Equal(beforeCounter, state.Counter);
         Assert.Equal(beforeHostname, state.Hostname);
         Assert.Equal(beforeRules, state.Ufw.Rules);
