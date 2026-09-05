@@ -27,14 +27,14 @@ require_text "PUSH_SHA: \${{ github.event_name == 'push' && github.sha || '' }}"
 require_text 'uses: ./.github/actions/prepare-prospective-validation'
 
 checkout_source_references="$(grep -F -c 'ref: ${{ env.SOURCE_SHA }}' "$workflow" || true)"
-if [[ "$checkout_source_references" != '3' ]]; then
-  printf 'CI prospective-validation policy expected three source checkouts, found %s.\n' "$checkout_source_references" >&2
+if [[ "$checkout_source_references" != '4' ]]; then
+  printf 'CI prospective-validation policy expected four source checkouts, found %s.\n' "$checkout_source_references" >&2
   exit 1
 fi
 
 fetch_depth_references="$(grep -F -c 'fetch-depth: 0' "$workflow" || true)"
-if [[ "$fetch_depth_references" != '3' ]]; then
-  printf 'CI prospective-validation policy expected three full-history checkouts, found %s.\n' "$fetch_depth_references" >&2
+if [[ "$fetch_depth_references" != '4' ]]; then
+  printf 'CI prospective-validation policy expected four full-history checkouts, found %s.\n' "$fetch_depth_references" >&2
   exit 1
 fi
 
@@ -42,10 +42,17 @@ require_text 'name: test-results-${{ runner.os }}-${{ env.VALIDATION_SHA }}'
 require_text 'name: e3-local-contained-results-${{ env.VALIDATION_SHA }}'
 require_text '-CommitSha $env:VALIDATION_SHA'
 require_text 'name: vpsready-${{ matrix.rid }}-${{ env.VALIDATION_SHA }}'
+require_text 'name: Resolve prospective validation identity'
+require_text 'expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}'
+require_text 'name: Verify shared validation provenance'
+require_text 'test "${#provenance_files[@]}" -eq 4'
+require_text 'test "${#archives[@]}" -eq 6'
 require_text 'name: required'
+require_text 'RESOLVE_RESULT: ${{ needs.resolve-validation.result }}'
 require_text 'VALIDATE_RESULT: ${{ needs.validate.result }}'
 require_text 'LOCAL_PROTOCOL_RESULT: ${{ needs.local-protocol.result }}'
 require_text 'PACKAGE_RESULT: ${{ needs.package.result }}'
+require_text 'PROVENANCE_RESULT: ${{ needs.validation-provenance.result }}'
 
 if grep -Fq 'local-contained protocol (opt-in)' "$workflow" || grep -Fq 'inputs.run_local_protocol' "$workflow"; then
   printf 'CI prospective-validation policy found obsolete opt-in E3 guard.\n' >&2

@@ -28,7 +28,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resolve-validation:
+    name: Resolve prospective validation identity
+    runs-on: ubuntu-latest
+    outputs:
+      pr_head_sha: ${{ steps.prepare.outputs.pr_head_sha }}
+      pr_base_sha: ${{ steps.prepare.outputs.pr_base_sha }}
+      validation_base_sha: ${{ steps.prepare.outputs.validation_base_sha }}
+      validation_sha: ${{ steps.prepare.outputs.validation_sha }}
+      push_sha: ${{ steps.prepare.outputs.push_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - id: prepare
+        name: Resolve the one validation identity
+        uses: ./.github/actions/prepare-prospective-validation
+        with:
+          event_name: ${{ github.event_name }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          pr_head_sha: ${{ env.PR_HEAD_SHA }}
+          pr_base_sha: ${{ env.PR_BASE_SHA }}
+          pr_base_ref: ${{ env.PR_BASE_REF }}
+          push_sha: ${{ env.PUSH_SHA }}
+
   validate:
+    needs: resolve-validation
     name: E0-E2 (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
@@ -45,15 +72,17 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
 
-      - name: Prepare prospective validation tree
+      - name: Reproduce the resolved prospective validation tree
         uses: ./.github/actions/prepare-prospective-validation
         with:
           event_name: ${{ github.event_name }}
           source_sha: ${{ env.SOURCE_SHA }}
-          pr_head_sha: ${{ env.PR_HEAD_SHA }}
-          pr_base_sha: ${{ env.PR_BASE_SHA }}
+          pr_head_sha: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          pr_base_sha: ${{ needs.resolve-validation.outputs.pr_base_sha }}
           pr_base_ref: ${{ env.PR_BASE_REF }}
-          push_sha: ${{ env.PUSH_SHA }}
+          push_sha: ${{ needs.resolve-validation.outputs.push_sha }}
+          validation_base_sha: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -120,6 +149,7 @@ jobs:
           retention-days: 14
 
   local-protocol:
+    needs: resolve-validation
     name: E3 local-contained protocol
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -129,15 +159,17 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
 
-      - name: Prepare prospective validation tree
+      - name: Reproduce the resolved prospective validation tree
         uses: ./.github/actions/prepare-prospective-validation
         with:
           event_name: ${{ github.event_name }}
           source_sha: ${{ env.SOURCE_SHA }}
-          pr_head_sha: ${{ env.PR_HEAD_SHA }}
-          pr_base_sha: ${{ env.PR_BASE_SHA }}
+          pr_head_sha: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          pr_base_sha: ${{ needs.resolve-validation.outputs.pr_base_sha }}
           pr_base_ref: ${{ env.PR_BASE_REF }}
-          push_sha: ${{ env.PUSH_SHA }}
+          push_sha: ${{ needs.resolve-validation.outputs.push_sha }}
+          validation_base_sha: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}
 
       - name: Record contained E3 validation provenance
         shell: bash
@@ -169,6 +201,7 @@ jobs:
   package:
     name: E4 package (${{ matrix.rid }})
     needs:
+      - resolve-validation
       - validate
       - local-protocol
     runs-on: ${{ matrix.os }}
@@ -195,15 +228,17 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
 
-      - name: Prepare prospective validation tree
+      - name: Reproduce the resolved prospective validation tree
         uses: ./.github/actions/prepare-prospective-validation
         with:
           event_name: ${{ github.event_name }}
           source_sha: ${{ env.SOURCE_SHA }}
-          pr_head_sha: ${{ env.PR_HEAD_SHA }}
-          pr_base_sha: ${{ env.PR_BASE_SHA }}
+          pr_head_sha: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          pr_base_sha: ${{ needs.resolve-validation.outputs.pr_base_sha }}
           pr_base_ref: ${{ env.PR_BASE_REF }}
-          push_sha: ${{ env.PUSH_SHA }}
+          push_sha: ${{ needs.resolve-validation.outputs.push_sha }}
+          validation_base_sha: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -245,23 +280,86 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  required:
-    name: required
-    if: always()
+  validation-provenance:
+    name: Verify shared validation provenance
     needs:
+      - resolve-validation
       - validate
       - local-protocol
       - package
     runs-on: ubuntu-latest
     steps:
+      - name: Download all test and protocol evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*results-*"
+          path: validation-evidence
+
+      - name: Assert every matrix artifact has the resolved identity and pair
+        shell: bash
+        env:
+          EXPECTED_PR_HEAD_SHA: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          EXPECTED_PR_BASE_SHA: ${{ needs.resolve-validation.outputs.pr_base_sha }}
+          EXPECTED_VALIDATION_BASE_SHA: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          EXPECTED_VALIDATION_SHA: ${{ needs.resolve-validation.outputs.validation_sha }}
+          EXPECTED_PUSH_SHA: ${{ needs.resolve-validation.outputs.push_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t provenance_files < <(find validation-evidence -name sha-provenance.env -type f | sort)
+          test "${#provenance_files[@]}" -eq 4
+          for provenance_file in "${provenance_files[@]}"; do
+            grep -Fx "PR_HEAD_SHA=$EXPECTED_PR_HEAD_SHA" "$provenance_file"
+            grep -Fx "PR_BASE_SHA=$EXPECTED_PR_BASE_SHA" "$provenance_file"
+            grep -Fx "VALIDATION_BASE_SHA=$EXPECTED_VALIDATION_BASE_SHA" "$provenance_file"
+            grep -Fx "VALIDATION_SHA=$EXPECTED_VALIDATION_SHA" "$provenance_file"
+            grep -Fx "PUSH_SHA=$EXPECTED_PUSH_SHA" "$provenance_file"
+          done
+
+      - name: Download all package evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "vpsready-*"
+          path: package-evidence
+
+      - name: Assert every package has the resolved validation identity
+        shell: bash
+        env:
+          EXPECTED_VALIDATION_SHA: ${{ needs.resolve-validation.outputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find package-evidence -name '*.zip' -type f | sort)
+          test "${#archives[@]}" -eq 6
+          for archive in "${archives[@]}"; do
+            case "$(basename "$archive")" in
+              *-"$EXPECTED_VALIDATION_SHA".zip) ;;
+              *) printf 'Package does not use resolved validation identity: %s\n' "$archive" >&2; exit 1 ;;
+            esac
+            unzip -p "$archive" artifact-manifest.json | jq -e --arg expected "$EXPECTED_VALIDATION_SHA" '.source_sha == $expected' >/dev/null
+          done
+
+  required:
+    name: required
+    if: always()
+    needs:
+      - resolve-validation
+      - validate
+      - local-protocol
+      - package
+      - validation-provenance
+    runs-on: ubuntu-latest
+    steps:
       - name: Require every blind evidence job
         shell: bash
         env:
+          RESOLVE_RESULT: ${{ needs.resolve-validation.result }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           LOCAL_PROTOCOL_RESULT: ${{ needs.local-protocol.result }}
           PACKAGE_RESULT: ${{ needs.package.result }}
+          PROVENANCE_RESULT: ${{ needs.validation-provenance.result }}
         run: |
           set -euo pipefail
+          test "$RESOLVE_RESULT" = success
           test "$VALIDATE_RESULT" = success
           test "$LOCAL_PROTOCOL_RESULT" = success
           test "$PACKAGE_RESULT" = success
+          test "$PROVENANCE_RESULT" = success
