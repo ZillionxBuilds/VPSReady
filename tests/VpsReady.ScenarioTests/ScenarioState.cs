@@ -339,6 +339,8 @@ public sealed class ScenarioRebootState
 
     public int BootGeneration { get; set; }
 
+    public bool AdvanceBootIdentityOnReconnect { get; set; } = true;
+
     public bool IsRebooting { get; set; }
 
     public int ReconnectAttempts { get; set; }

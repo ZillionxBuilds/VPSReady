@@ -49,6 +49,24 @@ public sealed record BootIdentityReadResult(BootIdentityToken? Token, bool IsAva
     public static BootIdentityReadResult Unavailable { get; } = new(null, false);
 }
 
+/// <summary>Immutable bounded recovery policy; the overall deadline is authoritative.</summary>
+public sealed record RebootRecoveryPolicy(
+    TimeSpan OverallDeadline,
+    TimeSpan ShutdownGrace,
+    TimeSpan ConnectTimeout,
+    IReadOnlyList<TimeSpan> RetryDelays,
+    int MaximumAttempts)
+{
+    public static RebootRecoveryPolicy Production { get; } = new(
+        TimeSpan.FromMinutes(5),
+        TimeSpan.FromSeconds(2),
+        TimeSpan.FromSeconds(10),
+        [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(13), TimeSpan.FromSeconds(15)],
+        30);
+
+    public TimeSpan DelayForAttempt(int attempt) => RetryDelays[Math.Min(Math.Max(attempt - 1, 0), RetryDelays.Count - 1)];
+}
+
 public enum RebootReconnectOutcome { NotStarted, Reconnected, TimedOut, Cancelled, HostTrustRejected, Failed }
 
 /// <summary>Safe result for an explicitly confirmed reboot; it never contains endpoint or credential data.</summary>

@@ -825,8 +825,11 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         }
 
         State.Reboot.IsRebooting = false;
-        State.Reboot.BootGeneration++;
-        State.Reboot.BootIdentity = $"00000000-0000-0000-0000-{State.Reboot.BootGeneration:D12}";
+        if (State.Reboot.AdvanceBootIdentityOnReconnect)
+        {
+            State.Reboot.BootGeneration++;
+            State.Reboot.BootIdentity = $"00000000-0000-0000-0000-{State.Reboot.BootGeneration:D12}";
+        }
         State.Ssh.IsConnected = true;
         return Result("connected=true");
     }

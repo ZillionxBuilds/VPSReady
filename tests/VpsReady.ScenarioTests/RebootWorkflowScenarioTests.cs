@@ -111,4 +111,19 @@ public sealed class RebootWorkflowScenarioTests
         Assert.Equal(DiagnosticPhase.Recovery, terminal.Phase);
         Assert.Equal(RemoteCommandCatalog.SshReconnectVerify, terminal.CommandId);
     }
+
+    [Fact]
+    public async Task OldBootThatReconnectsNeverBecomesARebootSuccess()
+    {
+        await using var services = ScenarioComposition.Create("c504-old-boot", state => state.Reboot.AdvanceBootIdentityOnReconnect = false);
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
+
+        var result = await new RebootWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(RebootErrorCatalog.Timeout, result.ErrorCode);
+        Assert.Equal(RebootReconnectOutcome.TimedOut, result.ReconnectOutcome);
+        Assert.Equal(3, result.ReconnectAttempts);
+    }
 }

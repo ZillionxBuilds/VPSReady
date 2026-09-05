@@ -137,6 +137,23 @@ public sealed class RebootWorkflowTests
         Assert.Equal(RemoteCommandCatalog.SshReconnectVerify, terminal.CommandId);
     }
 
+    [Fact]
+    public async Task SameOldBootIdentityNeverReportsRebootSuccess()
+    {
+        var transport = new RebootTransport(Ok("reboot=started"));
+        transport.BootIdentities.Enqueue("11111111-1111-1111-1111-111111111111");
+        transport.BootIdentities.Enqueue("11111111-1111-1111-1111-111111111111");
+        transport.BootIdentities.Enqueue("11111111-1111-1111-1111-111111111111");
+        transport.BootIdentities.Enqueue("11111111-1111-1111-1111-111111111111");
+
+        var result = await new RebootWorkflow(new AllowedPreflight(), new Sink()).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(RebootErrorCatalog.Timeout, result.ErrorCode);
+        Assert.Equal(RebootReconnectOutcome.TimedOut, result.ReconnectOutcome);
+        Assert.Equal(3, result.ReconnectAttempts);
+    }
+
     private static RemoteCommandResult Ok(string output) => new(0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class AllowedPreflight : IPrivilegePreflight
@@ -156,6 +173,7 @@ public sealed class RebootWorkflowTests
         private readonly Queue<object> responses = new(responses);
         public List<RemoteCommand> Commands { get; } = [];
         public Queue<Exception> ReconnectFailures { get; } = [];
+        public Queue<string> BootIdentities { get; } = [];
         public int ReconnectCalls { get; private set; }
         private int bootIdentityReads;
         public Action? OnReconnect { get; init; }
@@ -188,7 +206,9 @@ public sealed class RebootWorkflowTests
         public Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var value = bootIdentityReads++ == 0 ? "11111111-1111-1111-1111-111111111111" : "22222222-2222-2222-2222-222222222222";
+            var value = BootIdentities.Count > 0
+                ? BootIdentities.Dequeue()
+                : bootIdentityReads++ == 0 ? "11111111-1111-1111-1111-111111111111" : "22222222-2222-2222-2222-222222222222";
             BootIdentityToken.TryCreate(value, out var token);
             return Task.FromResult(new BootIdentityReadResult(token, true));
         }
