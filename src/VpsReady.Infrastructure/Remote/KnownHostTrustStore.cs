@@ -68,7 +68,9 @@ public sealed class KnownHostTrustStore : IKnownHostTrustStore, IDisposable
         {
             var load = await LoadAsync(cancellationToken).ConfigureAwait(false);
             var current = Assess(load.Entries, challenge.Identity, challenge.ObservedFingerprint, load.WasCorrupt);
-            if (current.State != requiredState)
+            var currentEntry = load.Entries.SingleOrDefault(entry => Matches(entry, challenge.Identity));
+            var currentFingerprint = currentEntry is null ? null : new HostKeyFingerprint(currentEntry.Fingerprint);
+            if (current.State != requiredState || !challenge.MatchesExpectedPriorFingerprint(currentFingerprint))
             {
                 throw new InvalidOperationException("The host-trust review is stale and must be reassessed before saving a decision.");
             }
@@ -175,7 +177,11 @@ public sealed class KnownHostTrustStore : IKnownHostTrustStore, IDisposable
 
         return new KnownHostTrustAssessment(
             KnownHostTrustState.Changed,
-            new KnownHostTrustChallenge(identity, observedFingerprint, KnownHostTrustState.Changed),
+            new KnownHostTrustChallenge(
+                identity,
+                observedFingerprint,
+                KnownHostTrustState.Changed,
+                new HostKeyFingerprint(stored.Fingerprint)),
             recoveredCorruptStore);
     }
 

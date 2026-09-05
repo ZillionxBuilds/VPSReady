@@ -78,22 +78,55 @@ public enum KnownHostTrustState
 public sealed class KnownHostTrustChallenge
 {
     public KnownHostTrustChallenge(KnownHostIdentity identity, HostKeyFingerprint observedFingerprint, KnownHostTrustState state)
+        : this(identity, observedFingerprint, state, expectedPriorFingerprint: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a review challenge pinned to the fingerprint observed when it
+    /// was assessed. A changed-key review must carry the previously trusted
+    /// fingerprint, so an older review cannot overwrite a newer reviewed
+    /// replacement. The prior value remains opaque to callers.
+    /// </summary>
+    internal KnownHostTrustChallenge(
+        KnownHostIdentity identity,
+        HostKeyFingerprint observedFingerprint,
+        KnownHostTrustState state,
+        HostKeyFingerprint? expectedPriorFingerprint)
     {
         if (state == KnownHostTrustState.Matching)
         {
             throw new ArgumentOutOfRangeException(nameof(state), "Matching hosts do not require a trust challenge.");
         }
 
+        if ((state == KnownHostTrustState.Changed) != (expectedPriorFingerprint is not null))
+        {
+            throw new ArgumentException("Changed-key reviews require the prior trusted fingerprint; unknown-host reviews must not have one.", nameof(expectedPriorFingerprint));
+        }
+
         Identity = identity;
         ObservedFingerprint = observedFingerprint;
         State = state;
+        this.expectedPriorFingerprint = expectedPriorFingerprint;
     }
+
+    private readonly HostKeyFingerprint? expectedPriorFingerprint;
 
     public KnownHostIdentity Identity { get; }
 
     public HostKeyFingerprint ObservedFingerprint { get; }
 
     public KnownHostTrustState State { get; }
+
+    /// <summary>
+    /// Tests whether the current persisted fingerprint is exactly the value
+    /// this review was derived from. The prior fingerprint itself is never
+    /// exposed through generic UI or diagnostics APIs.
+    /// </summary>
+    public bool MatchesExpectedPriorFingerprint(HostKeyFingerprint? currentFingerprint) =>
+        expectedPriorFingerprint is null
+            ? currentFingerprint is null
+            : expectedPriorFingerprint == currentFingerprint;
 
     public override string ToString() => "[host trust review required]";
 }

@@ -77,6 +77,31 @@ public sealed class KnownHostTrustStoreTests
     }
 
     [Fact]
+    public async Task StaleChangedKeyReviewCannotOverwriteALaterReviewedReplacement()
+    {
+        await using var workspace = new TrustWorkspace();
+        var identity = new KnownHostIdentity("replacement-race.test", 22);
+        var initialFingerprint = new HostKeyFingerprint("SHA256:trusted-a");
+        var staleObservedFingerprint = new HostKeyFingerprint("SHA256:stale-b");
+        var reviewedReplacementFingerprint = new HostKeyFingerprint("SHA256:reviewed-c");
+
+        var initial = await workspace.Store.AssessAsync(identity, initialFingerprint, CancellationToken.None);
+        await workspace.Store.AcceptUnknownAsync(initial.Challenge!, CancellationToken.None);
+
+        var staleReview = await workspace.Store.AssessAsync(identity, staleObservedFingerprint, CancellationToken.None);
+        var currentReview = await workspace.Store.AssessAsync(identity, reviewedReplacementFingerprint, CancellationToken.None);
+        await workspace.Store.ReplaceChangedAsync(currentReview.Challenge!, CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            workspace.Store.ReplaceChangedAsync(staleReview.Challenge!, CancellationToken.None));
+
+        var preservedReplacement = await workspace.Store.AssessAsync(identity, reviewedReplacementFingerprint, CancellationToken.None);
+        var rejectedStaleFingerprint = await workspace.Store.AssessAsync(identity, staleObservedFingerprint, CancellationToken.None);
+        Assert.Equal(KnownHostTrustState.Matching, preservedReplacement.State);
+        Assert.Equal(KnownHostTrustState.Changed, rejectedStaleFingerprint.State);
+    }
+
+    [Fact]
     public async Task CorruptStoreIsIgnoredFailClosedAndExplicitTrustAtomicallyRecoversIt()
     {
         await using var workspace = new TrustWorkspace();
