@@ -20,6 +20,35 @@ public static class RebootErrorCatalog
 
 public sealed record RebootRequiredState(OperationResult Result, bool? Required, string? ErrorCode);
 
+/// <summary>Opaque in-memory boot identity. Its value is never rendered or exported.</summary>
+public sealed class BootIdentityToken
+{
+    private readonly string value;
+
+    private BootIdentityToken(string value) => this.value = value;
+
+    public static bool TryCreate(string candidate, out BootIdentityToken? token)
+    {
+        token = null;
+        if (string.IsNullOrWhiteSpace(candidate) || candidate.Length > 128 || candidate.Any(character => !(char.IsAsciiLetterOrDigit(character) || character == '-')))
+        {
+            return false;
+        }
+
+        token = new BootIdentityToken(candidate);
+        return true;
+    }
+
+    public bool Matches(BootIdentityToken other) => other is not null && string.Equals(value, other.value, StringComparison.Ordinal);
+
+    public override string ToString() => "[boot identity redacted]";
+}
+
+public sealed record BootIdentityReadResult(BootIdentityToken? Token, bool IsAvailable)
+{
+    public static BootIdentityReadResult Unavailable { get; } = new(null, false);
+}
+
 public enum RebootReconnectOutcome { NotStarted, Reconnected, TimedOut, Cancelled, HostTrustRejected, Failed }
 
 /// <summary>Safe result for an explicitly confirmed reboot; it never contains endpoint or credential data.</summary>
@@ -33,6 +62,8 @@ public sealed record RebootOperationResult(OperationResult Result, string? Error
 public interface IRebootReconnectTransport : IRemoteTransport
 {
     Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken);
+
+    Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken);
 }
 
 public interface IRebootWorkflow

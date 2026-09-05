@@ -150,6 +150,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuRebootRequiredRead => Result($"reboot_required={State.Apt.RebootRequired.ToString().ToLowerInvariant()}"),
             RemoteCommandCatalog.UbuntuRebootApply => RebootProduction(),
             RemoteCommandCatalog.SshReconnectVerify => State.Ssh.IsConnected ? Result("reconnect=verified") : Failure(25, "Reconnect verification requires an authenticated session."),
+            RemoteCommandCatalog.UbuntuBootIdentityRead => Result(State.Reboot.BootIdentity),
             ScenarioCommandIds.UfwStatus => UfwStatus(),
             ScenarioCommandIds.UfwRulesList => UfwRulesList(),
             ScenarioCommandIds.UfwRuleAdd => AddUfwRule(command),
@@ -824,6 +825,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         }
 
         State.Reboot.IsRebooting = false;
+        State.Reboot.BootGeneration++;
+        State.Reboot.BootIdentity = $"00000000-0000-0000-0000-{State.Reboot.BootGeneration:D12}";
         State.Ssh.IsConnected = true;
         return Result("connected=true");
     }

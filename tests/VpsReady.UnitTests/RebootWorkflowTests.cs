@@ -157,6 +157,7 @@ public sealed class RebootWorkflowTests
         public List<RemoteCommand> Commands { get; } = [];
         public Queue<Exception> ReconnectFailures { get; } = [];
         public int ReconnectCalls { get; private set; }
+        private int bootIdentityReads;
         public Action? OnReconnect { get; init; }
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
@@ -182,6 +183,14 @@ public sealed class RebootWorkflowTests
             ReconnectCalls++;
             OnReconnect?.Invoke();
             return ReconnectFailures.Count == 0 ? Task.CompletedTask : Task.FromException(ReconnectFailures.Dequeue());
+        }
+
+        public Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var value = bootIdentityReads++ == 0 ? "11111111-1111-1111-1111-111111111111" : "22222222-2222-2222-2222-222222222222";
+            BootIdentityToken.TryCreate(value, out var token);
+            return Task.FromResult(new BootIdentityReadResult(token, true));
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

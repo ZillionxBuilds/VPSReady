@@ -131,6 +131,15 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host) :
         return host.ReconnectAsync(cancellationToken);
     }
 
+    public async Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var command = new RemoteCommand(RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuBootIdentityRead), "boot-identity-read", timeout);
+        var response = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+        return response.Succeeded && BootIdentityToken.TryCreate(response.StandardOutput.Trim(), out var token)
+            ? new BootIdentityReadResult(token, true)
+            : BootIdentityReadResult.Unavailable;
+    }
+
     public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

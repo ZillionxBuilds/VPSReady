@@ -213,6 +213,7 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuRebootRequiredRead = "ubuntu.reboot-required.read";
     public const string UbuntuRebootApply = "ubuntu.reboot.apply";
     public const string SshReconnectVerify = "ssh.reconnect.verify";
+    public const string UbuntuBootIdentityRead = "ubuntu.boot_identity.read";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -248,6 +249,7 @@ public static class DiagnosticCommandCatalog
         UbuntuRebootRequiredRead,
         UbuntuRebootApply,
         SshReconnectVerify,
+        UbuntuBootIdentityRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);

@@ -27,6 +27,8 @@ public static class UbuntuPackageCommandCatalog
 
     public static RemoteCommand CreateReconnectVerifyRequest() => Create(RemoteCommandCatalog.SshReconnectVerify, "reconnect-verify");
 
+    public static RemoteCommand CreateBootIdentityRequest() => Create(RemoteCommandCatalog.UbuntuBootIdentityRead, "boot-identity-read");
+
     public static string RequireShellCommand(RemoteCommand command) => command.Id.Value switch
     {
         RemoteCommandCatalog.UbuntuAptIndexUpdate => "LC_ALL=C LANG=C; export LC_ALL LANG; if [ \"$(id -u)\" -eq 0 ]; then apt-get update; else sudo -n apt-get update; fi",
@@ -37,6 +39,7 @@ public static class UbuntuPackageCommandCatalog
         RemoteCommandCatalog.UbuntuRebootRequiredRead => "if test -f /var/run/reboot-required; then printf 'reboot_required=true\\n'; else printf 'reboot_required=false\\n'; fi",
         RemoteCommandCatalog.UbuntuRebootApply => "if [ \"$(id -u)\" -eq 0 ]; then /sbin/reboot; else sudo -n /sbin/reboot; fi",
         RemoteCommandCatalog.SshReconnectVerify => "printf 'reconnect=verified\\n'",
+        RemoteCommandCatalog.UbuntuBootIdentityRead => "cat /proc/sys/kernel/random/boot_id",
         _ => throw new ArgumentOutOfRangeException(nameof(command), command.Id.Value, "The command is not an approved bounded package command."),
     };
 
