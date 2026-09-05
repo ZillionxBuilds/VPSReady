@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Windows.Input;
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
@@ -26,6 +27,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromMinutes(2);
     private readonly IApplicationSession session;
     private readonly IFirewallManagement firewall;
+    private readonly IDiagnosticSink? diagnostics;
     private readonly object operationLock = new();
     private CancellationTokenSource? activeCancellation;
     private UfwSnapshot snapshot = UfwSnapshot.StateOnly(UfwFirewallState.Unknown);
@@ -44,10 +46,11 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
     private bool isDisableConfirmed;
     private bool disposed;
 
-    public FirewallViewModel(IApplicationSession session, IFirewallManagement firewall)
+    public FirewallViewModel(IApplicationSession session, IFirewallManagement firewall, IDiagnosticSink? diagnostics = null)
     {
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.firewall = firewall ?? throw new ArgumentNullException(nameof(firewall));
+        this.diagnostics = diagnostics;
         state = session.Snapshot.IsConnected ? FirewallScreenState.Unknown : FirewallScreenState.Disconnected;
         status = state == FirewallScreenState.Disconnected
             ? "Connect and verify a server session before reading its firewall."
@@ -89,6 +92,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
             if (SetProperty(ref selectedRule, value))
             {
                 OnPropertyChanged(nameof(HasSelectedRule));
+                OnRemovalEligibilityChanged();
             }
         }
     }
@@ -100,6 +104,17 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
     public bool CanStartOperation => !IsBusy && session.Snapshot.IsConnected;
 
     public bool CanCancel => IsBusy;
+
+    /// <summary>
+    /// The normal UI never starts a removal workflow for a stale row or for a
+    /// TCP rule on the active session SSH port. C304 repeats this defense after
+    /// its own fresh remote preflight as a required downstream boundary.
+    /// </summary>
+    public bool CanRemoveSelected => !IsBusy
+        && session.Snapshot.IsConnected
+        && TryGetRemovalBlockReason() is null;
+
+    public string RemovalEligibilityMessage => TryGetRemovalBlockReason() ?? string.Empty;
 
     public string AddPort { get => addPort; set => SetProperty(ref addPort, value ?? string.Empty); }
 
@@ -153,7 +168,17 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsRemoveConfirmed { get => isRemoveConfirmed; set => SetProperty(ref isRemoveConfirmed, value); }
+    public bool IsRemoveConfirmed
+    {
+        get => isRemoveConfirmed;
+        set
+        {
+            if (SetProperty(ref isRemoveConfirmed, value))
+            {
+                OnRemovalEligibilityChanged();
+            }
+        }
+    }
 
     public bool IsEnableConfirmed { get => isEnableConfirmed; set => SetProperty(ref isEnableConfirmed, value); }
 
@@ -168,10 +193,22 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         return RunMutationAsync("add", (transport, token) => firewall.AddAsync(transport, input, token), cancellationToken);
     }
 
-    public Task RemoveSelectedAsync(CancellationToken cancellationToken = default)
+    public async Task RemoveSelectedAsync(CancellationToken cancellationToken = default)
     {
+        if (IsBusy)
+        {
+            Status = "A firewall operation is already in progress. Wait for it to finish or cancel it safely.";
+            return;
+        }
+
+        if (TryGetRemovalBlockReason() is { } reason)
+        {
+            await PreemptRemovalAsync(reason).ConfigureAwait(false);
+            return;
+        }
+
         var intent = new UfwRuleRemovalIntent(SelectedRule?.Identity, IsRemoveConfirmed);
-        return RunMutationAsync("remove", (transport, token) => firewall.RemoveAsync(transport, intent, token), cancellationToken);
+        await RunMutationAsync("remove", (transport, token) => firewall.RemoveAsync(transport, intent, token), cancellationToken).ConfigureAwait(false);
     }
 
     public Task EnableAsync(CancellationToken cancellationToken = default) =>
@@ -335,6 +372,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(Rules));
         OnPropertyChanged(nameof(HasCurrentListing));
         OnPropertyChanged(nameof(RuleListingStatus));
+        OnRemovalEligibilityChanged();
     }
 
     private void OnOperationAvailabilityChanged()
@@ -342,6 +380,89 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(CanStartOperation));
         OnPropertyChanged(nameof(CanCancel));
+        OnRemovalEligibilityChanged();
+    }
+
+    private void OnRemovalEligibilityChanged()
+    {
+        OnPropertyChanged(nameof(CanRemoveSelected));
+        OnPropertyChanged(nameof(RemovalEligibilityMessage));
+    }
+
+    private string? TryGetRemovalBlockReason()
+    {
+        if (!session.Snapshot.IsConnected)
+        {
+            return "Connect and verify a server session before removing a firewall rule.";
+        }
+
+        if (!HasCurrentListing)
+        {
+            return "Refresh a complete current firewall listing before selecting a rule for removal.";
+        }
+
+        var selected = SelectedRule;
+        if (selected is null)
+        {
+            return "Select one rule from the current verified listing before removal.";
+        }
+
+        var matches = snapshot.Rules.Where(rule => Equals(rule.Identity, selected.Identity)).Take(2).ToArray();
+        if (matches.Length != 1)
+        {
+            return "The selected firewall rule is no longer current or uniquely identifiable. Refresh and select it again.";
+        }
+
+        var current = matches[0];
+
+        if (current.Protocol == UfwRuleProtocol.Tcp && current.Port == session.Snapshot.Identity?.Port)
+        {
+            return "The selected rule affects the active SSH port and cannot be removed by the normal flow.";
+        }
+
+        if (!IsRemoveConfirmed)
+        {
+            return "Confirm removal of the selected current rule before continuing.";
+        }
+
+        return null;
+    }
+
+    private async Task PreemptRemovalAsync(string reason)
+    {
+        var sessionSnapshot = session.Snapshot;
+        var correlation = new CorrelationIds(
+            sessionSnapshot.SessionId ?? DiagnosticCorrelationFactory.NewSessionId(),
+            DiagnosticCorrelationFactory.NewRunId(),
+            DiagnosticCorrelationFactory.NewOperationId(),
+            "validate");
+        var result = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+        OperationId = result.OperationId;
+        ErrorCode = result.ErrorCode?.ToStableCode();
+        State = FirewallScreenState.Failed;
+        Status = reason;
+        try
+        {
+            if (diagnostics is not null)
+            {
+                await diagnostics.WriteAsync(
+                    new StructuredDiagnosticEvent(
+                        DiagnosticEventCatalog.OperationFailed,
+                        "Firewall",
+                        DiagnosticLevel.Error,
+                        correlation,
+                        DiagnosticPhase.Validate,
+                        DiagnosticStatus.Failed,
+                        reason,
+                        ErrorCode: result.ErrorCode?.ToStableCode(),
+                        Action: "RemoveSelectedFirewallRule"),
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // Diagnostics failures never start a remote removal or expose sink detail.
+        }
     }
 
     private void OnSessionStateChanged(object? sender, EventArgs e)

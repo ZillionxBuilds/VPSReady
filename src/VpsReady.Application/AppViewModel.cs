@@ -42,11 +42,12 @@ public sealed class AppViewModel : ObservableObject
         IApplicationSession applicationSession,
         IConnectionSessionLifecycle lifecycle,
         IDiagnosticsWorkspace diagnosticsWorkspace,
-        IFirewallManagement firewallManagement)
+        IFirewallManagement firewallManagement,
+        IDiagnosticSink? firewallDiagnostics = null)
         : this(applicationSession, false, null, diagnosticsWorkspace)
     {
         ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
-        Firewall = new FirewallViewModel(applicationSession, firewallManagement);
+        Firewall = new FirewallViewModel(applicationSession, firewallManagement, firewallDiagnostics);
     }
 
     private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)

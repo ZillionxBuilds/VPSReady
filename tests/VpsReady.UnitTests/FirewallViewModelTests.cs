@@ -1,4 +1,5 @@
 using VpsReady.Application;
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
@@ -83,34 +84,95 @@ public sealed class FirewallViewModelTests
         Assert.DoesNotContain("private-host.test", viewModel.Status, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task SelectedRemovalRetainsOpaqueIdentityAndRequiresExplicitConfirmationInWorkflow()
+    [Theory]
+    [InlineData(UfwIpFamily.Ipv4)]
+    [InlineData(UfwIpFamily.Ipv6)]
+    public async Task ActiveSshRuleRemovalIsPreemptedBeforeManagementAndCreatesCorrelatedSafeActivity(UfwIpFamily family)
     {
         await using var session = new ApplicationSession();
         await session.StartAsync(new RemoteEndpoint("private-host.test", 22, "admin"), new NoopTransport());
-        var rule = Rule(2, 22, UfwIpFamily.Ipv6);
+        var rule = Rule(2, 22, family);
+        var management = new RecordingFirewallManagement
+        {
+            RefreshResult = Refresh(new UfwSnapshot(UfwFirewallState.Active, [rule])),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        using var viewModel = new FirewallViewModel(session, management, diagnostics);
+        await viewModel.RefreshAsync();
+        viewModel.SelectedRule = Assert.Single(viewModel.Rules);
+        viewModel.IsRemoveConfirmed = true;
+        await viewModel.RemoveSelectedAsync();
+
+        Assert.Equal(0, management.RemoveCalls);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.False(viewModel.CanRemoveSelected);
+        Assert.Contains("active SSH port", viewModel.RemovalEligibilityMessage, StringComparison.Ordinal);
+        Assert.NotNull(viewModel.OperationId);
+        Assert.Contains(diagnostics.Events, item =>
+            item.Correlation.OperationId == viewModel.OperationId
+            && item.EventId == DiagnosticEventCatalog.OperationFailed
+            && item.Phase == DiagnosticPhase.Validate
+            && item.ErrorCode == "VALIDATION_FAILED");
+        Assert.DoesNotContain(rule.Identity.Value, viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StaleSelectedIdentityIsPreemptedBeforeManagement()
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("private-host.test", 22, "admin"), new NoopTransport());
+        var currentRule = Rule(3, 8443, UfwIpFamily.Ipv4);
+        var management = new RecordingFirewallManagement
+        {
+            RefreshResult = Refresh(new UfwSnapshot(UfwFirewallState.Active, [currentRule])),
+        };
+        using var viewModel = new FirewallViewModel(session, management);
+        await viewModel.RefreshAsync();
+        viewModel.SelectedRule = FirewallRuleRow.FromRule(Rule(99, 9443, UfwIpFamily.Ipv6));
+        viewModel.IsRemoveConfirmed = true;
+
+        await viewModel.RemoveSelectedAsync();
+
+        Assert.Equal(0, management.RemoveCalls);
+        Assert.Equal(FirewallScreenState.Failed, viewModel.State);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.False(viewModel.CanRemoveSelected);
+        Assert.Contains("no longer current", viewModel.RemovalEligibilityMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-host.test", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CurrentNonSshRuleRequiresConfirmationBeforeTheVerifiedRemovalWorkflow()
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("private-host.test", 22, "admin"), new NoopTransport());
+        var rule = Rule(4, 8443, UfwIpFamily.Ipv4);
         var management = new RecordingFirewallManagement
         {
             RefreshResult = Refresh(new UfwSnapshot(UfwFirewallState.Active, [rule])),
             RemoveResult = new FirewallOperationResult(
-                OperationResult.Failure("active-ssh-opaque", OperationErrorCode.Validation, OperationState.Unchanged),
-                new UfwSnapshot(UfwFirewallState.Active, [rule]),
-                IsActiveSshProtected: true),
+                OperationResult.Success("remove-opaque", OperationState.Applied),
+                UfwSnapshot.StateOnly(UfwFirewallState.Active)),
         };
         using var viewModel = new FirewallViewModel(session, management);
         await viewModel.RefreshAsync();
         viewModel.SelectedRule = Assert.Single(viewModel.Rules);
 
+        Assert.False(viewModel.CanRemoveSelected);
+        Assert.Contains("Confirm removal", viewModel.RemovalEligibilityMessage, StringComparison.Ordinal);
         await viewModel.RemoveSelectedAsync();
-        Assert.False(management.LastRemove!.Confirmed);
-        Assert.Equal(rule.Identity, management.LastRemove.SelectedIdentity);
+        Assert.Equal(0, management.RemoveCalls);
 
         viewModel.IsRemoveConfirmed = true;
+
+        Assert.True(viewModel.CanRemoveSelected);
+        Assert.Empty(viewModel.RemovalEligibilityMessage);
         await viewModel.RemoveSelectedAsync();
-        Assert.True(management.LastRemove!.Confirmed);
-        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
-        Assert.Equal("active-ssh-opaque", viewModel.OperationId);
-        Assert.DoesNotContain(rule.Identity.Value, viewModel.Status, StringComparison.Ordinal);
+
+        Assert.Equal(1, management.RemoveCalls);
+        Assert.Equal(rule.Identity, management.LastRemove!.SelectedIdentity);
+        Assert.True(management.LastRemove.Confirmed);
+        Assert.Equal(FirewallScreenState.Ready, viewModel.State);
     }
 
     [Fact]
@@ -200,6 +262,7 @@ public sealed class FirewallViewModelTests
     {
         public int RefreshCalls { get; private set; }
         public int AddCalls { get; private set; }
+        public int RemoveCalls { get; private set; }
         public UfwAllowRuleInput? LastAdd { get; private set; }
         public UfwRuleRemovalIntent? LastRemove { get; private set; }
         public bool LastEnableConfirmation { get; private set; }
@@ -223,6 +286,7 @@ public sealed class FirewallViewModelTests
 
         public Task<FirewallOperationResult> RemoveAsync(IRemoteTransport transport, UfwRuleRemovalIntent intent, CancellationToken cancellationToken = default)
         {
+            RemoveCalls++;
             LastRemove = intent;
             return Task.FromResult(RemoveResult);
         }
@@ -237,6 +301,18 @@ public sealed class FirewallViewModelTests
         {
             LastDisableConfirmation = confirmed;
             return Task.FromResult(new FirewallOperationResult(OperationResult.Success("disable-opaque"), UfwSnapshot.StateOnly(UfwFirewallState.Inactive)));
+        }
+    }
+
+    private sealed class RecordingDiagnosticSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+        public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Events.Add(diagnosticEvent);
+            return Task.CompletedTask;
         }
     }
 

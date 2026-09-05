@@ -90,7 +90,8 @@
               <Button Click="AddFirewallRuleAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Add verified allow rule" />
               <TextBlock FontWeight="SemiBold" Text="Risky actions" />
               <CheckBox IsChecked="{Binding Firewall.IsRemoveConfirmed, Mode=TwoWay}" Content="I confirm removal of the selected current rule." />
-              <Button Click="RemoveFirewallRuleAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Remove selected rule" />
+              <TextBlock AutomationProperties.Name="Firewall removal eligibility" Text="{Binding Firewall.RemovalEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="RemoveFirewallRuleAsync" IsEnabled="{Binding Firewall.CanRemoveSelected}" Content="Remove selected rule" />
               <CheckBox IsChecked="{Binding Firewall.IsEnableConfirmed, Mode=TwoWay}" Content="I confirm enabling the firewall after its SSH access plan is verified." />
               <Button Click="EnableFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Enable firewall" />
               <CheckBox IsChecked="{Binding Firewall.IsDisableConfirmed, Mode=TwoWay}" Content="I confirm disabling the firewall." />
