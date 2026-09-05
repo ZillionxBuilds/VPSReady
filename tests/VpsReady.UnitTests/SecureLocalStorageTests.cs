@@ -96,6 +96,70 @@ public sealed class SecureLocalStorageTests
         }
     }
 
+    [Fact]
+    public void PlatformPathsFallBackFromRelativeXdgOverridesAndAcceptAbsoluteOverrides()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var relativeOverrides = new SystemPlatformPaths(new PlatformPathInputs(
+                LocalPlatform.Linux,
+                root,
+                Path.Combine(root, "local-app"),
+                Path.Combine(root, "app-data"),
+                "relative-state",
+                "relative-config"));
+
+            Assert.Equal(Path.Combine(root, ".local", "state", "vpsready"), relativeOverrides.GetDirectory(LocalStorageArea.State));
+            Assert.Equal(Path.Combine(root, ".config", "vpsready"), relativeOverrides.GetDirectory(LocalStorageArea.Configuration));
+
+            var absoluteState = Path.Combine(root, "absolute-state");
+            var absoluteConfig = Path.Combine(root, "absolute-config");
+            var absoluteOverrides = new SystemPlatformPaths(new PlatformPathInputs(
+                LocalPlatform.Linux,
+                root,
+                Path.Combine(root, "local-app"),
+                Path.Combine(root, "app-data"),
+                absoluteState,
+                absoluteConfig));
+
+            Assert.Equal(Path.Combine(absoluteState, "vpsready"), absoluteOverrides.GetDirectory(LocalStorageArea.State));
+            Assert.Equal(Path.Combine(absoluteConfig, "vpsready"), absoluteOverrides.GetDirectory(LocalStorageArea.Configuration));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WriteRejectsExistingSymlinkIntermediateWithoutCreatingOutsideRoot()
+    {
+        var root = CreateTemporaryDirectory();
+        var outside = CreateTemporaryDirectory();
+        try
+        {
+            var storage = new SecureLocalStorage(new FixedPlatformPaths(root), new AtomicFileStore());
+            var stateRoot = storage.GetDirectory(LocalStorageArea.State);
+            Directory.CreateDirectory(stateRoot);
+            Directory.CreateSymbolicLink(Path.Combine(stateRoot, "runs"), outside);
+
+            var exception = await Assert.ThrowsAsync<IOException>(() => storage.WriteAsync(
+                LocalStorageArea.State,
+                "runs/escape.json",
+                new byte[] { 1, 2, 3 },
+                new AtomicWriteOptions(),
+                CancellationToken.None));
+            Assert.Contains("symbolic link", exception.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(File.Exists(Path.Combine(outside, "escape.json")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     private static string CreateTemporaryDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), "VpsReady.Tests", Guid.NewGuid().ToString("N"));

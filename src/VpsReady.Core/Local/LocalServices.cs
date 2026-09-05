@@ -36,10 +36,22 @@ public sealed record RetentionCleanupResult(int DeletedFileCount, long DeletedBy
 
 public static class LocalPathPolicy
 {
+    public static void ValidateRoot(string rootDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
+        if (!Path.IsPathFullyQualified(rootDirectory))
+        {
+            throw new ArgumentException("A local storage policy root must be absolute.", nameof(rootDirectory));
+        }
+
+        RejectExistingReparsePoints(Path.GetFullPath(rootDirectory), []);
+    }
+
     public static string ResolveUnder(string rootDirectory, string relativePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ValidateRoot(rootDirectory);
 
         if (Path.IsPathRooted(relativePath))
         {
@@ -63,7 +75,42 @@ public static class LocalPathPolicy
             throw new ArgumentException("The resolved local storage path escapes its policy root.", nameof(relativePath));
         }
 
+        RejectExistingReparsePoints(normalizedRoot, segments);
+
         return resolved;
+    }
+
+    private static void RejectExistingReparsePoints(string normalizedRoot, IEnumerable<string> segments)
+    {
+        var current = normalizedRoot;
+        RejectReparsePoint(current);
+        foreach (var segment in segments)
+        {
+            current = Path.Combine(current, segment);
+            RejectReparsePoint(current);
+        }
+    }
+
+    private static void RejectReparsePoint(string path)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return;
+        }
+
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException("A local storage path must not traverse a symbolic link or reparse point.");
+        }
     }
 }
 

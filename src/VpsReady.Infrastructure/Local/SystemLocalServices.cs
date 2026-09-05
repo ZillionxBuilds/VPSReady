@@ -3,32 +3,68 @@ using VpsReady.Core.Local;
 
 namespace VpsReady.Infrastructure.Local;
 
+public enum LocalPlatform
+{
+    Windows,
+    MacOS,
+    Linux
+}
+
+public sealed record PlatformPathInputs(
+    LocalPlatform Platform,
+    string UserProfile,
+    string LocalApplicationData,
+    string ApplicationData,
+    string? XdgStateHome,
+    string? XdgConfigHome);
+
 public sealed class SystemPlatformPaths : IPlatformPaths
 {
+    private readonly PlatformPathInputs inputs;
+
+    public SystemPlatformPaths()
+        : this(new PlatformPathInputs(
+            OperatingSystem.IsWindows() ? LocalPlatform.Windows : OperatingSystem.IsMacOS() ? LocalPlatform.MacOS : LocalPlatform.Linux,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetEnvironmentVariable("XDG_STATE_HOME"),
+            Environment.GetEnvironmentVariable("XDG_CONFIG_HOME")))
+    {
+    }
+
+    public SystemPlatformPaths(PlatformPathInputs inputs)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        this.inputs = inputs;
+    }
+
     public string GetStateDirectory() => GetDirectory(LocalStorageArea.State);
 
     public string GetDirectory(LocalStorageArea area) => area switch
     {
-        LocalStorageArea.State when OperatingSystem.IsWindows() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VPSReady"),
-        LocalStorageArea.Configuration when OperatingSystem.IsWindows() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VPSReady"),
-        LocalStorageArea.Ssh when OperatingSystem.IsWindows() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh"),
-        LocalStorageArea.State when OperatingSystem.IsMacOS() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "VPSReady"),
-        LocalStorageArea.Configuration when OperatingSystem.IsMacOS() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support", "VPSReady"),
-        LocalStorageArea.Ssh when OperatingSystem.IsMacOS() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh"),
-        LocalStorageArea.State => Path.Combine(GetXdgDirectory("XDG_STATE_HOME", ".local", "state"), "vpsready"),
-        LocalStorageArea.Configuration => Path.Combine(GetXdgDirectory("XDG_CONFIG_HOME", ".config"), "vpsready"),
-        LocalStorageArea.Ssh => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh"),
+        LocalStorageArea.State when inputs.Platform == LocalPlatform.Windows => Path.Combine(inputs.LocalApplicationData, "VPSReady"),
+        LocalStorageArea.Configuration when inputs.Platform == LocalPlatform.Windows => Path.Combine(inputs.ApplicationData, "VPSReady"),
+        LocalStorageArea.Ssh when inputs.Platform == LocalPlatform.Windows => Path.Combine(inputs.UserProfile, ".ssh"),
+        LocalStorageArea.State when inputs.Platform == LocalPlatform.MacOS => Path.Combine(inputs.UserProfile, "Library", "Application Support", "VPSReady"),
+        LocalStorageArea.Configuration when inputs.Platform == LocalPlatform.MacOS => Path.Combine(inputs.UserProfile, "Library", "Application Support", "VPSReady"),
+        LocalStorageArea.Ssh when inputs.Platform == LocalPlatform.MacOS => Path.Combine(inputs.UserProfile, ".ssh"),
+        LocalStorageArea.State => Path.Combine(GetXdgDirectory(inputs.XdgStateHome, ".local", "state"), "vpsready"),
+        LocalStorageArea.Configuration => Path.Combine(GetXdgDirectory(inputs.XdgConfigHome, ".config"), "vpsready"),
+        LocalStorageArea.Ssh => Path.Combine(inputs.UserProfile, ".ssh"),
         _ => throw new ArgumentOutOfRangeException(nameof(area), area, "Unknown local storage area.")
     };
 
     public string ResolvePath(LocalStorageArea area, string relativePath) => LocalPathPolicy.ResolveUnder(GetDirectory(area), relativePath);
 
-    private static string GetXdgDirectory(string variable, params string[] fallbackSegments)
+    private string GetXdgDirectory(string? configuredDirectory, params string[] fallbackSegments)
     {
-        var configuredDirectory = Environment.GetEnvironmentVariable(variable);
-        return string.IsNullOrWhiteSpace(configuredDirectory)
-            ? Path.Combine([Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), .. fallbackSegments])
-            : configuredDirectory;
+        if (!string.IsNullOrWhiteSpace(configuredDirectory) && Path.IsPathFullyQualified(configuredDirectory))
+        {
+            return Path.GetFullPath(configuredDirectory);
+        }
+
+        return Path.Combine([inputs.UserProfile, .. fallbackSegments]);
     }
 }
 
@@ -53,7 +89,9 @@ public sealed class SecureLocalStorage(IPlatformPaths platformPaths, ILocalFileS
             throw new InvalidOperationException("Automatic cleanup is not permitted for the user's SSH directory.");
         }
 
-        return fileStore.CleanupAsync(GetDirectory(area), policy, cancellationToken);
+        var directory = GetDirectory(area);
+        LocalPathPolicy.ValidateRoot(directory);
+        return fileStore.CleanupAsync(directory, policy, cancellationToken);
     }
 }
 
