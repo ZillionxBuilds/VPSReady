@@ -1,26 +1,236 @@
+using System.Text.RegularExpressions;
+using VpsReady.Core.Diagnostics;
+
 namespace VpsReady.Core.Remote;
 
 public sealed record RemoteEndpoint(string Host, int Port, string UserName);
 
-public sealed record RemoteCommandId(string Value)
+/// <summary>
+/// A stable, opaque product identifier for a remote command. It is not a shell
+/// command and it must never contain host, account, credential, or key data.
+/// </summary>
+public sealed record RemoteCommandId
 {
+    private static readonly Regex ValidId = new("^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", RegexOptions.CultureInvariant);
+
+    public RemoteCommandId(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !ValidId.IsMatch(value))
+        {
+            throw new ArgumentException("A command ID must be lowercase ASCII-safe text with dot, underscore, or dash separators.", nameof(value));
+        }
+
+        Value = value;
+    }
+
+    public string Value { get; }
+
     public override string ToString() => Value;
 }
 
-public sealed record RemoteCommand(
-    RemoteCommandId Id,
-    string SafeArgumentSummary,
-    TimeSpan Timeout);
-
-public sealed record RemoteCommandResult(
-    int ExitCode,
-    string StandardOutput,
-    string StandardError,
-    TimeSpan Duration)
+/// <summary>
+/// The catalog is the only source for production command IDs. Later workflow
+/// cards add constants here; UI code must not derive IDs from display strings.
+/// Scenario-only IDs remain owned by the test project and are rejected loudly
+/// by its deterministic host when unsupported.
+/// </summary>
+public static class RemoteCommandCatalog
 {
+    public const string SshConnectionTest = DiagnosticCommandCatalog.SshConnectionTest;
+
+    private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
+    {
+        SshConnectionTest,
+    };
+
+    public static bool IsKnown(string commandId) => Known.Contains(commandId);
+
+    public static RemoteCommandId RequireKnown(string commandId)
+    {
+        if (!IsKnown(commandId))
+        {
+            throw new ArgumentOutOfRangeException(nameof(commandId), commandId, "The command ID is not in the production catalog.");
+        }
+
+        return new RemoteCommandId(commandId);
+    }
+}
+
+/// <summary>
+/// Builds deterministic, safe-to-log command metadata. This is deliberately
+/// not a shell-command builder: concrete Ubuntu command composition belongs to
+/// future adapters and no raw command text crosses into UI or diagnostics.
+/// </summary>
+public static class RemoteCommandArguments
+{
+    private static readonly Regex ValidName = new("^[a-z][a-z0-9_]*$", RegexOptions.CultureInvariant);
+    private static readonly Regex SensitiveName = new("password|passphrase|private_?key|token|secret|credential|authorization", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    public static string FormatSafeSummary(IEnumerable<KeyValuePair<string, string>> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        var values = arguments
+            .Select(argument => (Name: ValidateName(argument.Key), Value: ValidateSummaryValue(argument.Value)))
+            .OrderBy(argument => argument.Name, StringComparer.Ordinal)
+            .ToArray();
+
+        if (values.Select(argument => argument.Name).Distinct(StringComparer.Ordinal).Count() != values.Length)
+        {
+            throw new ArgumentException("A command argument name may appear only once.", nameof(arguments));
+        }
+
+        return string.Join(' ', values.Select(argument => $"{argument.Name}={argument.Value}"));
+    }
+
+    /// <summary>
+    /// Quotes one validated value for a future POSIX adapter. The value is not
+    /// diagnostic metadata and must not be copied into an issue, Activity, or
+    /// journal. Controls are rejected instead of being normalized.
+    /// </summary>
+    public static string QuotePosixArgument(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        if (value.Any(char.IsControl))
+        {
+            throw new ArgumentException("A shell argument cannot contain control characters.", nameof(value));
+        }
+
+        return $"'{value.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+    }
+
+    private static string ValidateName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || !ValidName.IsMatch(name) || SensitiveName.IsMatch(name))
+        {
+            throw new ArgumentException("Command argument names must be non-sensitive lowercase metadata names.", nameof(name));
+        }
+
+        return name;
+    }
+
+    private static string ValidateSummaryValue(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        if (value.Any(character => char.IsControl(character) || char.IsWhiteSpace(character))
+            || value.Contains("-----BEGIN", StringComparison.Ordinal)
+            || value.Length > 256)
+        {
+            throw new ArgumentException("A command argument summary value must be compact, non-sensitive metadata.", nameof(value));
+        }
+
+        return value;
+    }
+}
+
+/// <summary>
+/// One execution request. Cancellation is intentionally supplied only to
+/// <see cref="IRemoteTransport.ExecuteAsync"/> so it remains a live control
+/// signal and is never retained or serialized with command metadata.
+/// </summary>
+public sealed record RemoteCommand
+{
+    public RemoteCommand(
+        RemoteCommandId id,
+        string safeArgumentSummary,
+        TimeSpan timeout,
+        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        if (timeout <= TimeSpan.Zero || timeout == System.Threading.Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeout), "A finite positive command timeout is required.");
+        }
+
+        ValidateExistingSummary(safeArgumentSummary);
+        if (!Enum.IsDefined(outputCapturePolicy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(outputCapturePolicy));
+        }
+
+        Id = id;
+        SafeArgumentSummary = safeArgumentSummary;
+        Timeout = timeout;
+        OutputCapturePolicy = outputCapturePolicy;
+    }
+
+    public RemoteCommandId Id { get; }
+
+    public string SafeArgumentSummary { get; }
+
+    public TimeSpan Timeout { get; }
+
+    public OutputCapturePolicy OutputCapturePolicy { get; }
+
+    public static RemoteCommand Create(
+        RemoteCommandId id,
+        IEnumerable<KeyValuePair<string, string>> arguments,
+        TimeSpan timeout,
+        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly) =>
+        new(id, RemoteCommandArguments.FormatSafeSummary(arguments), timeout, outputCapturePolicy);
+
+    private static void ValidateExistingSummary(string safeArgumentSummary)
+    {
+        ArgumentNullException.ThrowIfNull(safeArgumentSummary);
+        if (safeArgumentSummary.Any(char.IsControl)
+            || safeArgumentSummary.Contains("-----BEGIN", StringComparison.Ordinal)
+            || Regex.IsMatch(safeArgumentSummary, "\\b(password|passphrase|private[_ -]?key|token|secret|credential|authorization)\\s*=", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            throw new ArgumentException("A command summary may contain only safe metadata and no credentials or key material.", nameof(safeArgumentSummary));
+        }
+    }
+}
+
+/// <summary>
+/// Transport-level result only. A zero exit code means the command completed;
+/// it never proves that a user operation succeeded. Mutating workflows must
+/// perform their explicit verification step before creating OperationResult.Success.
+/// </summary>
+public sealed record RemoteCommandResult
+{
+    public RemoteCommandResult(
+        int exitCode,
+        string standardOutput,
+        string standardError,
+        TimeSpan duration,
+        OutputCapturePolicy outputCapturePolicy = OutputCapturePolicy.MetadataOnly)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(exitCode);
+
+        ArgumentNullException.ThrowIfNull(standardOutput);
+        ArgumentNullException.ThrowIfNull(standardError);
+        ArgumentOutOfRangeException.ThrowIfLessThan(duration, TimeSpan.Zero);
+
+        if (!Enum.IsDefined(outputCapturePolicy))
+        {
+            throw new ArgumentOutOfRangeException(nameof(outputCapturePolicy));
+        }
+
+        ExitCode = exitCode;
+        StandardOutput = standardOutput;
+        StandardError = standardError;
+        Duration = duration;
+        OutputCapturePolicy = outputCapturePolicy;
+    }
+
+    public int ExitCode { get; }
+
+    public string StandardOutput { get; }
+
+    public string StandardError { get; }
+
+    public TimeSpan Duration { get; }
+
+    public OutputCapturePolicy OutputCapturePolicy { get; }
+
     public bool Succeeded => ExitCode == 0;
 }
 
+/// <summary>
+/// Focused transport boundary. Implementations must honour the finite timeout
+/// carried by the request and observe the caller's cancellation token; neither
+/// a cancellation nor a timeout may be converted into a successful result.
+/// </summary>
 public interface IRemoteTransport : IAsyncDisposable
 {
     Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken);
