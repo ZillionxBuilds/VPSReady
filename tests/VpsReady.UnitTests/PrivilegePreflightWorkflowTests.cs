@@ -8,6 +8,12 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class PrivilegePreflightWorkflowTests
 {
+    [Fact]
+    public void EveryPrivilegePreflightErrorCodeIsKnownToTheCentralDiagnosticCatalog()
+    {
+        Assert.All(PrivilegePreflightErrorCatalog.All, code => Assert.True(DiagnosticErrorCatalog.IsKnown(code), code));
+    }
+
     [Theory]
     [InlineData("root=true\nsudo=not_required", true, SudoCapability.NotRequired)]
     [InlineData("root=false\nsudo=available", false, SudoCapability.Available)]

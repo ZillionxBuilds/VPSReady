@@ -229,6 +229,7 @@ public static class DiagnosticErrorCatalog
         .Concat(ExistingSshKeySelectionErrorCatalog.All)
         .Concat(KeyAuthenticationVerificationErrorCatalog.All)
         .Concat(OpenSshConfigEditErrorCatalog.All)
+        .Concat(PrivilegePreflightErrorCatalog.All)
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

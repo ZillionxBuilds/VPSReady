@@ -13,6 +13,9 @@ public static class PrivilegePreflightErrorCatalog
     public const string Cancelled = "PRIVILEGE_PREFLIGHT_CANCELLED";
     public const string Timeout = "PRIVILEGE_PREFLIGHT_TIMEOUT";
     public const string Unexpected = "PRIVILEGE_PREFLIGHT_UNEXPECTED_FAILED";
+
+    public static IReadOnlyCollection<string> All { get; } =
+    [Unavailable, Unknown, Command, Cancelled, Timeout, Unexpected];
 }
 
 /// <summary>
