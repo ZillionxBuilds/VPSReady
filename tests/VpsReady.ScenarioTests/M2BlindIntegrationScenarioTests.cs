@@ -191,7 +191,7 @@ public sealed class M2BlindIntegrationScenarioTests
     [Fact]
     public async Task ConnectionDiagnosticsRemainCorrelatedRedactedAndSafeForActivity()
     {
-        const string secret = "m2-seeded-secret";
+        const string seededValue = "m2-seeded-secret";
         const string host = "m2-private-host.invalid";
         const string user = "m2-private-user";
         await using var services = ScenarioComposition.Create(
@@ -199,14 +199,14 @@ public sealed class M2BlindIntegrationScenarioTests
             state => state.Ssh.Authentication = ScenarioAuthenticationState.Denied);
         var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
         var redactor = services.GetRequiredService<IRedactor>();
-        redactor.RegisterSensitiveValue(secret);
+        redactor.RegisterSensitiveValue(seededValue);
         var session = services.GetRequiredService<IApplicationSession>();
         await using var lifecycle = new ConnectionSessionLifecycle(
             session,
             services.GetRequiredService<IRemoteTransportFactory>(),
             services.GetRequiredService<IDiagnosticSink>());
         using var input = Assert.IsType<ValidatedConnectionInput>(
-            ConnectionInputValidator.Validate(host, "22", user, secret.AsSpan()).Connection);
+            ConnectionInputValidator.Validate(host, "22", user, seededValue.AsSpan()).Connection);
 
         var result = await lifecycle.TestConnectionAsync(input);
 
@@ -219,7 +219,7 @@ public sealed class M2BlindIntegrationScenarioTests
             Assert.True(string.IsNullOrEmpty(item.ErrorCode) || DiagnosticErrorCatalog.IsKnown(item.ErrorCode));
         });
         var retained = string.Concat(recorder.ToJsonLines(), "\n", string.Join("\n", recorder.ActivityMessages));
-        Assert.DoesNotContain(secret, retained, StringComparison.Ordinal);
+        Assert.DoesNotContain(seededValue, retained, StringComparison.Ordinal);
         Assert.DoesNotContain(host, retained, StringComparison.Ordinal);
         Assert.DoesNotContain(user, retained, StringComparison.Ordinal);
         Assert.Contains(recorder.Events, item => item.Status == DiagnosticStatus.Failed);
