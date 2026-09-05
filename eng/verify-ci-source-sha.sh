@@ -26,9 +26,9 @@ require_text "PR_BASE_REF: \${{ github.event.pull_request.base.ref || '' }}"
 require_text "PUSH_SHA: \${{ github.event_name == 'push' && github.sha || '' }}"
 require_text 'uses: ./.github/actions/prepare-prospective-validation'
 
-checkout_source_references="$(grep -F -c 'ref: ${{ env.SOURCE_SHA }}' "$workflow" || true)"
-if [[ "$checkout_source_references" != '4' ]]; then
-  printf 'CI prospective-validation policy expected four source checkouts, found %s.\n' "$checkout_source_references" >&2
+workflow_bootstrap_references="$(grep -F -c 'ref: ${{ github.workflow_sha }}' "$workflow" || true)"
+if [[ "$workflow_bootstrap_references" != '4' ]]; then
+  printf 'CI prospective-validation policy expected four workflow-SHA bootstrap checkouts, found %s.\n' "$workflow_bootstrap_references" >&2
   exit 1
 fi
 

@@ -51,6 +51,7 @@ runs:
         if [[ "$EVENT_NAME" == 'pull_request' ]]; then
           test -n "$PR_BASE_REF"
           git fetch --no-tags origin "$PR_BASE_REF"
+          git fetch --no-tags origin "$PR_HEAD_SHA"
           if [[ -n "$PROVIDED_VALIDATION_BASE_SHA" ]]; then
             git rev-parse --verify "${PROVIDED_VALIDATION_BASE_SHA}^{commit}" >/dev/null
             VALIDATION_BASE_SHA="$PROVIDED_VALIDATION_BASE_SHA"
@@ -68,6 +69,7 @@ runs:
             git commit --no-gpg-sign --no-verify -m "VPSReady CI prospective merge $PR_HEAD_SHA into $VALIDATION_BASE_SHA"
           VALIDATION_SHA="$(git rev-parse HEAD)"
         else
+          git fetch --no-tags origin "$SOURCE_SHA"
           git checkout --detach "$SOURCE_SHA"
           VALIDATION_BASE_SHA="$PR_BASE_SHA"
           VALIDATION_SHA="$(git rev-parse HEAD)"
