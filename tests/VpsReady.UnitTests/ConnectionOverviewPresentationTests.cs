@@ -1,10 +1,28 @@
 using VpsReady.Application;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
 
 namespace VpsReady.UnitTests;
 
 [Trait("Category", "E1")]
 public sealed class ConnectionOverviewPresentationTests
 {
+    [Fact]
+    public async Task ConnectionOverviewViewModelMapsTestingTrustFailureConnectedAndUnknownWithoutExposingIdentity()
+    {
+        var session = new ApplicationSession();
+        var lifecycle = new FakeLifecycle(OperationResult.Failure("op_opaque", OperationErrorCode.HostTrust));
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session);
+        viewModel.AppendSecretCharacter('a');
+        lifecycle.Publish("op_opaque", ConnectionTestProgressState.Connecting);
+        Assert.Equal(ConnectionScreenState.Testing, viewModel.State);
+
+        await viewModel.TestAsync("safe.example", "22", "user", TimeSpan.FromSeconds(1));
+        Assert.Equal(ConnectionScreenState.TrustRequired, viewModel.State);
+        Assert.Equal(ConnectionScreenState.Unknown, viewModel.OverviewState);
+        Assert.Equal("op_opaque", viewModel.OperationId);
+        Assert.DoesNotContain("safe.example", viewModel.Status, StringComparison.Ordinal);
+    }
     [Fact]
     public void ConnectionSecretInputTransfersTypedCharactersAndClearsThePresentationBuffer()
     {
@@ -32,5 +50,13 @@ public sealed class ConnectionOverviewPresentationTests
     {
         Assert.NotEqual(ConnectionScreenState.TrustRequired, ConnectionScreenState.Failed);
         Assert.NotEqual(ConnectionScreenState.Unknown, ConnectionScreenState.Connected);
+    }
+
+    private sealed class FakeLifecycle(OperationResult result) : IConnectionSessionLifecycle
+    {
+        public event EventHandler<ConnectionTestProgress>? ProgressChanged;
+        public Task<ConnectionTestResult> TestConnectionAsync(ValidatedConnectionInput input, CancellationToken cancellationToken = default) => Task.FromResult(new ConnectionTestResult(result.OperationId, result, false));
+        public Task DisconnectAsync() => Task.CompletedTask;
+        public void Publish(string operationId, ConnectionTestProgressState state) => ProgressChanged?.Invoke(this, new ConnectionTestProgress(operationId, state));
     }
 }
