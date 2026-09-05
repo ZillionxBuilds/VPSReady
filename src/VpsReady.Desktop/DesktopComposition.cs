@@ -36,6 +36,7 @@ public static class DesktopComposition
         services.AddSingleton<ISanitizedDiagnosticSink>(provider => provider.GetRequiredService<OperationJournalWorkspace>());
         services.AddSingleton<IDiagnosticsWorkspace>(provider => provider.GetRequiredService<OperationJournalWorkspace>());
         services.AddSingleton<IDiagnosticSink, RedactingDiagnosticSink>();
+        services.AddSingleton<ILocalEd25519KeyGenerator, Ed25519OpenSshKeyPairGenerator>();
         services.AddSingleton<SafeUnhandledExceptionReporter>();
         services.AddSingleton<IRemoteTransportFactory, SshNetRemoteTransportFactory>();
         services.AddSingleton<IConnectionSessionLifecycle, ConnectionSessionLifecycle>();
