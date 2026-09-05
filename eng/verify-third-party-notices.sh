@@ -6,9 +6,33 @@ set -euo pipefail
 lock=''
 notice=''
 inventory=''
+self_test='false'
+
+strip_trailing_cr() {
+  printf '%s' "${1%$'\r'}"
+}
+
+assert_windows_tsv_normalization() {
+  local fixture=$'Avalonia\t11.3.20\tlocked-content-hash\r'
+  local id version content_hash
+  IFS=$'\t' read -r id version content_hash <<< "$fixture"
+  id="$(strip_trailing_cr "$id")"
+  version="$(strip_trailing_cr "$version")"
+  content_hash="$(strip_trailing_cr "$content_hash")"
+  [[ "$id" == 'Avalonia' && "$version" == '11.3.20' && "$content_hash" == 'locked-content-hash' ]] || {
+    printf '%s\n' 'Windows-compatible TSV normalization self-check failed.' >&2
+    exit 1
+  }
+}
+
+assert_windows_tsv_normalization
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
+    --self-test)
+      self_test='true'
+      shift
+      ;;
     --lock)
       lock="${2:-}"
       shift 2
@@ -27,6 +51,11 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$self_test" == 'true' ]]; then
+  printf '%s\n' 'Third-party notice verifier self-test passed: CRLF TSV fields normalize before exact-lock comparison.'
+  exit 0
+fi
 
 [[ -n "$lock" && -f "$lock" ]] || { printf '%s\n' 'Missing exact runtime lock.' >&2; exit 1; }
 [[ -n "$notice" && -f "$notice" ]] || { printf '%s\n' 'Missing generated third-party notice.' >&2; exit 1; }
@@ -48,18 +77,24 @@ expected_count="$(jq -r '
    | [.key, .value.resolved, .value.contentHash]
    | @tsv] | unique | length' "$lock")"
 actual_count="$(jq -r '.runtime_package_count' "$inventory")"
+expected_count="$(strip_trailing_cr "$expected_count")"
+actual_count="$(strip_trailing_cr "$actual_count")"
 [[ "$expected_count" -gt 0 && "$actual_count" == "$expected_count" ]] || {
   printf 'Generated runtime notice count mismatch: expected %s, found %s\n' "$expected_count" "$actual_count" >&2
   exit 1
 }
 
 source_lock="$(jq -r '.source_lock' "$inventory")"
+source_lock="$(strip_trailing_cr "$source_lock")"
 [[ "$source_lock" == 'src/VpsReady.Desktop/packages.lock.json' ]] || {
   printf '%s\n' 'Generated inventory has an unexpected source-lock reference.' >&2
   exit 1
 }
 
 while IFS=$'\t' read -r id version content_hash; do
+  id="$(strip_trailing_cr "$id")"
+  version="$(strip_trailing_cr "$version")"
+  content_hash="$(strip_trailing_cr "$content_hash")"
   [[ -n "$id" ]] || continue
   jq -e --arg id "$id" --arg version "$version" --arg hash "$content_hash" \
     'any(.runtime_packages[]; .id == $id and .version == $version and .content_hash == $hash)' \
