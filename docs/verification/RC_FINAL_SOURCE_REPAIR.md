@@ -1,5 +1,11 @@
 # RC final source repair — #149
 
+> **Release-specific historical record.** This document is mirrored on
+> development for traceability; it does not claim the repair is implemented
+> there. Source paths and reproduction commands refer to the named release
+> repair checkout. Read [branch scope and current status](../PROJECT_STATUS.md) and
+> the #149 Workpad before resuming; older progress notes are not current readiness.
+
 This is solo-engineer repair evidence, not independent QA or release approval.
 Baseline release: `7478be758b673ccdeeceef94d2f92aa82437d083`.
 The canonical [#149 Workpad](https://github.com/ZillionBuilds/VPSReady/issues/149#issuecomment-5556353152)

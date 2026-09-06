@@ -27,6 +27,9 @@ checkout or package. Follow the live Workpads for subsequent changes.
 
 ## Available evidence
 
+The following table is release-source evidence only, not validation of the
+development branch or a documentation synchronization commit.
+
 | Class | Result at the recorded repair revision | Boundary |
 | --- | --- | --- |
 | E0 — static/local checks | PASS on local macOS ARM64 | Release build, analyzers, format and repository checks; no remote proof. |
@@ -51,6 +54,29 @@ archives and their checksums. These are not a stable published release or
 evidence that every desktop platform is ready. An artifact must match its
 own source SHA, manifest, architecture and checksum. Never reuse an older
 package's startup result as validation of a newer package.
+
+## Documentation and branch scope
+
+The shared Markdown documentation is kept synchronized between `release/0.1.0`
+and `development`; this does **not** merge their source code or test results.
+At the 2026-09-06 documentation-sync checkpoint:
+
+- Release includes source repairs R1–R9 through `2c7786b`.
+- Development's source baseline is `0367256`; it does not yet include those
+  release repairs. Documentation commits do not change that implementation.
+- The overview and user guide describe the repaired release candidate. Use the
+  README's explicit release checkout for those instructions. Do not assume the
+  development build has the repaired password-input, UFW, package or file-editing
+  behavior.
+- The gitignore guard and offline UFW probe exist in the release repair tree,
+  not that development baseline. Run their reproduction commands only in the
+  named release checkout; their absence is NOT RUN, not PASS.
+- The shared ExecPlan retains historical development milestone completions.
+  Current readiness remains suspended pending source review and hosted
+  verification; those historical checkmarks do not reapprove the repaired SHA.
+
+Subsequent source synchronization must follow the normal accepted-fix workflow
+and update this dated note. See [documentation synchronization](../CONTRIBUTING.md#keep-documentation-synchronized).
 
 ## Remaining release work
 

@@ -6,6 +6,10 @@ Start with the guide for your task. Product scope, current evidence and
 historical decisions serve different purposes; a past milestone does not
 approve a newer candidate. **REAL VPS: NOT TESTED.**
 
+These documents are synchronized across release and development. Implementation
+and evidence can still differ: read the [branch-scope note](PROJECT_STATUS.md#documentation-and-branch-scope)
+before applying candidate instructions to a development checkout.
+
 ## Use and troubleshoot
 
 | Document | Start here when you need to… |

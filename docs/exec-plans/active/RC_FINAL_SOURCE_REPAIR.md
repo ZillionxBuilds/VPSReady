@@ -1,5 +1,11 @@
 # Final RC source repair — #149
 
+> **Release-specific historical record.** This document is mirrored on
+> development for traceability; it does not claim the repair is implemented
+> there. Source paths and reproduction commands refer to the named release
+> repair checkout. Read [branch scope and current status](../../PROJECT_STATUS.md) and
+> the #149 Workpad before resuming; older progress notes are not current readiness.
+
 Owner requested one engineer to verify and repair R1–R7, with one PR targeting
 `release/0.1.0`. Final authority is external code review, not self-approval.
 

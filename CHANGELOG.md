@@ -12,6 +12,8 @@ stable-release announcement; exact verification belongs to the linked records.
 - Refreshed the English README and added a Thai introduction.
 - Added a documentation hub, contributor guide and dated evidence snapshot.
 - Clarified candidate limitations and navigation without adding runtime evidence.
+- Synchronized shared documentation across release and development, retaining
+  milestone history and explicit branch-specific implementation/evidence limits.
 
 ### 2026-09-06 — Release follow-up, R8/R9
 

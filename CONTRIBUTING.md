@@ -42,7 +42,6 @@ dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration R
 dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build
 dotnet format VpsReady.slnx --verify-no-changes --no-restore
 bash eng/verify-tracked-secrets.sh
-bash eng/verify-gitignore.sh
 bash eng/verify-user-troubleshooting-guide.sh
 git diff --check
 ```
@@ -51,6 +50,10 @@ On Windows, the Bash checks need a compatible Bash environment, such as Git
 Bash or WSL. The complete [quality-check baseline](docs/development/QUALITY_CHECKS.md)
 also includes analyzers and dependency/vulnerability inventory. Do not suppress
 warnings or regenerate lock files merely to make a failing check green.
+
+The repaired release checkout additionally provides
+`bash eng/verify-gitignore.sh`. Run it there; the older development baseline
+does not contain this guard. Missing guard evidence is NOT RUN, never PASS.
 
 Contained protocol checks have additional fixture requirements. Read their
 setup scripts and the [test strategy](docs/testing/TEST_STRATEGY.md) before
@@ -91,6 +94,30 @@ Review sanitized reports before sharing them. Do not post server addresses,
 credentials, private keys, raw terminal transcripts or sensitive exploit
 details in a public issue. For sensitive security reports, arrange a private
 channel with the maintainer before sending confidential details.
+
+## Keep documentation synchronized
+
+Shared root Markdown and `docs/` should stay aligned between `development`
+and the active `release/*` branch. A documentation change is not complete after
+updating only one branch.
+
+1. Link both branch updates to the same issue and preserve newer facts from
+   either branch; do not blindly overwrite the development ExecPlan.
+2. Apply only the reviewed documentation changes on an issue branch from each
+   target. Do not merge an entire release branch merely to copy its README.
+3. Where implementation differs, keep an explicit dated branch/revision note.
+   Candidate behavior, script availability and test results must name their
+   actual source; identical docs do not imply identical binaries.
+4. Check links, guide semantics and documentation rendering on both branches,
+   verify that no non-documentation files changed, and record both PRs/SHAs.
+5. After fetching the remote refs, verify shared documentation parity:
+
+```bash
+git diff --exit-code origin/development origin/release/0.1.0 -- '*.md' docs/
+```
+
+Empty output and exit code 0 mean the checked documentation matches. This is
+E0 documentation evidence only, not a runtime, CI or release-readiness gate.
 
 ## Documentation conventions
 

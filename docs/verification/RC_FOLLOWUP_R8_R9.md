@@ -1,5 +1,11 @@
 # Release follow-up R8/R9 — solo source review, #149
 
+> **Release-specific historical record.** This document is mirrored on
+> development for traceability; it does not claim the repair is implemented
+> there. Source paths and reproduction commands refer to the named release
+> repair checkout. Read [branch scope and current status](../PROJECT_STATUS.md) and
+> the #149 Workpad before resuming; older progress notes are not current readiness.
+
 Baseline: `4da4bffce074649dadd1b3f41a34947338a7600c` on `release/0.1.0`.
 Repair: `fix/149-release-followup`. PR #150 was already merged at claim.
 The latest Owner request explicitly authorizes pushing the completed repair to

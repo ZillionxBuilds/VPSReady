@@ -23,6 +23,11 @@ A local desktop app for SSH access, UFW firewall rules and everyday server setup
 > [current status and evidence](docs/PROJECT_STATUS.md) before testing.
 > **REAL VPS: NOT TESTED.**
 
+This documentation is shared by `release/0.1.0` and `development`. The
+capabilities and user guide below describe the **release source-repair
+baseline**, not a claim that those repairs are already in development.
+See [branch scope](docs/PROJECT_STATUS.md#documentation-and-branch-scope).
+
 ## What is VPSReady?
 
 VPSReady is a C#/.NET application built with Avalonia. It runs locally on

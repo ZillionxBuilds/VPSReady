@@ -1,5 +1,11 @@
 # Release follow-up R8/R9 — #149
 
+> **Release-specific historical record.** This document is mirrored on
+> development for traceability; it does not claim the repair is implemented
+> there. Source paths and reproduction commands refer to the named release
+> repair checkout. Read [branch scope and current status](../../PROJECT_STATUS.md) and
+> the #149 Workpad before resuming; older progress notes are not current readiness.
+
 ## Purpose, authority and boundaries
 
 Continue the solo repair from release SHA

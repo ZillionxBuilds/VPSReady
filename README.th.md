@@ -11,6 +11,11 @@
 > ตรวจ [สถานะและหลักฐาน](docs/PROJECT_STATUS.md) ก่อนใช้งาน
 > **REAL VPS: NOT TESTED.**
 
+เอกสารชุดนี้ใช้ร่วมกันระหว่าง `release/0.1.0` และ `development`
+ความสามารถและคู่มือด้านล่างอ้างอิง **โค้ด repair ฝั่ง release**
+ไม่ได้หมายความว่า dev มีโค้ดแก้ไขนั้นแล้ว
+อ่าน [ขอบเขตของแต่ละ branch](docs/PROJECT_STATUS.md#documentation-and-branch-scope)
+
 ## โปรเจกต์นี้ทำอะไร
 
 VPSReady เป็นแอป C#/.NET และ Avalonia สำหรับ Windows, macOS และ Linux
