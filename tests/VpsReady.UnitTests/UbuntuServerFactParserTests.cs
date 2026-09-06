@@ -11,7 +11,7 @@ public sealed class UbuntuServerFactParserTests
     {
         var uptime = UbuntuServerFactParser.ParseUptime("93600.50 1200.00");
         var memory = UbuntuServerFactParser.ParseMemory("MemTotal:       2097152 kB\nMemAvailable:    1048576 kB");
-        var disk = UbuntuServerFactParser.ParseRootDisk("/dev/vda1 20G 10G 10G 50% /");
+        var disk = UbuntuServerFactParser.ParseRootDisk("/dev/vda1 21474836480 10737418240 10737418240 50% /");
         var privilege = UbuntuServerFactParser.ParsePrivilege("root=false\nsudo=available");
 
         Assert.True(uptime.IsKnown);

@@ -7,6 +7,12 @@ is **NOT READY FOR MAIN**. R10–R14 corrections are on
 `fix/149-pre-main-repair`, targeting `release/0.1.0` through review only.
 No self-merge, main promotion or stable publication is authorized.
 
+The same PR #157 now includes the narrow
+[R15 root-disk byte-contract follow-up](verification/PR157_R15_ROOT_DISK.md).
+External source acceptance of inspected R10–R14 is not runtime QA or permission
+to integrate. R15 handoff target: **PR157 FOLLOW-UP READY FOR EXTERNAL REVIEW**,
+with **HOSTED_OR_PLATFORM_VERIFICATION_PENDING**; target branches stay unchanged.
+
 See [repair dispositions and F01–F10 wiring](verification/PRE_MAIN_R10_R14.md)
 and the [current #149 Workpad](https://github.com/ZillionBuilds/VPSReady/issues/149#issuecomment-5556353152)
 for the exact repair head, PR, final E0–E4 results and archive checksums.

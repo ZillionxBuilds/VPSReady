@@ -10,6 +10,46 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OverviewJourneyRegressionTests
 {
+    [Theory]
+    // Synthetic byte evidence, not reconstructed from rounded human units.
+    [InlineData("/dev/fixture 33822867456 5558272 31997505536 0% /", true)]
+    [InlineData("", false)]
+    [InlineData("/dev/fixture invalid 1 1 0% /", false)]
+    [InlineData("/dev/fixture 10 -1 1 0% /", false)]
+    [InlineData("/dev/fixture 10 1 -1 0% /", false)]
+    [InlineData("/dev/fixture 10 11 0 100% /", false)]
+    [InlineData("/dev/fixture 10 0 11 0% /", false)]
+    [InlineData("/dev/fixture 10 0 1 101% /", false)]
+    [InlineData("/dev/fixture 9223372036854775808 0 0 0% /", false)]
+    [InlineData("/dev/fixture 79228162514264337593543950335P 0 0 0% /", false)]
+    [InlineData("/dev/fixture 31.5G 5.3M 29.8G 0% /", false)]
+    [InlineData("oversized", false)]
+    public async Task RootDiskByteContractPreservesOtherElevenVisibleFacts(string wire, bool known)
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport { DiskOutput = wire == "oversized" ? new string('9', 70000) : wire };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink));
+        await vm.RefreshAsync();
+        Assert.Equal(12, vm.Facts.Count);
+        var disk = Assert.Single(vm.Facts, row => row.Label == "Root disk");
+        Assert.Equal(known, disk.IsKnown);
+        Assert.All(vm.Facts.Where(row => row.Label != "Root disk"), row => Assert.True(row.IsKnown));
+        Assert.Equal(known ? "33822867456 bytes total; 5558272 bytes used (0%); 31997505536 bytes available" : "Unknown", disk.Value);
+        Assert.NotEmpty(sink.Events);
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.Equal(session.Snapshot.SessionId, entry.Correlation.SessionId);
+            Assert.Equal(vm.OperationId, entry.Correlation.OperationId);
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+            Assert.DoesNotContain("/dev/fixture", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("33822867456", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
     [Fact]
     public async Task ProductionRefreshCommandDispatchesReadOnlyFactsInsteadOfPlaceholder()
     {
@@ -132,6 +172,7 @@ public sealed class OverviewJourneyRegressionTests
     {
         public int Calls { get; private set; }
         public string Mode { get; init; } = "valid";
+        public string DiskOutput { get; init; } = "/dev/vda1 10000 1000 9000 10% /";
         public bool Block { get; init; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -152,7 +193,7 @@ public sealed class OverviewJourneyRegressionTests
                 RemoteCommandCatalog.UbuntuPrivilegeRead => "root=false\nsudo=available",
                 RemoteCommandCatalog.UbuntuCpuRead => "processor : 0\nmodel name : Fixture CPU",
                 RemoteCommandCatalog.UbuntuMemoryRead => "MemTotal: 1024 kB\nMemAvailable: 512 kB",
-                RemoteCommandCatalog.UbuntuRootDiskRead => "/dev/vda1 10000 1000 9000 10% /",
+                RemoteCommandCatalog.UbuntuRootDiskRead => DiskOutput,
                 RemoteCommandCatalog.SshSessionPortRead => "22",
                 RemoteCommandCatalog.UbuntuUfwAvailabilityRead => "ufw=available",
                 RemoteCommandCatalog.UbuntuUfwStatusRead => "Status: inactive",

@@ -32,7 +32,7 @@ public static class UbuntuFactCommandCatalog
             + "printf 'root=false\\nsudo=available\\n'; else printf 'root=false\\nsudo=unavailable\\n'; fi"),
         Remote(RemoteCommandCatalog.UbuntuCpuRead, "proc-cpuinfo", "cat /proc/cpuinfo"),
         Remote(RemoteCommandCatalog.UbuntuMemoryRead, "proc-meminfo", "cat /proc/meminfo"),
-        Remote(RemoteCommandCatalog.UbuntuRootDiskRead, "root-filesystem", "findmnt -n -o SOURCE,SIZE,USED,AVAIL,USE%,TARGET /"),
+        Remote(RemoteCommandCatalog.UbuntuRootDiskRead, "root-filesystem", "findmnt --bytes --noheadings --output SOURCE,SIZE,USED,AVAIL,USE%,TARGET --target /"),
         Session(RemoteCommandCatalog.SshSessionPortRead, "server-session-port"),
         Remote(
             RemoteCommandCatalog.UbuntuUfwAvailabilityRead,

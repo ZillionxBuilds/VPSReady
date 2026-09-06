@@ -30,10 +30,23 @@ public static class UbuntuServerFactAggregator
             Parse(RemoteCommandCatalog.UbuntuUfwAvailabilityRead, UbuntuServerFactParser.ParseUfwAvailability),
             Parse(RemoteCommandCatalog.UbuntuUfwStatusRead, UbuntuServerFactParser.ParseUfwStatus));
 
-        ServerFact<T> Parse<T>(string commandId, Func<string, ServerFact<T>> parser) =>
-            commandResults.TryGetValue(commandId, out var result) && result.Succeeded
-                ? parser(result.StandardOutput)
-                : ServerFact.Unknown<T>();
+        ServerFact<T> Parse<T>(string commandId, Func<string, ServerFact<T>> parser)
+        {
+            if (!commandResults.TryGetValue(commandId, out var result) || !result.Succeeded)
+            {
+                return ServerFact.Unknown<T>();
+            }
+
+            try
+            {
+                return parser(result.StandardOutput);
+            }
+            catch (Exception exception) when (exception is ArithmeticException or FormatException)
+            {
+                // Untrusted numeric evidence must not erase other successful facts.
+                return ServerFact.Unknown<T>();
+            }
+        }
     }
 
     private static ServerFact<int> ParseSessionPort(IReadOnlyDictionary<string, RemoteCommandResult> results) =>

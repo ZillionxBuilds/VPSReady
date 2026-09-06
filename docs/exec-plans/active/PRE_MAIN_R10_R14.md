@@ -1,5 +1,17 @@
 # Pre-main source repair R10–R14 — #149
 
+## Narrow PR #157 follow-up — R15
+
+External source review accepted inspected R10–R14 corrections, not runtime QA
+or promotion. Continue solo on the same issue/branch/PR. Correct only the
+root-disk producer/parser contract, preserve all prior regressions, rerun local
+E0/E1/E2, create fresh exact-head available E4, and retry ordinary hosted
+dispatch once. No direct release/main push, merge or stable publication.
+See [R15 cause, RED/GREEN and verification boundaries](../../verification/PR157_R15_ROOT_DISK.md).
+Post-commit exact-head evidence remains in the canonical #149/#1/#20 Workpads.
+Handoff: PR157 FOLLOW-UP READY FOR EXTERNAL REVIEW, with hosted/platform gates
+pending; NOT READY FOR MAIN; REAL VPS: NOT TESTED.
+
 ## Purpose and outcome
 
 Address the Owner's external NOT READY FOR MAIN review as the existing solo

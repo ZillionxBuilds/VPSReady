@@ -187,7 +187,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuPrivilegeRead => PrivilegeFacts(),
             RemoteCommandCatalog.UbuntuCpuRead => Result("processor\t: 0\nmodel name\t: Scenario CPU\n\nprocessor\t: 1\nmodel name\t: Scenario CPU"),
             RemoteCommandCatalog.UbuntuMemoryRead => Result("MemTotal:       2097152 kB\nMemAvailable:    1048576 kB"),
-            RemoteCommandCatalog.UbuntuRootDiskRead => Result("/dev/vda1 20G 10G 10G 50% /"),
+            RemoteCommandCatalog.UbuntuRootDiskRead => Result("/dev/vda1 21474836480 10737418240 10737418240 50% /"),
             RemoteCommandCatalog.SshSessionPortRead => Result(State.Ssh.ActiveSshPort.ToString(CultureInfo.InvariantCulture)),
             RemoteCommandCatalog.UbuntuUfwAvailabilityRead => Result($"ufw={(State.Ufw.Status == ScenarioUfwStatus.Absent ? "unavailable" : "available")}"),
             RemoteCommandCatalog.UbuntuUfwStatusRead => FactUfwStatus(),
