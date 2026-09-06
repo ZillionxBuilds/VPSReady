@@ -1,5 +1,7 @@
 # Repository Quality Checks
 
+[Project home](../../README.md) · [Documentation](../README.md) · [Contributing](../../CONTRIBUTING.md)
+
 This is the reproducible E0 baseline for VPSReady development and CI. It
 checks only the local repository and NuGet package metadata; it requires no VPS
 endpoint, provider console, credential, or secret. It is not E5 evidence.
@@ -21,9 +23,17 @@ endpoint, provider console, credential, or secret. It is not E5 evidence.
   mode.
 - `.editorconfig` is the repository formatting policy. Verification never
   rewrites files.
-- `.gitignore` protects generated output and local state. Reviewed, sanitized
-  golden transcripts and deterministic fixtures in dedicated `tests/**/fixtures`,
-  `golden`, or `scenarios` paths are deliberately not ignored.
+- In the repaired release checkout, `.gitignore` protects generated output and
+  local state. Ordinary reviewed,
+  sanitized golden transcripts and deterministic fixtures remain trackable.
+  Secret and private-key patterns still apply inside fixture, golden and
+  scenario directories; there is no blanket fixture exception.
+
+The older development source baseline still has the pre-repair ignore policy.
+Documentation synchronization does not repair that file or import release-only
+scripts. See [branch scope](../PROJECT_STATUS.md#documentation-and-branch-scope).
+Do not rely on ignore patterns alone to protect secrets; inspect staged files
+and run the tracked-secret scan on either branch.
 
 Do not add a package version to an individual project file. Do not add a
 warning suppression or a lock-file update without explaining it in the linked
@@ -43,6 +53,10 @@ dotnet list VpsReady.slnx package --include-transitive
 dotnet list VpsReady.slnx package --vulnerable --include-transitive
 bash eng/verify-tracked-secrets.sh
 ```
+
+On the repaired release checkout, also run `bash eng/verify-gitignore.sh`.
+That guard is unavailable on the older development baseline; record it as
+NOT RUN there rather than claiming equivalent ignore-policy verification.
 
 `dotnet restore` performs the enforced NuGet audit at low-or-higher severity;
 the vulnerable package listing is retained as a human-readable inventory. A
