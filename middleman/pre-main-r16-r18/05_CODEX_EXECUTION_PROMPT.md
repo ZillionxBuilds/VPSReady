@@ -1,6 +1,6 @@
 # Codex execution prompt - solo R16-R18 repair
 
-Use the following instruction in the existing solo-engineer chat or a new solo chat opened on the VPSReady repository. The middleman packet lives on development; read it without resetting/changing the active product workspace.
+Use the following instruction in the existing solo-engineer chat or a new solo chat opened on the VPSReady repository. Intended packet destination is development; while its documentation PR is pending, use docs/149-middleman-r16-r18. Read without resetting/changing the active product workspace.
 
 ```text
 You are the SOLO engineer continuing VPSReady v0.1 release corrections.
@@ -8,14 +8,18 @@ Work alone. Do not spawn subagents or become the previous Orchestrator.
 Do not call self-review independent QA/Principal approval.
 
 Repository: ZillionBuilds/VPSReady
-Instruction packet: middleman/pre-main-r16-r18 on development.
+Instruction packet: middleman/pre-main-r16-r18.
+Intended documentation destination: development.
+Documentation delivery branch while its PR is pending:
+docs/149-middleman-r16-r18.
 Read the packet from one pinned documentation commit. Record that SHA.
 
-First inspect git status/worktrees and fetch origin development and
-release/0.1.0 without discarding work. If this folder is absent in your
-current branch, read it with git show <handoff-sha>:<path>. Do not switch
-or reset a dirty workspace and do not merge development into release
-just to obtain instructions.
+First inspect git status/worktrees and fetch the documentation source plus
+origin development and release/0.1.0 without discarding work. If this folder
+is absent in your current branch, read with git show <handoff-sha>:<path>.
+Do not switch/reset a dirty workspace or merge development into release
+just to obtain instructions. A pending documentation PR does not block
+reading the packet from its published delivery branch.
 
 Read 00_START_HERE.md, 01_R16_INPUT_PLAN_FRESHNESS.md,
 02_R17_FIREWALL_SESSION_FRESHNESS.md, 03_R18_MAIN_CI_GATE.md,
@@ -31,9 +35,10 @@ before dispatch/editing. PR #157 was already included in release; use a
 new or equivalent existing follow-up PR, not that closed review vehicle.
 #156 is the main promotion proposal, not merge authorization.
 
-Create/reuse one tracked isolated follow-up workspace/branch from the
-CURRENT release, not the older development product code. Preserve R1-R15.
+Create/reuse one tracked isolated product follow-up workspace/branch from
+the CURRENT release, not the older development product code. Preserve R1-R15.
 Do not duplicate active repairs or take over a healthy worker.
+Keep the product follow-up PR separate from the documentation delivery PR.
 
 Reproduce and narrowly correct:
 R16: bind hostname/timezone input revision, plan, confirmation and session;

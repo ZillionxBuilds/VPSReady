@@ -12,7 +12,8 @@ Repository: `ZillionBuilds/VPSReady`.
 
 | Reference | Observed value | Meaning |
 | --- | --- | --- |
-| Instruction branch | `development` | Owner-selected storage for this packet |
+| Intended instruction destination | `development` | Owner-selected destination; documentation PR must pass its rules |
+| Delivery branch before merge | `docs/149-middleman-r16-r18` | Read this branch while the documentation PR is pending |
 | Development before packet | `0367256e730473189b4e580336abe7f9e0db5563` | Documentation parent, not the repair base |
 | Reviewed and rechecked release | `1d76dbe11a271affa4f350008316ef5e444db60a` | Product source reviewed for R16-R18 |
 | Repair parent | [#149](https://github.com/ZillionBuilds/VPSReady/issues/149) | Reuse canonical Workpad; search before creating children |
@@ -39,12 +40,12 @@ Also read current repository governance: `AGENTS.md`, `PLANS.md`, the approved v
 
 ## Branch separation is mandatory
 
-The handoff is stored on development because the Owner requested it there. It does NOT instruct you to repair the older development implementation.
+The intended documentation home is development. Its required check blocked direct placement, so the packet is published on the documentation delivery branch through a PR. This documentation gate does not prevent reading and using the packet. It does NOT instruct you to repair the older development implementation.
 
-- Pin the documentation commit used for this packet.
+- Pin the documentation commit used for this packet; read from the delivery branch while its PR is pending, or development after a verified merge.
 - Fetch the current release and inspect active workspaces before changing files.
 - Create or reuse an isolated `fix/<issue>-state-and-main-gate` branch from the current release.
-- Use one follow-up PR targeting `release/0.1.0`; separate logical commits for R16, R17 and R18.
+- Use one product follow-up PR targeting `release/0.1.0`; separate logical commits for R16, R17 and R18. This is distinct from the documentation PR targeting development.
 - Do not reset/clean someone else's work, overwrite a healthy worker or force-push.
 - Do not merge development into release just to read middleman files. `git show <handoff-sha>:<path>` is sufficient.
 - Synchronization to development after accepted release repairs is separate tracked work; it is not implicitly authorized here.
