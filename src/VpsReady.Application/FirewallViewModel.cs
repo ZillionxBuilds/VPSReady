@@ -45,6 +45,10 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
     private bool isEnableConfirmed;
     private bool isDisableConfirmed;
     private bool disposed;
+    private string? observedSessionId;
+    private string? listingSessionId;
+    private int? serverSshPort;
+    private long generation;
 
     public FirewallViewModel(IApplicationSession session, IFirewallManagement firewall, IDiagnosticSink? diagnostics = null)
     {
@@ -56,6 +60,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
             ? "Connect and verify a server session before reading its firewall."
             : "Firewall state is Unknown until a fresh verified rule listing is read.";
         CancelCommand = new DelegateCommand(Cancel);
+        observedSessionId = session.Snapshot.SessionId;
         session.StateChanged += OnSessionStateChanged;
     }
 
@@ -76,7 +81,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
     /// refresh. C302 preserves it for safe context, while mutations still do
     /// their own fresh preflight.
     /// </summary>
-    public bool HasCurrentListing => hasCurrentListing;
+    public bool HasCurrentListing => hasCurrentListing && IsCurrentSession(listingSessionId);
 
     public string RuleListingStatus => HasCurrentListing
         ? "Current verified rule listing"
@@ -91,6 +96,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref selectedRule, value))
             {
+                IsRemoveConfirmed = false;
                 OnPropertyChanged(nameof(HasSelectedRule));
                 OnRemovalEligibilityChanged();
             }
@@ -173,16 +179,16 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         get => isRemoveConfirmed;
         set
         {
-            if (SetProperty(ref isRemoveConfirmed, value))
+            if (SetProperty(ref isRemoveConfirmed, value && HasCurrentListing && SelectedRule is not null && !IsBusy))
             {
                 OnRemovalEligibilityChanged();
             }
         }
     }
 
-    public bool IsEnableConfirmed { get => isEnableConfirmed; set => SetProperty(ref isEnableConfirmed, value); }
+    public bool IsEnableConfirmed { get => isEnableConfirmed; set => SetProperty(ref isEnableConfirmed, value && session.Snapshot.IsConnected && !IsBusy); }
 
-    public bool IsDisableConfirmed { get => isDisableConfirmed; set => SetProperty(ref isDisableConfirmed, value); }
+    public bool IsDisableConfirmed { get => isDisableConfirmed; set => SetProperty(ref isDisableConfirmed, value && session.Snapshot.IsConnected && !IsBusy); }
 
     public Task RefreshAsync(CancellationToken cancellationToken = default) => RunRefreshAsync(cancellationToken);
 
@@ -211,11 +217,17 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         await RunMutationAsync("remove", (transport, token) => firewall.RemoveAsync(transport, intent, token), cancellationToken).ConfigureAwait(false);
     }
 
-    public Task EnableAsync(CancellationToken cancellationToken = default) =>
-        RunMutationAsync("enable", (transport, token) => firewall.EnableAsync(transport, IsEnableConfirmed, token), cancellationToken);
+    public Task EnableAsync(CancellationToken cancellationToken = default)
+    {
+        var confirmed = IsEnableConfirmed;
+        return RunMutationAsync("enable", (transport, token) => firewall.EnableAsync(transport, confirmed, token), cancellationToken);
+    }
 
-    public Task DisableAsync(CancellationToken cancellationToken = default) =>
-        RunMutationAsync("disable", (transport, token) => firewall.DisableAsync(transport, IsDisableConfirmed, token), cancellationToken);
+    public Task DisableAsync(CancellationToken cancellationToken = default)
+    {
+        var confirmed = IsDisableConfirmed;
+        return RunMutationAsync("disable", (transport, token) => firewall.DisableAsync(transport, confirmed, token), cancellationToken);
+    }
 
     public void Cancel()
     {
@@ -227,6 +239,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
 
     private async Task RunRefreshAsync(CancellationToken callerCancellation)
     {
+        var expectedSession = session.Snapshot.SessionId;
         if (!TryBegin(FirewallScreenState.Refreshing, callerCancellation, out var cancellation))
         {
             return;
@@ -234,9 +247,12 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
 
         try
         {
+            if (!IsCurrentSession(expectedSession)) { return; }
+            var currentGeneration = ++generation;
             var previous = snapshot;
+            InvalidateListing();
             FirewallRefreshOperationResult? completed = null;
-            var result = await session.RunOperationAsync(
+            var result = await session.RunOperationForSessionAsync(
                 NewSessionOperationId("refresh"),
                 OperationTimeout,
                 async (transport, token) =>
@@ -244,13 +260,17 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
                     completed = await firewall.RefreshAsync(transport, previous, token).ConfigureAwait(false);
                     return completed.Result;
                 },
-                cancellation.Token).ConfigureAwait(false);
+                expectedSession!, cancellation.Token).ConfigureAwait(false);
 
-            if (completed is not null && result.Succeeded && completed.Result.Succeeded)
+            if (!MayPublish(expectedSession, currentGeneration)) { return; }
+            if (completed is not null && ReferenceEquals(result, completed.Result) && !cancellation.IsCancellationRequested
+                && completed.Result.Succeeded && completed.Refresh.Replaced && completed.Refresh.ReadStatus == UfwRuleListReadStatus.Complete)
             {
                 snapshot = completed.Refresh.Snapshot;
                 SelectedRule = null;
                 hasCurrentListing = true;
+                listingSessionId = expectedSession;
+                serverSshPort = ValidPort(completed.SessionSshPort);
                 PublishSnapshot();
             }
             else if (completed is not null)
@@ -274,6 +294,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         CancellationToken callerCancellation)
     {
         ArgumentNullException.ThrowIfNull(execute);
+        var expectedSession = session.Snapshot.SessionId;
         if (!TryBegin(FirewallScreenState.Working, callerCancellation, out var cancellation))
         {
             return;
@@ -281,8 +302,11 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
 
         try
         {
+            if (!IsCurrentSession(expectedSession)) { return; }
+            var currentGeneration = ++generation;
+            InvalidateListing();
             FirewallOperationResult? completed = null;
-            var result = await session.RunOperationAsync(
+            var result = await session.RunOperationForSessionAsync(
                 NewSessionOperationId(action),
                 OperationTimeout,
                 async (transport, token) =>
@@ -290,13 +314,17 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
                     completed = await execute(transport, token).ConfigureAwait(false);
                     return completed.Result;
                 },
-                cancellation.Token).ConfigureAwait(false);
+                expectedSession!, cancellation.Token).ConfigureAwait(false);
 
-            if (completed?.Snapshot is not null)
+            if (!MayPublish(expectedSession, currentGeneration)) { return; }
+            if (completed is { Snapshot: not null, SnapshotIsCurrent: true }
+                && ReferenceEquals(result, completed.Result) && !cancellation.IsCancellationRequested)
             {
                 snapshot = completed.Snapshot;
                 SelectedRule = null;
                 hasCurrentListing = true;
+                listingSessionId = expectedSession;
+                serverSshPort = ValidPort(completed.SessionSshPort);
                 PublishSnapshot();
             }
 
@@ -345,7 +373,9 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         OperationId = result.OperationId;
         ErrorCode = result.ErrorCode?.ToStableCode();
         Status = result.Succeeded
-            ? "Firewall state was verified. Review Activity & Diagnostics with this operation ID if needed."
+            ? HasCurrentListing
+                ? "Firewall state was verified. Review Activity & Diagnostics with this operation ID if needed."
+                : "The operation completed, but the rule listing is not current. Refresh before selecting a rule."
             : $"{result.UserMessage} {result.NextAction}";
         State = result.Succeeded
             ? FirewallScreenState.Ready
@@ -415,7 +445,12 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
 
         var current = matches[0];
 
-        if (current.Protocol == UfwRuleProtocol.Tcp && current.Port == session.Snapshot.Identity?.Port)
+        if (current.Protocol == UfwRuleProtocol.Tcp && serverSshPort is null)
+        {
+            return "The active SSH port has no validated server-side evidence. Refresh before removing a TCP rule.";
+        }
+
+        if (current.Protocol == UfwRuleProtocol.Tcp && current.Port == serverSshPort)
         {
             return "The selected rule affects the active SSH port and cannot be removed by the normal flow.";
         }
@@ -465,29 +500,47 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         }
     }
 
+    private bool IsCurrentSession(string? identity) => identity is not null && session.Snapshot.IsConnected
+        && string.Equals(identity, session.Snapshot.SessionId, StringComparison.Ordinal);
+
+    private bool MayPublish(string? identity, long version) => !disposed && generation == version && IsCurrentSession(identity);
+    private static int? ValidPort(int? port) => port is >= 1 and <= 65535 ? port : null;
+
+    private void InvalidateListing()
+    {
+        hasCurrentListing = false;
+        listingSessionId = null;
+        serverSshPort = null;
+        SelectedRule = null;
+        IsRemoveConfirmed = false;
+        IsEnableConfirmed = false;
+        IsDisableConfirmed = false;
+        PublishSnapshot();
+    }
+
     private void OnSessionStateChanged(object? sender, EventArgs e)
     {
-        if (session.Snapshot.IsConnected)
+        var current = session.Snapshot;
+        if (!string.Equals(observedSessionId, current.SessionId, StringComparison.Ordinal))
         {
-            if (!IsBusy)
+            observedSessionId = current.SessionId;
+            generation++;
+            // A new session may progress while the old session's UI continuation
+            // is delayed. That continuation owns/disposes only its old token.
+            lock (operationLock)
             {
-                State = FirewallScreenState.Unknown;
-                Status = "Firewall state is Unknown until a fresh verified rule listing is read.";
-                ErrorCode = null;
+                activeCancellation?.Cancel();
+                activeCancellation = null;
             }
-        }
-        else
-        {
-            Cancel();
             snapshot = UfwSnapshot.StateOnly(UfwFirewallState.Unknown);
-            hasCurrentListing = false;
-            SelectedRule = null;
-            PublishSnapshot();
-            State = FirewallScreenState.Disconnected;
-            Status = "The verified server session ended. Firewall state is no longer current.";
+            InvalidateListing();
+            State = current.IsConnected ? FirewallScreenState.Unknown : FirewallScreenState.Disconnected;
+            Status = current.IsConnected
+                ? "Firewall state is Unknown until a fresh verified rule listing is read."
+                : "The verified server session ended. Firewall state is no longer current.";
+            OperationId = null;
             ErrorCode = null;
         }
-
         OnOperationAvailabilityChanged();
     }
 

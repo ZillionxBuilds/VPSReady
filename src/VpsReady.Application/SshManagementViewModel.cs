@@ -160,13 +160,13 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             ? "Select or generate a validated local key before testing key authentication."
             : "A separate key-authenticated connection will be verified. Password access is not changed.";
 
-    public string Alias { get => alias; set => SetProperty(ref alias, value ?? string.Empty); }
+    public string Alias { get => alias; set { if (SetProperty(ref alias, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
-    public string HostName { get => hostName; set => SetProperty(ref hostName, value ?? string.Empty); }
+    public string HostName { get => hostName; set { if (SetProperty(ref hostName, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
-    public string UserName { get => userName; set => SetProperty(ref userName, value ?? string.Empty); }
+    public string UserName { get => userName; set { if (SetProperty(ref userName, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
-    public string Port { get => port; set => SetProperty(ref port, value ?? string.Empty); }
+    public string Port { get => port; set { if (SetProperty(ref port, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
     public bool IsDeploymentConfirmed
     {
@@ -180,7 +180,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsConfigConfirmed { get => isConfigConfirmed; set => SetProperty(ref isConfigConfirmed, value); }
+    public bool IsConfigConfirmed { get => isConfigConfirmed; set => SetProperty(ref isConfigConfirmed, value && HasSelectedKey && !IsBusy); }
 
     /// <summary>
     /// The desktop host obtains a local destination through its picker and
@@ -364,8 +364,10 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            var request = new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selectedKey.Location.PrivateKeyPath);
+            IsConfigConfirmed = false;
             var result = await configEditor.AddAliasAsync(
-                new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selectedKey.Location.PrivateKeyPath),
+                request,
                 CorrelationIds.Create("edit_ssh_config"),
                 cancellation.Token).ConfigureAwait(false);
             Complete(result.Operation, result.ErrorCode, result.Succeeded
