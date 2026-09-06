@@ -217,6 +217,7 @@ public sealed class FirewallViewModelTests
         viewModel.IsEnableConfirmed = true;
         viewModel.IsDisableConfirmed = true;
         await viewModel.EnableAsync();
+        viewModel.IsDisableConfirmed = true; // A new operation consumes prior action approvals.
         await viewModel.DisableAsync();
 
         Assert.True(management.LastEnableConfirmation);
@@ -256,7 +257,8 @@ public sealed class FirewallViewModelTests
 
     private static FirewallRefreshOperationResult Refresh(UfwSnapshot snapshot) => new(
         OperationResult.Success("refresh-opaque", OperationState.Unchanged),
-        new UfwRuleRefreshResult(snapshot, UfwRuleListReadStatus.Complete, Replaced: true));
+        new UfwRuleRefreshResult(snapshot, UfwRuleListReadStatus.Complete, Replaced: true))
+    { SessionSshPort = 22 };
 
     private sealed class RecordingFirewallManagement : IFirewallManagement
     {

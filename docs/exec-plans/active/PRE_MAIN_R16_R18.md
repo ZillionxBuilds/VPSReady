@@ -59,7 +59,10 @@ three SELF-REVIEW passes and honest skips in Workpad. Synthetic input only.
 - [x] R16 RED: 24 failed / 2 passed; input ABA and stale plan, invalid handler
   dispatch, reused approvals after outer override. Initial GREEN 26/26; with
   existing SystemActionsViewModel tests 31/31. E1, not real hostname/timezone mutation.
-- [ ] R17 barrier regression and correction.
+- [x] R17 RED 17/17 failures; corrected barriers plus added contract checks
+  22/22; combined firewall unit set 32/32 and production-adapter E2 5/5.
+  Session/generation/outer authority, immutable approvals, conservative validated
+  server SSH port, independent complete read preserves fresh failure facts.
 - [ ] R18 main/first-promotion gate regression and correction.
 - [ ] Same-class pass; full exact-head E0–E4; final self-review and PR handoff.
 

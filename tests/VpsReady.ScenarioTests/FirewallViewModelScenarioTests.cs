@@ -9,6 +9,25 @@ namespace VpsReady.ScenarioTests;
 [Trait("Category", "E2")]
 public sealed class FirewallViewModelScenarioTests
 {
+    [Fact]
+    public async Task ProductionAdapterDistinguishesFailedRemovalFromFreshCompleteListing()
+    {
+        await using var services = ScenarioComposition.Create("scenario.r17.failure-freshness", state => state.Ufw.Status = ScenarioUfwStatus.Active);
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var transport = new RecordingScenarioTransport(new DeterministicScenarioHost(state, services.GetRequiredService<ScenarioFaultPlan>()));
+        var adapter = new FirewallManagement(services.GetRequiredService<IDiagnosticSink>());
+        var before = state.Ufw.Rules.Count;
+        var missing = UfwRuleIdentity.Create(999, UfwRuleProtocol.Tcp, 9443, "Anywhere", UfwRuleAction.Allow, UfwIpFamily.Ipv4);
+        var outcome = await adapter.RemoveAsync(transport, new UfwRuleRemovalIntent(missing, true));
+        Assert.False(outcome.Result.Succeeded);
+        Assert.True(outcome.IsStale);
+        Assert.True(outcome.SnapshotIsCurrent);
+        Assert.NotNull(outcome.Snapshot);
+        Assert.Equal(state.Ssh.ActiveSshPort, outcome.SessionSshPort);
+        Assert.Equal(before, state.Ufw.Rules.Count);
+        Assert.True(transport.CommandIds.Count(id => id == RemoteCommandCatalog.UbuntuUfwRuleListRead) >= 2);
+    }
+
     [Theory]
     [InlineData(UfwIpFamily.Ipv4)]
     [InlineData(UfwIpFamily.Ipv6)]
