@@ -9,6 +9,65 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OpenSshConfigEditorTests
 {
+    [UnixTheory]
+    [InlineData("ServerAliveInterval 60\nHost existing\n  HostName existing.example\n")]
+    [InlineData("# retained\r\nHost *\r\n  ServerAliveInterval 60\r\n")]
+    [InlineData("Host * !excluded\n  User kept\nHost excluded\n  User excluded-user")]
+    public async Task OpenSshEffectiveExistingConfigurationDoesNotChange(string original)
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var shell = new ShellSandbox();
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath);
+        var before = await shell.RunAsync(command + " existing");
+        var excludedBefore = await shell.RunAsync(command + " excluded");
+        Assert.Equal(0, before.ExitCode);
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink())
+            .AddAliasAsync(workspace.Request("new-alias"), DiagnosticRunContext.StartSession().StartOperation("config"), CancellationToken.None);
+        Assert.True(result.Succeeded);
+        var after = await shell.RunAsync(command + " existing");
+        var excludedAfter = await shell.RunAsync(command + " excluded");
+        Assert.Equal(0, after.ExitCode);
+        Assert.True(before.Output == after.Output, "Effective values of the existing host must remain unchanged.");
+        Assert.True(excludedBefore.Output == excludedAfter.Output, "Negated Host-pattern behavior must remain unchanged.");
+        var added = await shell.RunAsync(command + " new-alias");
+        Assert.Equal(0, added.ExitCode);
+        Assert.Contains("hostname safe.example", added.Output, StringComparison.Ordinal);
+        Assert.Contains("port 2222", added.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("ServerAliveInterval 60\n\nHost existing\n    HostName existing.example\n")]
+    [InlineData("ServerAliveInterval 60\r\nHost existing\r\n    HostName existing.example")]
+    [InlineData("ServerAliveInterval 60")]
+    public async Task PreservesGlobalPreambleScope(string original)
+    {
+        await using var workspace = new ConfigWorkspace();
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink())
+            .AddAliasAsync(workspace.Request("new-alias"), DiagnosticRunContext.StartSession().StartOperation("config"), CancellationToken.None);
+        Assert.True(result.Succeeded);
+        var updated = await File.ReadAllTextAsync(workspace.ConfigPath);
+        Assert.StartsWith("ServerAliveInterval 60", updated, StringComparison.Ordinal);
+        Assert.True(updated.IndexOf("ServerAliveInterval", StringComparison.Ordinal) < updated.IndexOf("Host new-alias", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Include extra.conf\nHost existing\n    User user\n")]
+    [InlineData("Include=extra.conf\n")]
+    [InlineData("Match exec \"false\"\n    User restricted\n")]
+    [InlineData("User global-user\nHost *\n    Port 2222\n")]
+    public async Task RefusesAmbiguousOrConflictingGlobalSemanticsWithoutWriting(string original)
+    {
+        await using var workspace = new ConfigWorkspace();
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink())
+            .AddAliasAsync(workspace.Request("new-alias"), DiagnosticRunContext.StartSession().StartOperation("config"), CancellationToken.None);
+        Assert.False(result.Succeeded);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+    }
+
     [Fact]
     public async Task AddsAliasBeforeWildcardWhilePreservingTextLineEndingsAndBackup()
     {
@@ -24,8 +83,8 @@ public sealed class OpenSshConfigEditorTests
         Assert.True(result.Succeeded);
         Assert.Equal(OpenSshConfigEditDisposition.Created, result.Disposition);
         var current = await File.ReadAllTextAsync(workspace.ConfigPath);
-        Assert.StartsWith("Host work-vps\r\n    HostName safe.example\r\n", current, StringComparison.Ordinal);
-        Assert.EndsWith(original, current, StringComparison.Ordinal);
+        Assert.StartsWith("# user-maintained comment\r\nHost work-vps\r\n    HostName safe.example\r\n", current, StringComparison.Ordinal);
+        Assert.EndsWith("Host *\r\n    ServerAliveInterval 30\r\n", current, StringComparison.Ordinal);
         Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath + ".bak"));
         Assert.All(diagnostics.Events, item =>
         {

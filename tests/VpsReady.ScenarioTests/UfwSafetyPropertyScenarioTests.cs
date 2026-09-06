@@ -232,6 +232,7 @@ public sealed class UfwSafetyPropertyScenarioTests
     private sealed class FirewallPhaseTransport(DeterministicScenarioHost host) : IRemoteTransport
     {
         private int listReads;
+        private int storedReads;
         public List<string> CommandIds { get; } = [];
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
@@ -246,7 +247,8 @@ public sealed class UfwSafetyPropertyScenarioTests
                     1 => DiagnosticPhase.Verify,
                     _ => DiagnosticPhase.Recovery,
                 },
-                RemoteCommandCatalog.UbuntuUfwAddedRulesRead or RemoteCommandCatalog.SshConnectionTest => DiagnosticPhase.Verify,
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead => storedReads++ == 0 ? DiagnosticPhase.Preflight : DiagnosticPhase.Verify,
+                RemoteCommandCatalog.SshConnectionTest => DiagnosticPhase.Verify,
                 _ => DiagnosticPhase.Apply,
             };
             return host.ExecuteAsync(command, phase, cancellationToken);

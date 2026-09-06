@@ -137,7 +137,7 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host, I
     public async Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         var command = new RemoteCommand(RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuBootIdentityRead), "boot-identity-read", timeout);
-        var response = await ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+        var response = await host.ExecuteWireAsync(command, DiagnosticPhase.Verify, cancellationToken).ConfigureAwait(false);
         return response.Succeeded && BootIdentityToken.TryCreate(response.StandardOutput.Trim(), out var token)
             ? new BootIdentityReadResult(token, true)
             : BootIdentityReadResult.Unavailable;
@@ -154,7 +154,7 @@ internal sealed class ScenarioSessionTransport(DeterministicScenarioHost host, I
         try
         {
             var phase = command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeVerify ? DiagnosticPhase.Verify : DiagnosticPhase.Plan;
-            var response = await host.ExecuteAsync(command, phase, cancellationToken).ConfigureAwait(false);
+            var response = await host.ExecuteWireAsync(command, phase, cancellationToken).ConfigureAwait(false);
             return response.Succeeded && HostnameChangeValidator.TryNormalize(response.StandardOutput, out var hostname)
                 ? new HostnameReadResult(hostname, true)
                 : HostnameReadResult.Unavailable;

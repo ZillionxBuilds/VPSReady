@@ -365,7 +365,7 @@ public sealed class RebootWorkflowTests
 
             return responses.Dequeue() switch
             {
-                RemoteCommandResult result => Task.FromResult(result),
+                RemoteCommandResult result => VpsReady.Tests.ProductionOutput.CaptureAsync(command, result, cancellationToken),
                 Exception exception => Task.FromException<RemoteCommandResult>(exception),
                 _ => throw new InvalidOperationException("Unsupported response."),
             };

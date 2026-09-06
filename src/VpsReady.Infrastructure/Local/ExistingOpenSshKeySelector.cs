@@ -8,6 +8,9 @@ using Org.BouncyCastle.OpenSsl;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Remote;
+using Renci.SshNet;
 
 namespace VpsReady.Infrastructure.Local;
 
@@ -33,10 +36,59 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         this.observer = observer ?? throw new ArgumentNullException(nameof(observer));
     }
 
-    public async Task<ExistingSshKeySelectionResult> SelectAsync(
+    public Task<ExistingSshKeySelectionResult> SelectAsync(
         ExistingSshKeySelectionRequest request,
         CorrelationIds correlation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => InspectAsync(request, correlation, null, null, cancellationToken);
+
+    public async Task<SelectedPublicKeyReadResult> ReadPublicKeyAsync(
+        ExistingSshKeySelectionResult selectedKey, CorrelationIds correlation, CancellationToken cancellationToken)
+    {
+        PublicKeyDeploymentMaterial? material = null;
+        if (!selectedKey.Succeeded)
+        {
+            return new(OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged), null);
+        }
+        var inspected = await InspectAsync(new ExistingSshKeySelectionRequest(selectedKey.Location!.PrivateKeyPath),
+            correlation, selectedKey.Metadata!.Fingerprint,
+            (_, publicBlob) => material = new PublicKeyDeploymentMaterial(("ssh-ed25519 " + Convert.ToBase64String(publicBlob)).AsSpan()), cancellationToken).ConfigureAwait(false);
+        if (!inspected.Succeeded)
+        {
+            material?.Dispose();
+            material = null;
+        }
+        return new(inspected.Operation, material);
+    }
+
+    // The actual transport consumes this already-parsed key, never reopens a
+    // path after identity comparison. All file buffers are cleared by InspectAsync.
+    internal static async Task<PrivateKeyFile> OpenForAuthenticationAsync(ExistingSshKeyLocation location, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(location.ExpectedFingerprint))
+        {
+            throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity);
+        }
+        PrivateKeyFile? key = null;
+        var selector = new ExistingOpenSshKeySelector(new SilentKeyReadSink());
+        var inspected = await selector.InspectAsync(new ExistingSshKeySelectionRequest(location.PrivateKeyPath),
+            CorrelationIds.Create("key_use"), location.ExpectedFingerprint,
+            (privateBytes, _) =>
+            {
+                using var stream = new MemoryStream(privateBytes, writable: false);
+                key = new PrivateKeyFile(stream);
+            }, cancellationToken).ConfigureAwait(false);
+        if (!inspected.Succeeded || key is null)
+        {
+            key?.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity);
+        }
+        return key;
+    }
+
+    private async Task<ExistingSshKeySelectionResult> InspectAsync(
+        ExistingSshKeySelectionRequest request, CorrelationIds correlation,
+        string? expectedFingerprint, Action<byte[], byte[]>? consume, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(correlation);
@@ -44,7 +96,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         byte[]? fileContents = null;
         byte[]? pemContents = null;
         byte[]? publicBytes = null;
-        byte[]? fingerprintBytes = null;
+        byte[]? companionBytes = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -86,12 +138,33 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
                 return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Unsupported, OperationErrorCode.Unsupported, OperationVerification.Failed).ConfigureAwait(false);
             }
 
-            publicBytes = ed25519.GeneratePublicKey().GetEncoded();
-            fingerprintBytes = SHA256.HashData(publicBytes);
-            var metadata = new ExistingSshKeyMetadata("ed25519", $"SHA256:{Convert.ToBase64String(fingerprintBytes).TrimEnd('=')}");
+            publicBytes = OpenSshPublicKeyUtilities.EncodePublicKey(ed25519.GeneratePublicKey());
+            var fingerprint = OpenSshUserKeyFingerprint.FromBlob(publicBytes);
+            if (expectedFingerprint is not null && !string.Equals(expectedFingerprint, fingerprint, StringComparison.Ordinal))
+            {
+                return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Corrupt, OperationErrorCode.Validation, OperationVerification.Failed).ConfigureAwait(false);
+            }
+            if (!TryValidateRegularPath(path + ".pub", out var publicPath, out pathError))
+            {
+                return await FailAsync(correlation, pathError!, OperationErrorCode.Validation, OperationVerification.NotRun).ConfigureAwait(false);
+            }
+            companionBytes = await ReadBoundedAsync(publicPath, cancellationToken, 16 * 1024).ConfigureAwait(false);
+            var companion = new UTF8Encoding(false, true).GetString(companionBytes).Trim();
+            using var material = new PublicKeyDeploymentMaterial(companion.AsSpan());
+            if (companion.Contains('\n') || companion.Contains('\r')
+                || !UbuntuAuthorizedKeysCommandCatalog.TryPrepare(material, out var prepared)
+                || prepared is null
+                || !string.Equals(prepared.CanonicalText, "ssh-ed25519 " + Convert.ToBase64String(publicBytes), StringComparison.Ordinal))
+            {
+                return await FailAsync(correlation, ExistingSshKeySelectionErrorCatalog.Corrupt, OperationErrorCode.Validation, OperationVerification.Failed).ConfigureAwait(false);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            consume?.Invoke(fileContents, publicBytes);
+            var metadata = new ExistingSshKeyMetadata("ed25519", fingerprint);
             var operation = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
             await PublishAsync(DiagnosticEventCatalog.ExistingKeySelectionSucceeded, correlation, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, null, CancellationToken.None).ConfigureAwait(false);
-            return ExistingSshKeySelectionResult.Success(operation, new ExistingSshKeyLocation(path), metadata);
+            cancellationToken.ThrowIfCancellationRequested();
+            return ExistingSshKeySelectionResult.Success(operation, new ExistingSshKeyLocation(path, fingerprint), metadata);
         }
         catch (OperationCanceledException)
         {
@@ -165,9 +238,9 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             {
                 CryptographicOperations.ZeroMemory(publicBytes);
             }
-            if (fingerprintBytes is not null)
+            if (companionBytes is not null)
             {
-                CryptographicOperations.ZeroMemory(fingerprintBytes);
+                CryptographicOperations.ZeroMemory(companionBytes);
             }
         }
     }
@@ -250,26 +323,37 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         return false;
     }
 
-    private static async Task<byte[]> ReadBoundedAsync(string path, CancellationToken cancellationToken)
+    private static async Task<byte[]> ReadBoundedAsync(string path, CancellationToken cancellationToken, int maximumBytes = MaximumPrivateKeyBytes)
     {
         await using var stream = OpenNoFollowReadStream(path);
-        if (stream.Length is <= 0 or > MaximumPrivateKeyBytes)
+        if (stream.Length <= 0 || stream.Length > maximumBytes)
         {
             throw new InvalidDataException();
         }
         var bytes = new byte[(int)stream.Length];
-        var offset = 0;
-        while (offset < bytes.Length)
+        try
         {
-            var read = await stream.ReadAsync(bytes.AsMemory(offset), cancellationToken).ConfigureAwait(false);
-            if (read == 0)
+            var offset = 0;
+            while (offset < bytes.Length)
+            {
+                var read = await stream.ReadAsync(bytes.AsMemory(offset), cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    throw new InvalidDataException();
+                }
+                offset += read;
+            }
+            if (stream.Length != bytes.Length || stream.ReadByte() != -1)
             {
                 throw new InvalidDataException();
             }
-            offset += read;
+            return bytes;
         }
-
-        return bytes;
+        catch
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+            throw;
+        }
     }
 
     private static FileStream OpenNoFollowReadStream(string path)
@@ -512,6 +596,12 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     }
 
     private enum OpenSshEnvelope { Unencrypted, Encrypted, Corrupt }
+
+    private sealed class SilentKeyReadSink : IDiagnosticSink
+    {
+        // The enclosing key-auth workflow owns correlated safe outcome events.
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
 
     [Flags]
     private enum UnixOpenFlags

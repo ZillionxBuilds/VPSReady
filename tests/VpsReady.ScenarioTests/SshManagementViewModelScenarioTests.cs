@@ -117,6 +117,10 @@ public sealed class SshManagementViewModelScenarioTests
 
     private sealed class StaticSelector : IExistingSshKeySelector
     {
+        public Task<SelectedPublicKeyReadResult> ReadPublicKeyAsync(ExistingSshKeySelectionResult selectedKey, CorrelationIds correlation, CancellationToken cancellationToken) =>
+            Task.FromResult(new SelectedPublicKeyReadResult(VpsReady.Core.Operations.OperationResult.Success(correlation.OperationId),
+                new PublicKeyDeploymentMaterial("ssh-ed25519 explicit-host-trust-only-fixture".AsSpan())));
+
         public Task<ExistingSshKeySelectionResult> SelectAsync(ExistingSshKeySelectionRequest request, CorrelationIds correlation, CancellationToken cancellationToken) =>
             Task.FromResult(ExistingSshKeySelectionResult.Success(
                 VpsReady.Core.Operations.OperationResult.Success("scenario-selected", VpsReady.Core.Operations.OperationState.Unchanged),

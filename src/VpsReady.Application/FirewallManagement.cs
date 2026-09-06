@@ -39,7 +39,10 @@ public interface IFirewallManagement
 /// <summary>Typed, safe projection of a completed refresh for presentation.</summary>
 public sealed record FirewallRefreshOperationResult(
     OperationResult Result,
-    UfwRuleRefreshResult Refresh);
+    UfwRuleRefreshResult Refresh)
+{
+    public int? SessionSshPort { get; init; }
+}
 
 /// <summary>
 /// Typed, safe projection of an existing firewall mutation workflow. The
@@ -51,4 +54,9 @@ public sealed record FirewallOperationResult(
     UfwSnapshot? Snapshot,
     bool AlreadyPresent = false,
     bool IsStale = false,
-    bool IsActiveSshProtected = false);
+    bool IsActiveSshProtected = false)
+{
+    // Independent complete post-operation read; non-null alone is not proof.
+    public bool SnapshotIsCurrent { get; init; }
+    public int? SessionSshPort { get; init; }
+}

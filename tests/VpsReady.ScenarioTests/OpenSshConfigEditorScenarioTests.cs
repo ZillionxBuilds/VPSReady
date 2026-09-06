@@ -27,8 +27,8 @@ public sealed class OpenSshConfigEditorScenarioTests
         Assert.True(result.Succeeded);
         Assert.Equal(OpenSshConfigEditDisposition.Created, result.Disposition);
         var current = Encoding.UTF8.GetString(state.LocalFiles.Files[configPath]);
-        Assert.StartsWith("Host scenario-vps\n", current, StringComparison.Ordinal);
-        Assert.EndsWith(original, current, StringComparison.Ordinal);
+        Assert.StartsWith("# scenario-owned user comment\nHost scenario-vps\n", current, StringComparison.Ordinal);
+        Assert.EndsWith("Host *\n    User preserved-default\n", current, StringComparison.Ordinal);
         Assert.Equal(original, Encoding.UTF8.GetString(state.LocalFiles.Files[configPath + ".bak"]));
         Assert.Equal("0600", state.LocalFiles.Permissions[configPath]);
         Assert.Equal(1, state.LocalFiles.AtomicWriteCount);

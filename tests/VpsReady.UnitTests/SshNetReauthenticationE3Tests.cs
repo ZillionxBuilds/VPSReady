@@ -6,22 +6,31 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E3")]
 public sealed class SshNetReauthenticationE3Tests
 {
-    [Fact]
+    [ContainedSshFact]
     public async Task ProductionTransportUsesFreshPasswordAuthenticationAgainstContainedLoopbackSshd()
     {
         var fixtureValue = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PASSWORD");
         var user = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_USER");
         var portText = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PORT");
-        if (string.IsNullOrEmpty(fixtureValue) || string.IsNullOrEmpty(user) || !int.TryParse(portText, out var port))
-        {
-            return; // The E3 runner supplies the disposable contained OpenSSH fixture.
-        }
+        Assert.False(string.IsNullOrEmpty(fixtureValue), "The declared contained fixture must supply a credential.");
+        Assert.False(string.IsNullOrEmpty(user), "The declared contained fixture must supply a user.");
+        Assert.True(int.TryParse(portText, out var port), "The declared contained fixture must supply a port.");
 
         var endpoint = new RemoteEndpoint("127.0.0.1", port, user);
         var sessionValue = new Credential(fixtureValue.ToCharArray());
         var trust = new MatchingTrustStore();
         await using var transport = new SshNetRemoteTransport(trust);
         await transport.ConnectAsync(endpoint, sessionValue, TimeSpan.FromSeconds(10), CancellationToken.None);
+        var reconnectEvidence = await transport.ExecuteAsync(UbuntuPackageCommandCatalog.CreateReconnectVerifyRequest(), CancellationToken.None);
+        Assert.True(reconnectEvidence.Succeeded);
+        Assert.Equal(RemoteCommandCatalog.SshReconnectVerify, reconnectEvidence.ParserEvidence?.CommandId);
+        Assert.Empty(reconnectEvidence.StandardOutput);
+        var requiredEvidence = await transport.ExecuteAsync(UbuntuPackageCommandCatalog.CreateRebootRequiredRequest(), CancellationToken.None);
+        Assert.NotNull(requiredEvidence.ParserEvidence?.Flag);
+        Assert.Empty(requiredEvidence.StandardOutput);
+        var portEvidence = await transport.ExecuteAsync(UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.SshSessionPortRead), CancellationToken.None);
+        Assert.Equal(port, portEvidence.ParserEvidence?.Number);
+        Assert.Empty(portEvidence.StandardOutput);
         var beforeReconnect = await transport.ReadBootIdentityAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
         Assert.True(beforeReconnect.IsAvailable);
         Assert.Equal("[boot identity redacted]", beforeReconnect.Token!.ToString());
@@ -64,5 +73,16 @@ public sealed class SshNetReauthenticationE3Tests
         }
         public Task<KnownHostTrustAssessment> AcceptUnknownAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<KnownHostTrustAssessment> ReplaceChangedAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+}
+
+public sealed class ContainedSshFactAttribute : FactAttribute
+{
+    public ContainedSshFactAttribute()
+    {
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PORT")))
+        {
+            Skip = "E3 NOT RUN: disposable loopback sshd is supplied only by the contained protocol runner.";
+        }
     }
 }

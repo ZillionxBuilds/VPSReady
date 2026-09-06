@@ -32,8 +32,8 @@ public static class UbuntuFactCommandCatalog
             + "printf 'root=false\\nsudo=available\\n'; else printf 'root=false\\nsudo=unavailable\\n'; fi"),
         Remote(RemoteCommandCatalog.UbuntuCpuRead, "proc-cpuinfo", "cat /proc/cpuinfo"),
         Remote(RemoteCommandCatalog.UbuntuMemoryRead, "proc-meminfo", "cat /proc/meminfo"),
-        Remote(RemoteCommandCatalog.UbuntuRootDiskRead, "root-filesystem", "findmnt -n -o SOURCE,SIZE,USED,AVAIL,USE%,TARGET /"),
-        Session(RemoteCommandCatalog.SshSessionPortRead, "authenticated-session-endpoint-port"),
+        Remote(RemoteCommandCatalog.UbuntuRootDiskRead, "root-filesystem", "findmnt --bytes --noheadings --output SOURCE,SIZE,USED,AVAIL,USE%,TARGET --target /"),
+        Session(RemoteCommandCatalog.SshSessionPortRead, "server-session-port"),
         Remote(
             RemoteCommandCatalog.UbuntuUfwAvailabilityRead,
             "ufw-command-availability",
@@ -41,22 +41,27 @@ public static class UbuntuFactCommandCatalog
         Remote(
             RemoteCommandCatalog.UbuntuUfwStatusRead,
             "ufw-status",
-            "if command -v ufw >/dev/null 2>&1; then ufw status; else printf 'ufw=unavailable\\n'; fi"),
+            UfwRead("status")),
         Remote(
             RemoteCommandCatalog.UbuntuUfwDetectionRead,
             "ufw-detection",
-            "if command -v ufw >/dev/null 2>&1; then ufw status numbered; else printf 'ufw=unavailable\\n'; fi"),
+            UfwRead("status numbered")),
         Remote(
             RemoteCommandCatalog.UbuntuUfwRuleListRead,
             "ufw-numbered-rules",
-            "if command -v ufw >/dev/null 2>&1; then ufw status numbered; else printf 'ufw=unavailable\\n'; fi"),
+            UfwRead("status numbered")),
         Remote(
             RemoteCommandCatalog.UbuntuUfwAddedRulesRead,
             "ufw-added-rules",
-            "if command -v ufw >/dev/null 2>&1; then ufw show added; else printf 'ufw=unavailable\\n'; fi"),
+            UfwRead("show added")),
     ];
 
     public static IReadOnlyList<UbuntuFactCommandDefinition> All => Definitions;
+
+    private static string UfwRead(string arguments) =>
+        "if ! command -v ufw >/dev/null 2>&1; then printf 'ufw=unavailable\\n'; "
+        + "elif [ \"$(id -u)\" -eq 0 ]; then ufw " + arguments + "; "
+        + "elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then sudo -n ufw " + arguments + "; else exit 77; fi";
 
     public static UbuntuFactCommandDefinition RequireKnown(string commandId) =>
         Definitions.FirstOrDefault(definition => string.Equals(definition.Id.Value, commandId, StringComparison.Ordinal))
@@ -84,8 +89,8 @@ public static class UbuntuFactCommandCatalog
         new(
             RemoteCommandCatalog.RequireKnown(commandId),
             source,
-            ShellCommand: null,
-            UbuntuFactCommandExecution.SessionMetadata,
+            ShellCommand: "set -f; set -- ${SSH_CONNECTION-}; [ \"$#\" -eq 4 ] || exit 2; case \"$4\" in ''|*[!0-9]*) exit 2;; esac; [ \"$4\" -ge 1 ] && [ \"$4\" -le 65535 ] || exit 2; printf '%s\\n' \"$4\"",
+            UbuntuFactCommandExecution.Remote,
             OutputCapturePolicy.MetadataOnly,
             MaximumOutputBytes: 0,
             DefaultTimeout);

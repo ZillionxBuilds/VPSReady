@@ -7,7 +7,7 @@
   "ubuntu.facts.privilege.read": "root=true\nsudo=available",
   "ubuntu.facts.cpu.read": "model name : no processor count",
   "ubuntu.facts.memory.read": "MemTotal: invalid kB\nMemAvailable: 2 kB",
-  "ubuntu.facts.root-disk.read": "/dev/vda1 20G 21G 0G 105% /",
+  "ubuntu.facts.root-disk.read": "/dev/vda1 21474836480 22548578304 0 105% /",
   "ubuntu.facts.ufw-availability.read": "ufw=maybe",
   "ubuntu.facts.ufw-status.read": "Status: enabled"
 }

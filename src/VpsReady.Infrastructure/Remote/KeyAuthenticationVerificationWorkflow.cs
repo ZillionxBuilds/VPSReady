@@ -34,6 +34,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, "Separate key-authentication verification started.", null, null).ConfigureAwait(false);
+            linkedCancellation.Token.ThrowIfCancellationRequested();
             candidate = transportFactory.Create();
             if (candidate is not IKeyAuthenticationSshTransport keyTransport)
             {
@@ -47,6 +48,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
                 request.PrivateKey,
                 request.Timeout,
                 linkedCancellation.Token).ConfigureAwait(false);
+            linkedCancellation.Token.ThrowIfCancellationRequested();
 
             if (keyTransport.LastHostTrustAssessment is not { IsTrusted: true })
             {
@@ -62,6 +64,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying the separate key-authenticated connection.", verification.Id.Value, null).ConfigureAwait(false);
             var commandResult = await candidate.ExecuteAsync(verification, linkedCancellation.Token).ConfigureAwait(false);
             await ReportCommandAsync(correlation, commandResult, verification.Id.Value).ConfigureAwait(false);
+            linkedCancellation.Token.ThrowIfCancellationRequested();
             if (!commandResult.Succeeded)
             {
                 return await FailAsync(correlation, OperationErrorCode.Verification, KeyAuthenticationVerificationErrorCatalog.Verification, DiagnosticPhase.Verify, verification.Id.Value).ConfigureAwait(false);
@@ -69,6 +72,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
 
             var succeeded = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
             await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "Separate key-authentication verification completed.", verification.Id.Value, null).ConfigureAwait(false);
+            linkedCancellation.Token.ThrowIfCancellationRequested();
             return new KeyAuthenticationVerificationResult(succeeded, null);
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
@@ -146,12 +150,14 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         RemoteTransportFailureKind.Timeout => OperationErrorCode.Timeout,
         RemoteTransportFailureKind.Authentication => OperationErrorCode.Authentication,
         RemoteTransportFailureKind.HostTrust => OperationErrorCode.HostTrust,
+        RemoteTransportFailureKind.KeyIdentity => OperationErrorCode.Validation,
         _ => OperationErrorCode.Unexpected,
     };
 
     private static string ToVerificationError(OperationErrorCode error) => error switch
     {
         OperationErrorCode.HostTrust => KeyAuthenticationVerificationErrorCatalog.HostTrust,
+        OperationErrorCode.Validation => KeyAuthenticationVerificationErrorCatalog.InvalidInput,
         OperationErrorCode.Authentication => KeyAuthenticationVerificationErrorCatalog.Authentication,
         OperationErrorCode.Timeout => KeyAuthenticationVerificationErrorCatalog.Timeout,
         OperationErrorCode.Network or OperationErrorCode.ConnectionRefused => KeyAuthenticationVerificationErrorCatalog.Network,

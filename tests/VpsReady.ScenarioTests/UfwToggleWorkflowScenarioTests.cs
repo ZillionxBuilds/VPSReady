@@ -30,12 +30,12 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
-    public async Task MalformedAddedRulesVerificationBlocksEnableEvenThoughScenarioHostDoesNotEnforceClientSafety()
+    public async Task MalformedStoredRulesVerificationBlocksEnableEvenThoughScenarioHostDoesNotEnforceClientSafety()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.added-rules-malformed");
         state.Ufw.Rules.Clear();
         var faults = new ScenarioFaultPlan();
-        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.MalformedOutput, "c305-added-rules-malformed", RemoteCommandCatalog.UbuntuUfwAddedRulesRead);
+        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.MalformedOutput, "c305-stored-rules-malformed", RemoteCommandCatalog.UbuntuUfwStoredSshRead);
         var host = new DeterministicScenarioHost(state, faults);
         var (workflow, diagnostics) = CreateWorkflow();
 
@@ -79,7 +79,7 @@ public sealed class UfwToggleWorkflowScenarioTests
 
         Assert.True(result.Result.Succeeded);
         Assert.Equal(OperationState.Unchanged, result.Result.State);
-        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest], transport.CommandIds);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwStoredSshRead, RemoteCommandCatalog.SshConnectionTest], transport.CommandIds);
         Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
         Assert.Equal(RemoteCommandCatalog.SshConnectionTest, diagnostics.Events[^1].CommandId);
     }
@@ -100,7 +100,7 @@ public sealed class UfwToggleWorkflowScenarioTests
         Assert.Equal("REMOTE_COMMAND_FAILED", result.Result.ErrorCode?.ToStableCode());
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
-        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.CommandIds);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwStoredSshRead, RemoteCommandCatalog.SshConnectionTest, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.CommandIds);
         Assert.DoesNotContain(diagnostics.Events, diagnosticEvent => diagnosticEvent.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
@@ -208,6 +208,7 @@ public sealed class UfwToggleWorkflowScenarioTests
     private sealed class PhasedScenarioTransport(DeterministicScenarioHost host) : IRemoteTransport
     {
         private int listReads;
+        private int storedReads;
         public List<string> CommandIds { get; } = [];
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
@@ -222,7 +223,7 @@ public sealed class UfwToggleWorkflowScenarioTests
                     1 => DiagnosticPhase.Verify,
                     _ => DiagnosticPhase.Recovery,
                 },
-                RemoteCommandCatalog.UbuntuUfwAddedRulesRead => DiagnosticPhase.Verify,
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead => storedReads++ == 0 ? DiagnosticPhase.Preflight : DiagnosticPhase.Verify,
                 RemoteCommandCatalog.SshConnectionTest => DiagnosticPhase.Verify,
                 _ => DiagnosticPhase.Apply,
             };

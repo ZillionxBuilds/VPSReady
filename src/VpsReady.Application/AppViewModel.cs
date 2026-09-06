@@ -62,10 +62,11 @@ public sealed class AppViewModel : ObservableObject
         IPublicKeyDeployment keyDeployment,
         IKeyAuthenticationVerifier keyAuthentication,
         IOpenSshConfigEditor configEditor,
-        IDiagnosticSink diagnostics)
+        IDiagnosticSink diagnostics,
+        IServerOverviewReader? overviewReader = null)
         : this(applicationSession, false, null, diagnosticsWorkspace)
     {
-        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession);
+        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession, overviewReader);
         Firewall = new FirewallViewModel(applicationSession, firewallManagement, diagnostics);
         SshManagement = new SshManagementViewModel(
             applicationSession,
@@ -92,7 +93,8 @@ public sealed class AppViewModel : ObservableObject
         IPackageUpgrader packageUpgrader,
         IRebootWorkflow rebootWorkflow,
         IHostnameChanger hostnameChanger,
-        ITimezoneChanger timezoneChanger)
+        ITimezoneChanger timezoneChanger,
+        IServerOverviewReader? overviewReader = null)
         : this(
             applicationSession,
             lifecycle,
@@ -103,7 +105,8 @@ public sealed class AppViewModel : ObservableObject
             keyDeployment,
             keyAuthentication,
             configEditor,
-            diagnostics)
+            diagnostics,
+            overviewReader)
     {
         SystemActions = new SystemActionsViewModel(
             applicationSession,
@@ -406,7 +409,7 @@ public sealed record ShellPageViewModel(
     public bool IsFirewallPage => Page == ShellPage.Firewall;
     public bool IsSshManagementPage => Page == ShellPage.SshKeysAndConfig;
     public bool IsSystemActionsPage => Page == ShellPage.System;
-    public bool IsPlaceholderPage => Page is not ShellPage.Firewall and not ShellPage.SshKeysAndConfig and not ShellPage.System;
+    public bool IsPlaceholderPage => !Enum.IsDefined(Page);
     public bool IsConnectionSurfacePage => Page is ShellPage.Connection or ShellPage.Overview;
 
     public static ShellPageViewModel Create(ShellPage page) => page switch
@@ -417,7 +420,7 @@ public sealed record ShellPageViewModel(
             "Connect when you are ready",
             "VPSReady starts disconnected. Connection details and credentials are not shown or saved by this shell.",
             "Test connection",
-            "Connection setup is unavailable until the connection workflow is ready."),
+            "Enter connection details, test SSH and explicitly review unknown or changed host keys."),
         ShellPage.Overview => new(
             page,
             "Overview",
@@ -452,7 +455,7 @@ public sealed record ShellPageViewModel(
             "Activity and diagnostics",
             "Activity will show safe, correlated operation results. There is no remote activity in this disconnected session.",
             "Export diagnostics",
-            "Diagnostic export is unavailable until the diagnostics workflow is ready."),
+            "Select a local operation to export its sanitized support bundle."),
         _ => throw new ArgumentOutOfRangeException(nameof(page), page, "Unknown shell page.")
     };
 }

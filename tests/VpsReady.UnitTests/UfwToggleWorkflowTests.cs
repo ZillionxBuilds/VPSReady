@@ -3,6 +3,7 @@ using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Diagnostics;
 using VpsReady.Infrastructure.Remote;
+using VpsReady.Tests;
 
 namespace VpsReady.UnitTests;
 
@@ -26,11 +27,8 @@ public sealed class UfwToggleWorkflowTests
         [ 1] 22/tcp                     ALLOW IN    Anywhere
         """;
 
-    private const string AddedSshAllows = """
-        Added user rules (see 'ufw status' for running firewall):
-        ufw allow from 0.0.0.0/0 to any port 22 proto tcp
-        ufw allow from ::/0 to any port 22 proto tcp
-        """;
+    private static string StoredSshAllows => StoredUfwFixture.Create();
+    private static string StoredEmpty => StoredUfwFixture.Create(allow4: false, allow6: false);
 
     [Fact]
     public void CatalogUsesKnownBoundedCLocaleCommandsAndRejectsInvalidSshPort()
@@ -55,11 +53,11 @@ public sealed class UfwToggleWorkflowTests
     }
 
     [Fact]
-    public void AddedRulesVerificationRequiresBothExactTcpFamilies()
+    public void DisplayReportCannotEstablishEitherStoredFamily()
     {
-        Assert.True(UbuntuServerFactParser.HasActiveSshAllowsInAddedRules(Result(AddedSshAllows), 22));
-        Assert.False(UbuntuServerFactParser.HasActiveSshAllowsInAddedRules(Result(AddedSshAllows.Replace("::/0", "2001:db8::/32", StringComparison.Ordinal)), 22));
-        Assert.False(UbuntuServerFactParser.HasActiveSshAllowsInAddedRules(Result("Added user rules"), 22));
+        Assert.Null(UfwStoredSshParser.Parse("Added user rules (see 'ufw status' for running firewall):\nufw allow 22/tcp"));
+        Assert.True(UfwStoredSshParser.Parse(StoredSshAllows)!.HasRequiredAllows);
+        Assert.False(UfwStoredSshParser.Parse(StoredUfwFixture.Create(allow6: false))!.HasRequiredAllows);
     }
 
     [Fact]
@@ -75,11 +73,25 @@ public sealed class UfwToggleWorkflowTests
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("65536")]
+    [InlineData("22\n2222")]
+    public async Task MissingOrAmbiguousServerPortCannotEnableFirewall(string port)
+    {
+        var transport = new RecordingTransport(Result(port));
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, confirmed: true);
+        Assert.False(result.Result.Succeeded);
+        Assert.Single(transport.Commands);
+        Assert.Equal(RemoteCommandCatalog.SshSessionPortRead, transport.Commands[0].Id.Value);
+    }
+
     [Fact]
     public async Task EnableEnsuresBothFamiliesThenSucceedsOnlyAfterFreshActiveVerification()
     {
         var transport = new RecordingTransport(
-            Result("22"), Result("Status: inactive"), Result(string.Empty), Result(string.Empty), Result(AddedSshAllows), Result(string.Empty), Result(ActiveWithSshAllows), Result(string.Empty));
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(string.Empty), Result(string.Empty), Result(StoredSshAllows), Result(string.Empty), Result(ActiveWithSshAllows), Result(string.Empty));
         var diagnostics = new RecordingSanitizedSink();
 
         var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
@@ -87,35 +99,48 @@ public sealed class UfwToggleWorkflowTests
         Assert.True(result.Result.Succeeded);
         Assert.Equal(OperationState.Applied, result.Result.State);
         Assert.Equal(OperationVerification.Passed, result.Result.Verification);
-        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure, RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure, RemoteCommandCatalog.UbuntuUfwAddedRulesRead, RemoteCommandCatalog.UbuntuUfwEnable, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest], transport.Commands.Select(command => command.Id.Value));
-        Assert.Equal("family=ipv4 port=22", transport.Commands[2].SafeArgumentSummary);
-        Assert.Equal("family=ipv6 port=22", transport.Commands[3].SafeArgumentSummary);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwStoredSshRead, RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure, RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure, RemoteCommandCatalog.UbuntuUfwStoredSshRead, RemoteCommandCatalog.UbuntuUfwEnable, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest], transport.Commands.Select(command => command.Id.Value));
+        Assert.Equal("family=ipv4 port=22", transport.Commands[3].SafeArgumentSummary);
+        Assert.Equal("family=ipv6 port=22", transport.Commands[4].SafeArgumentSummary);
         Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
+    }
+
+    [Fact]
+    public async Task OrdinaryUpstreamNormalizedReportDoesNotPreventSupportedEnable()
+    {
+        // Verified using UFW 0.36.2 UFWFrontend.get_show_added: both-family
+        // and IPv4-only objects produce this identical display report.
+        var normalized = "Added user rules (see 'ufw status' for running firewall):\nufw allow 22/tcp";
+        Assert.Null(UfwStoredSshParser.Parse(normalized));
+        var transport = new RecordingTransport(Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(string.Empty), Result(string.Empty), Result(StoredSshAllows), Result(string.Empty), Result(ActiveWithSshAllows), Result(string.Empty));
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, confirmed: true);
+        Assert.True(result.Result.Succeeded);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwAddedRulesRead);
     }
 
     [Fact]
     public async Task ActiveFirewallWithoutBothSshFamiliesFailsBeforeAnyMutation()
     {
-        var transport = new RecordingTransport(Result("22"), Result(ActiveMissingV6));
+        var transport = new RecordingTransport(Result("22"), Result(ActiveMissingV6), Result(StoredUfwFixture.Create(allow6: false)));
         var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, confirmed: true);
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
-        Assert.Equal(2, transport.Commands.Count);
+        Assert.Equal(3, transport.Commands.Count);
         Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
     }
 
     [Fact]
     public async Task AlreadyActiveSafeFirewallVerifiesAuthenticatedContinuityBeforeIdempotentSuccess()
     {
-        var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(string.Empty));
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(StoredSshAllows), Result(string.Empty));
         var diagnostics = new RecordingSanitizedSink();
 
         var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
 
         Assert.True(result.Result.Succeeded);
         Assert.Equal(OperationState.Unchanged, result.Result.State);
-        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest], transport.Commands.Select(command => command.Id.Value));
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwStoredSshRead, RemoteCommandCatalog.SshConnectionTest], transport.Commands.Select(command => command.Id.Value));
         Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
         Assert.Equal(RemoteCommandCatalog.SshConnectionTest, diagnostics.Events[^1].CommandId);
     }
@@ -123,7 +148,7 @@ public sealed class UfwToggleWorkflowTests
     [Fact]
     public async Task AlreadyActiveContinuityFailureRefreshesWithoutFalseSuccess()
     {
-        var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(string.Empty, exitCode: 25), Result(ActiveWithSshAllows));
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(StoredSshAllows), Result(string.Empty, exitCode: 25), Result(ActiveWithSshAllows));
         var diagnostics = new RecordingSanitizedSink();
 
         var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
@@ -132,7 +157,7 @@ public sealed class UfwToggleWorkflowTests
         Assert.Equal("REMOTE_COMMAND_FAILED", result.Result.ErrorCode?.ToStableCode());
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
-        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Select(command => command.Id.Value));
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwStoredSshRead, RemoteCommandCatalog.SshConnectionTest, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Select(command => command.Id.Value));
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
@@ -140,7 +165,7 @@ public sealed class UfwToggleWorkflowTests
     public async Task EnableVerificationMismatchUsesReadOnlyRecoveryAndNeverReportsSuccess()
     {
         var transport = new RecordingTransport(
-            Result("22"), Result("Status: inactive"), Result(string.Empty), Result(string.Empty), Result(AddedSshAllows), Result(string.Empty), Result("Status: inactive"), Result("Status: inactive"));
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(string.Empty), Result(string.Empty), Result(StoredSshAllows), Result(string.Empty), Result("Status: inactive"), Result("Status: inactive"));
         var diagnostics = new RecordingSanitizedSink();
         var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
 
@@ -162,6 +187,57 @@ public sealed class UfwToggleWorkflowTests
         Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwDisable, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Select(command => command.Id.Value));
     }
 
+    [Theory]
+    [InlineData(22, true)]
+    [InlineData(2222, true)]
+    [InlineData(2222, false)]
+    public async Task EnableRespectsServerPortAndConfiguredIpv6WithoutChangingIpv6(int port, bool ipv6)
+    {
+        var queue = new List<RemoteCommandResult> { Result(port.ToString(System.Globalization.CultureInfo.InvariantCulture)), Result("Status: inactive"), Result(StoredUfwFixture.Create(port, allow4: false, allow6: false, ipv6: ipv6)), Result("") };
+        if (ipv6) { queue.Add(Result("")); }
+        queue.AddRange([Result(StoredUfwFixture.Create(port, ipv6: ipv6)), Result(""), Result((ipv6 ? ActiveWithSshAllows : ActiveMissingV6).Replace("22/tcp", $"{port}/tcp", StringComparison.Ordinal)), Result("")]);
+        var transport = new RecordingTransport([.. queue]);
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, true);
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(ipv6 ? 2 : 1, transport.Commands.Count(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure));
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("deny")]
+    [InlineData("ipv6-disabled-session")]
+    [InlineData("port-changed")]
+    public async Task UnsupportedPreflightNeverMutates(string kind)
+    {
+        var evidence = kind switch
+        {
+            "deny" => StoredUfwFixture.Create(rules4: "-A ufw-user-input -p tcp --dport 22 -j DROP\n" + StoredUfwFixture.Allow(false, 22)),
+            "ipv6-disabled-session" => StoredUfwFixture.Create(ipv6: false, session6: true),
+            "port-changed" => StoredUfwFixture.Create(2222),
+            _ => "unknown",
+        };
+        var transport = new RecordingTransport(Result("22"), Result("Status: inactive"), Result(evidence));
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, true);
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(3, transport.Commands.Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(77)]
+    public async Task MissingFamilyOrLostPrivilegeAfterEnsureNeverEnables(int exitCode)
+    {
+        var transport = new RecordingTransport(Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredUfwFixture.Create(allow6: false), exitCode), Result("Status: inactive"));
+        var diagnostics = new RecordingSanitizedSink();
+        var result = await Workflow(diagnostics).EnableAsync(transport, true);
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
+        Assert.Equal(exitCode == 77 ? "PRIVILEGE_DENIED" : "VERIFICATION_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
     private static UfwToggleWorkflow Workflow(RecordingSanitizedSink sink) => new(new RedactingDiagnosticSink(new FailClosedRedactor(), sink));
     private static RemoteCommandResult Result(string output, int exitCode = 0) => new(exitCode, output, string.Empty, TimeSpan.FromMilliseconds(5));
 
@@ -173,7 +249,7 @@ public sealed class UfwToggleWorkflowTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
-            return Task.FromResult(results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue());
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue(), cancellationToken);
         }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

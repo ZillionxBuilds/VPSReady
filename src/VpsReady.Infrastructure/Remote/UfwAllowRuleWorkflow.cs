@@ -176,6 +176,7 @@ public sealed class UfwAllowRuleWorkflow
     private static OperationErrorCode ErrorForRead(UfwRuleListRead read) => read.Status switch
     {
         UfwRuleListReadStatus.RemoteFailure => OperationErrorCode.Command,
+        UfwRuleListReadStatus.PrivilegeFailure => OperationErrorCode.Privilege,
         UfwRuleListReadStatus.Complete => OperationErrorCode.Unsupported,
         _ => OperationErrorCode.Parse,
     };

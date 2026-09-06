@@ -85,6 +85,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ViewPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh) { await ssh.ViewPublicKeyAsync(); }
+    }
+
+    private async void CopyPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh) { return; }
+        var text = await ssh.ReadPublicKeyForCopyAsync();
+        if (text is null) { return; }
+        try
+        {
+            if (Clipboard is not { } clipboard) { ssh.ReportPublicKeyCopy(false); return; }
+            await clipboard.SetTextAsync(text);
+            ssh.ReportPublicKeyCopy(true);
+        }
+        catch { ssh.ReportPublicKeyCopy(false); }
+    }
+
     private async void AcceptUnknownHostKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (viewModel?.ConnectionOverview is { } connection)
@@ -282,26 +301,33 @@ public partial class MainWindow : Window
         {
             return;
         }
-        if (e.Key == Avalonia.Input.Key.Back)
+        if (PasswordInputKeys.Classify(e.Key, e.KeyModifiers) == PasswordInputKeyAction.Backspace)
         {
             connection.BackspaceSecretCharacter();
             e.Handled = true;
             return;
         }
-        if (e.Key == Avalonia.Input.Key.Escape)
+        if (PasswordInputKeys.Classify(e.Key, e.KeyModifiers) == PasswordInputKeyAction.Clear)
         {
             connection.ClearSecretInput();
             e.Handled = true;
             return;
         }
-        if (PrintablePasswordKeyMapper.TryMap(e.Key, e.KeyModifiers, out var value))
+        if (PasswordInputKeys.Classify(e.Key, e.KeyModifiers) == PasswordInputKeyAction.RejectPaste)
         {
-            connection.AppendSecretCharacter(value);
+            connection.RejectSecretPaste();
             e.Handled = true;
         }
-        else
+    }
+
+    private void ConnectionPasswordTextInput(object? sender, Avalonia.Input.TextInputEventArgs e)
+    {
+        // Avalonia supplies the composed text (layout, Shift and Caps Lock).
+        // Copy it immediately into clearable storage; never bind or retain the
+        // framework event string in a view model, diagnostic or persistent state.
+        if (viewModel?.ConnectionOverview is { } connection)
         {
-            connection.RejectSecretCharacter();
+            connection.AppendSecretText(e.Text.AsSpan());
             e.Handled = true;
         }
     }

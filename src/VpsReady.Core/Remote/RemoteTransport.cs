@@ -54,6 +54,7 @@ public static class RemoteCommandCatalog
     public const string UbuntuUfwAllowRuleAdd = DiagnosticCommandCatalog.UbuntuUfwAllowRuleAdd;
     public const string UbuntuUfwSelectedRuleRemove = DiagnosticCommandCatalog.UbuntuUfwSelectedRuleRemove;
     public const string UbuntuUfwAddedRulesRead = DiagnosticCommandCatalog.UbuntuUfwAddedRulesRead;
+    public const string UbuntuUfwStoredSshRead = DiagnosticCommandCatalog.UbuntuUfwStoredSshRead;
     public const string UbuntuUfwActiveSshAllowEnsure = DiagnosticCommandCatalog.UbuntuUfwActiveSshAllowEnsure;
     public const string UbuntuUfwEnable = DiagnosticCommandCatalog.UbuntuUfwEnable;
     public const string UbuntuUfwDisable = DiagnosticCommandCatalog.UbuntuUfwDisable;
@@ -97,6 +98,7 @@ public static class RemoteCommandCatalog
         UbuntuUfwAllowRuleAdd,
         UbuntuUfwSelectedRuleRemove,
         UbuntuUfwAddedRulesRead,
+        UbuntuUfwStoredSshRead,
         UbuntuUfwActiveSshAllowEnsure,
         UbuntuUfwEnable,
         UbuntuUfwDisable,
@@ -252,8 +254,8 @@ public sealed record RemoteCommand
 
     /// <summary>
     /// Maximum UTF-8 byte count a transport may retain for either standard
-    /// stream. A value of zero is valid only for a metadata-only/no-output
-    /// request that has no remote stream to capture.
+    /// ordinary stream. Zero means no ordinary output is retained; explicitly
+    /// allowlisted parser evidence uses its own bounded transient path.
     /// </summary>
     public int MaximumOutputBytes { get; }
 
@@ -320,6 +322,17 @@ public sealed record RemoteCommandResult
     public OutputCapturePolicy OutputCapturePolicy { get; }
 
     public bool Succeeded => ExitCode == 0;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public CommandParserEvidence? ParserEvidence { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public UfwStoredSshEvidence? StoredSshEvidence { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool AptLockContended { get; init; }
+
+    public override string ToString() => $"RemoteCommandResult [exit={ExitCode}, policy={OutputCapturePolicy}]";
 }
 
 /// <summary>
@@ -377,6 +390,7 @@ public enum RemoteTransportFailureKind
     Timeout,
     Authentication,
     HostTrust,
+    KeyIdentity,
 }
 
 /// <summary>
@@ -397,6 +411,7 @@ public sealed class RemoteTransportException : Exception
         RemoteTransportFailureKind.Timeout => "The SSH transport timed out.",
         RemoteTransportFailureKind.Authentication => "SSH authentication was not accepted.",
         RemoteTransportFailureKind.HostTrust => "The SSH host identity requires explicit review.",
+        RemoteTransportFailureKind.KeyIdentity => "The selected local key identity could not be revalidated. Select the key again.",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown SSH transport failure kind."),
     };
 }

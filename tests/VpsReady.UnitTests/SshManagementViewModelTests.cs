@@ -9,6 +9,33 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class SshManagementViewModelTests
 {
+    [Theory]
+    [InlineData("Alias")]
+    [InlineData("HostName")]
+    [InlineData("UserName")]
+    [InlineData("Port")]
+    public async Task ConfigApprovalCannotCrossEditedInputEvenAfterAba(string field)
+    {
+        await using var session = new ApplicationSession();
+        var config = new RecordingConfigEditor();
+        using var vm = CreateViewModel(session, config: config);
+        await vm.SelectAsync("fixture-key");
+        vm.Alias = "fixture"; vm.HostName = "fixture.invalid"; vm.UserName = "fixture"; vm.Port = "22";
+        vm.IsConfigConfirmed = true;
+        var property = typeof(SshManagementViewModel).GetProperty(field)!;
+        var original = property.GetValue(vm);
+        property.SetValue(vm, field == "Port" ? "2222" : "changed");
+        property.SetValue(vm, original);
+        Assert.False(vm.IsConfigConfirmed);
+        await vm.SaveConfigAsync();
+        Assert.Equal(0, config.Calls);
+        vm.IsConfigConfirmed = true;
+        await vm.SaveConfigAsync();
+        Assert.Equal(1, config.Calls);
+        Assert.Equal("fixture.invalid", config.LastRequest!.HostName);
+        Assert.False(vm.IsConfigConfirmed);
+    }
+
     [Fact]
     public async Task GenerateSelectDeployVerifyAndConfigJourneyUsesOnlySafePresentationState()
     {
@@ -153,13 +180,14 @@ public sealed class SshManagementViewModelTests
         IExistingSshKeySelector? selector = null,
         IPublicKeyDeployment? deployment = null,
         IKeyAuthenticationVerifier? verifier = null,
-        RecordingDiagnosticSink? diagnostics = null) => new(
+        RecordingDiagnosticSink? diagnostics = null,
+        RecordingConfigEditor? config = null) => new(
         session,
         new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(OperationResult.Failure("generate-not-used", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget)),
         selector ?? new RecordingSelector(SuccessSelection("private-key-path")),
         deployment ?? new RecordingDeployment(),
         verifier ?? new RecordingKeyAuthenticationVerifier(),
-        new RecordingConfigEditor(),
+        config ?? new RecordingConfigEditor(),
         diagnostics);
 
     private static ExistingSshKeySelectionResult SuccessSelection(string path) => ExistingSshKeySelectionResult.Success(
@@ -186,6 +214,11 @@ public sealed class SshManagementViewModelTests
 
     private class RecordingSelector(ExistingSshKeySelectionResult result) : IExistingSshKeySelector
     {
+        // Explicit unit fixture payload. Production validation is exercised by
+        // SelectedKeyIdentityRegressionTests with real generated disposable pairs.
+        public Task<SelectedPublicKeyReadResult> ReadPublicKeyAsync(ExistingSshKeySelectionResult selectedKey, CorrelationIds correlation, CancellationToken cancellationToken) =>
+            Task.FromResult(new SelectedPublicKeyReadResult(OperationResult.Success(correlation.OperationId), new PublicKeyDeploymentMaterial("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest".AsSpan())));
+
         public int Calls { get; private set; }
         public virtual Task<ExistingSshKeySelectionResult> SelectAsync(ExistingSshKeySelectionRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
         {

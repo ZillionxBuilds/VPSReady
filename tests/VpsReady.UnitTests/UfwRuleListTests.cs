@@ -71,7 +71,7 @@ public sealed class UfwRuleListTests
     [Theory]
     [InlineData(0, "ufw=unavailable", UfwFirewallState.Absent, UfwRuleListReadStatus.Complete)]
     [InlineData(0, "Status: inactive", UfwFirewallState.Inactive, UfwRuleListReadStatus.Complete)]
-    [InlineData(13, "Status: active", UfwFirewallState.Error, UfwRuleListReadStatus.RemoteFailure)]
+    [InlineData(13, "Status: active", UfwFirewallState.Error, UfwRuleListReadStatus.PrivilegeFailure)]
     public void ParserMapsTerminalNonRuleStatesSafely(int exitCode, string transcript, UfwFirewallState state, UfwRuleListReadStatus status)
     {
         var read = UbuntuServerFactParser.ParseUfwRuleList(Result(transcript, exitCode));

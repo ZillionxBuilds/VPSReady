@@ -49,7 +49,7 @@ public sealed class UfwAllowRuleWorkflowScenarioTests
 
         Assert.False(result.Result.Succeeded);
         Assert.Equal("PRIVILEGE_DENIED", result.Result.ErrorCode?.ToStableCode());
-        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.Equal(OperationRecovery.NotRequired, result.Result.Recovery);
         Assert.DoesNotContain(state.Ufw.Rules, rule => rule.Port == 5353);
         Assert.DoesNotContain(diagnostics.Events, diagnosticEvent => diagnosticEvent.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
@@ -109,7 +109,7 @@ public sealed class UfwAllowRuleWorkflowScenarioTests
         var result = await workflow.AddAsync(new PhasedScenarioTransport(host), new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 7443, "Anywhere", UfwIpFamily.Ipv4));
 
         Assert.False(result.Result.Succeeded);
-        Assert.Equal("REMOTE_COMMAND_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal("PRIVILEGE_DENIED", result.Result.ErrorCode?.ToStableCode());
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.Equal(before, state.Ufw.Rules);
     }

@@ -81,13 +81,14 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
         var cancelledTransport = new RecordingKeyAuthenticationTransport { BlockConnect = true };
         var timeoutTransport = new RecordingKeyAuthenticationTransport { BlockConnect = true };
         var workflow = new KeyAuthenticationVerificationWorkflow(
-            new QueueTransportFactory(cancelledTransport, timeoutTransport),
+            new QueueTransportFactory(cancelledTransport),
             new RecordingDiagnosticSink());
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
 
         var cancellation = await workflow.VerifyAsync(CreateRequest(), cancelled.Token);
-        var timeout = await workflow.VerifyAsync(CreateRequest(TimeSpan.FromMilliseconds(1)));
+        var timeout = await new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(timeoutTransport),
+            new RecordingDiagnosticSink()).VerifyAsync(CreateRequest(TimeSpan.FromMilliseconds(10)));
 
         Assert.True(cancellation.Result.Cancelled);
         Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Cancelled, cancellation.VerificationErrorCode);
@@ -95,7 +96,8 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
         Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Timeout, timeout.VerificationErrorCode);
         Assert.Empty(cancelledTransport.Commands);
         Assert.Empty(timeoutTransport.Commands);
-        Assert.True(cancelledTransport.Disposed);
+        // Pre-cancelled work never creates or owns a candidate at all.
+        Assert.False(cancelledTransport.Disposed);
         Assert.True(timeoutTransport.Disposed);
     }
 

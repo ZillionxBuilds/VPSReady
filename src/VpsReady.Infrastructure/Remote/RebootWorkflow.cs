@@ -36,7 +36,7 @@ public sealed class RebootWorkflow : IRebootWorkflow
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, command.Id.Value, null).ConfigureAwait(false);
             var read = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, read, command.Id.Value).ConfigureAwait(false);
-            if (!read.Succeeded || !TryParseRequired(read.StandardOutput, out var required))
+            if (!read.Succeeded || read.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuRebootRequiredRead, Flag: { } required })
             {
                 return await RequiredFailureAsync(correlation, OperationErrorCode.Parse, RebootErrorCatalog.RequiredState, command.Id.Value).ConfigureAwait(false);
             }
@@ -203,7 +203,7 @@ public sealed class RebootWorkflow : IRebootWorkflow
                 {
                     break;
                 }
-                if (!verified.Succeeded || !IsExactRecord(verified.StandardOutput, "reconnect=verified"))
+                if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
                 {
                     return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied, RebootReconnectOutcome.Failed, attempt).ConfigureAwait(false);
                 }
@@ -306,36 +306,6 @@ public sealed class RebootWorkflow : IRebootWorkflow
     private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId)
     {
         try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "System reboot", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Reboot command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
-    }
-
-    private static bool TryParseRequired(string output, out bool required)
-    {
-        required = false;
-        return TryReadSingleRecord(output, "reboot_required=", out var value)
-            && (value == "true" || value == "false")
-            && bool.TryParse(value, out required);
-    }
-
-    private static bool IsExactRecord(string output, string expected) => TryReadSingleRecord(output, string.Empty, out var value) && value == expected;
-
-    private static bool TryReadSingleRecord(string output, string prefix, out string value)
-    {
-        value = string.Empty;
-        if (string.IsNullOrEmpty(output))
-        {
-            return false;
-        }
-
-        var line = output.EndsWith("\r\n", StringComparison.Ordinal) ? output[..^2]
-            : output.EndsWith('\n') ? output[..^1]
-            : output;
-        if (line.Contains('\r') || line.Contains('\n') || !line.StartsWith(prefix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        value = line[prefix.Length..];
-        return !string.IsNullOrEmpty(value);
     }
 
     private static bool IsExpectedDisconnect(RemoteTransportFailureKind failure) => failure is RemoteTransportFailureKind.Network or RemoteTransportFailureKind.ConnectionRefused or RemoteTransportFailureKind.Timeout;

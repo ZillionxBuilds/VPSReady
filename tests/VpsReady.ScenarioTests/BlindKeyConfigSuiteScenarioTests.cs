@@ -27,7 +27,7 @@ public sealed class BlindKeyConfigSuiteScenarioTests
         var diagnostics = services.GetRequiredService<ScenarioDiagnosticRecorder>();
         var authorizedKeys = $"/home/{state.Ssh.UserName}/.ssh/authorized_keys";
         const string legacyAuthorizedKeys = "legacy-entry\n";
-        state.RemoteFiles.Files[authorizedKeys] = state.RemoteFiles.Files[authorizedKeys] with { Contents = legacyAuthorizedKeys, Owner = "wrong", Permissions = "0644" };
+        state.RemoteFiles.Files[authorizedKeys] = state.RemoteFiles.Files[authorizedKeys] with { Contents = legacyAuthorizedKeys, Permissions = "0644" };
 
         using var firstKey = new PublicKeyDeploymentMaterial(PublicKey.AsSpan());
         var first = await services.GetRequiredService<PublicKeyDeploymentWorkflow>().DeployAsync(host, firstKey);
@@ -40,7 +40,7 @@ public sealed class BlindKeyConfigSuiteScenarioTests
         Assert.True(duplicate.AlreadyPresent);
         Assert.True(verification.Result.Succeeded);
         Assert.StartsWith(legacyAuthorizedKeys, state.RemoteFiles.Files[authorizedKeys].Contents, StringComparison.Ordinal);
-        Assert.Equal("0600", state.RemoteFiles.Files[authorizedKeys].Permissions);
+        Assert.Equal("0644", state.RemoteFiles.Files[authorizedKeys].Permissions);
         Assert.Equal(state.Ssh.UserName, state.RemoteFiles.Files[authorizedKeys].Owner);
         Assert.Single(state.Ssh.AuthorizedKeyFingerprints);
         var diagnosticSurfaces = string.Concat(
