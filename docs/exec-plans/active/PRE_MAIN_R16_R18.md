@@ -63,7 +63,11 @@ three SELF-REVIEW passes and honest skips in Workpad. Synthetic input only.
   22/22; combined firewall unit set 32/32 and production-adapter E2 5/5.
   Session/generation/outer authority, immutable approvals, conservative validated
   server SSH port, independent complete read preserves fresh failure facts.
-- [ ] R18 main/first-promotion gate regression and correction.
+- [x] R18 RED 2 failed / 23 passed (main PR and push excluded); GREEN 25/25.
+  Actual checked-in aggregate script rejects every failed/skipped/cancelled child.
+  Actual composite script bootstraps an empty old main and creates a two-parent
+  prospective commit; moved-base revalidation changes SHA and rejects old SHA.
+  These are local E0 semantic tests, not GitHub-hosted execution.
 - [ ] Same-class pass; full exact-head E0–E4; final self-review and PR handoff.
 
 ## Decision log

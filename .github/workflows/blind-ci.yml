@@ -3,10 +3,12 @@ name: Blind CI
 on:
   pull_request:
     branches:
+      - main
       - development
       - "release/**"
   push:
     branches:
+      - main
       - development
       - "release/**"
   workflow_dispatch:

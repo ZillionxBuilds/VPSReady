@@ -26,6 +26,27 @@ require_text "PR_BASE_REF: \${{ github.event.pull_request.base.ref || '' }}"
 require_text "PUSH_SHA: \${{ github.event_name == 'push' && github.sha || '' }}"
 require_text 'uses: ./.github/actions/prepare-prospective-validation'
 
+# A PR branch filter selects the target, not the source release branch.
+# Fail closed if either validation event loses main/development/release coverage.
+for validation_event in pull_request push; do
+  for validation_branch in main development '"release/**"'; do
+    if ! awk -v event="$validation_event" -v branch="$validation_branch" '
+      $0 == "  " event ":" { selected=1; next }
+      selected && /^  [^ ]/ { selected=0 }
+      selected && $0 == "      - " branch { found=1 }
+      END { exit !found }
+    ' "$workflow"; then
+      printf 'Missing CI target branch: %s / %s\n' "$validation_event" "$validation_branch" >&2
+      exit 1
+    fi
+  done
+done
+
+if grep -Fq 'pull_request_target:' "$workflow"; then
+  printf 'Privileged pull_request_target is not allowed for blind validation.\n' >&2
+  exit 1
+fi
+
 workflow_bootstrap_references="$(grep -F -c 'ref: ${{ github.workflow_sha }}' "$workflow" || true)"
 if [[ "$workflow_bootstrap_references" != '4' ]]; then
   printf 'CI prospective-validation policy expected four workflow-SHA bootstrap checkouts, found %s.\n' "$workflow_bootstrap_references" >&2
