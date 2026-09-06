@@ -73,7 +73,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
     public bool HasHostnamePlan => hostnamePlan?.IsReady == true;
     public bool HasTimezonePlan => timezonePlan?.IsReady == true;
     public int PlannedUpgradePackageCount => upgradePlan?.PlannedPackageCount ?? 0;
-    public string UpgradePlanStatus => HasUpgradePlan ? $"Packages in reviewed plan: {PlannedUpgradePackageCount}" : "No reviewed package-upgrade plan is available.";
+    public string UpgradePlanStatus => HasUpgradePlan ? $"Packages in reviewed plan: {PlannedUpgradePackageCount}. Existing configuration files will be kept; unsupported package prompts fail instead of waiting for input." : "No reviewed package-upgrade plan is available.";
     public string RebootRequirementStatus => RebootRequired is null ? "Reboot requirement has not been inspected." : RebootRequired == true ? "A reboot is required." : "A reboot is not currently required.";
 
     public string Hostname
