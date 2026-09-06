@@ -5,8 +5,9 @@
 [English](README.md) · [คู่มือใช้งาน](docs/user-guide/V0.1_USER_AND_TROUBLESHOOTING_GUIDE.md) · [ศูนย์รวมเอกสาร](docs/README.md) · [สถานะโปรเจกต์](docs/PROJECT_STATUS.md)
 
 > [!IMPORTANT]
-> **ยังเป็น pre-release ไม่ใช่เวอร์ชัน stable** โค้ดแก้ไขอยู่บน `release/0.1.0`
-> เพื่อให้ตรวจทาน แต่การตรวจบน hosted CI ยังค้างอยู่ การมี release branch
+> **ยังเป็น pre-release ไม่ใช่เวอร์ชัน stable** การแก้ R10–R14 อยู่บน
+> `fix/149-pre-main-repair` และยังไม่ merge เข้า `release/0.1.0` หรือ main
+> การตรวจบน hosted CI ยังค้างอยู่ การมี release branch
 > ไม่ได้แปลว่าได้รับอนุมัติให้เริ่มทดสอบกับ VPS จริงแล้ว
 > ตรวจ [สถานะและหลักฐาน](docs/PROJECT_STATUS.md) ก่อนใช้งาน
 > **REAL VPS: NOT TESTED.**
@@ -23,7 +24,7 @@ VPSReady เป็นแอป C#/.NET และ Avalonia สำหรับ Win
 | งาน | ความสามารถและข้อควรทราบ |
 | --- | --- |
 | การเชื่อมต่อ | ทดสอบ SSH ด้วยรหัสผ่าน และให้ตรวจสอบ host key อย่างชัดเจนก่อนเชื่อถือ |
-| ภาพรวม | แสดงสถานะการเชื่อมต่อและ session; UI ยังไม่แสดงข้อมูลเซิร์ฟเวอร์ทั้งหมดที่ตรวจพบ |
+| ภาพรวม | อ่านและแสดงข้อมูลเซิร์ฟเวอร์ 12 รายการตาม session ปัจจุบัน; รายการที่อ่านไม่ได้แสดง Unknown และไม่ใช้ผลจาก session เก่า |
 | Firewall | ตรวจ UFW เพิ่มกฎ TCP/UDP ลบกฎที่เลือก และเปิด/ปิด โดยป้องกันเส้นทาง SSH ที่ใช้งานอยู่และปฏิเสธกรณีที่วิเคราะห์ไม่แน่ชัด |
 | SSH key | สร้าง ED25519 และติดตั้ง public key; ต้องทดสอบ key authentication ด้วยการเชื่อมต่อแยกอีกครั้ง |
 | SSH config | สร้าง alias ในเครื่อง พร้อมตรวจชื่อซ้ำและรักษาเนื้อหาเดิม; config ที่ซับซ้อนอาจต้องแก้ด้วยตนเอง |
@@ -42,7 +43,7 @@ cloud-provider API และ remote terminal อเนกประสงค์�
 ติดตั้ง Git และ .NET SDK ตาม [global.json](global.json) แล้วรัน:
 
 ```bash
-git clone --branch release/0.1.0 https://github.com/ZillionBuilds/VPSReady.git
+git clone --branch fix/149-pre-main-repair https://github.com/ZillionBuilds/VPSReady.git
 cd VPSReady
 dotnet restore VpsReady.slnx --locked-mode
 dotnet build VpsReady.slnx --configuration Release --no-restore

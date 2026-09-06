@@ -17,8 +17,9 @@ A local desktop app for SSH access, UFW firewall rules and everyday server setup
 ---
 
 > [!IMPORTANT]
-> **Pre-release software — not a stable release.** Source repairs are available
-> on `release/0.1.0` for external review; hosted verification remains pending.
+> **Pre-release software — not a stable release.** R10–R14 repairs are on
+> `fix/149-pre-main-repair` for external review, not yet merged into `release/0.1.0`.
+> Hosted verification remains pending; this is **NOT READY FOR MAIN**.
 > A release branch alone is not Owner-test approval. Check the
 > [current status and evidence](docs/PROJECT_STATUS.md) before testing.
 > **REAL VPS: NOT TESTED.**
@@ -38,9 +39,9 @@ automatic diagnostic upload.
 | Workflow | What the app provides | Important boundary |
 | --- | --- | --- |
 | Connection | Password-based SSH connection testing and explicit host-key review | Unknown keys require review; changed fingerprints are not silently trusted. |
-| Overview | Connection/session overview backed by read-only server inspection | The desktop does not yet display the full inspected server-fact list. |
+| Overview | Session-bound read-only inspection of 12 server facts | Unavailable fields remain Unknown; cancellation and replacement discard stale facts. |
 | Firewall | UFW state, TCP/UDP rules, selected-rule removal and enable/disable actions | The active SSH path is protected; unsupported or ambiguous rule profiles fail closed. |
-| SSH keys | Local ED25519 key creation, public-key deployment and a separate key-authentication test | Deployment alone does not prove key login; password access is not automatically disabled. |
+| SSH keys | Local Ed25519 keys, intentional public-key view/copy, deployment and separate login test | Selected, deployed and authenticated identity must match; private keys are never displayed. |
 | OpenSSH aliases | Local SSH config entries with preservation and collision checks | Complex or conflicting configurations can be refused for manual review. |
 | System actions | Package-index refresh, reviewed package upgrades, reboot/reconnect, hostname and timezone changes | No distribution upgrade or silent reboot; cancellation is not rollback. |
 | Diagnostics | Local activity, a sanitized operation journal, safe issue reports and support bundles | Diagnostics stay local until you review and explicitly share them. |
@@ -76,7 +77,7 @@ newer source repairs merely because both refer to v0.1.0.
 Install the .NET SDK selected by [global.json](global.json) and Git. Then:
 
 ```bash
-git clone --branch release/0.1.0 https://github.com/ZillionBuilds/VPSReady.git
+git clone --branch fix/149-pre-main-repair https://github.com/ZillionBuilds/VPSReady.git
 cd VPSReady
 dotnet restore VpsReady.slnx --locked-mode
 dotnet build VpsReady.slnx --configuration Release --no-restore

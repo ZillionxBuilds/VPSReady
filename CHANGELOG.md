@@ -7,6 +7,17 @@ stable-release announcement; exact verification belongs to the linked records.
 
 ## Unreleased — v0.1 Core Basic
 
+### Pre-main repair — R10–R14 (review branch, not integrated)
+
+- Preserve authoritative session cancellation/timeout and reject stale SSH results.
+- Bind selected, deployed and authenticated key identity; use OpenSSH-compatible user-key fingerprints.
+- Display actual read-only Overview facts with independent Unknown fields.
+- Expose explicit connection cancellation and validated public-only view/copy.
+- Invalidate old package plans and revalidate package/version selection before apply.
+
+See [repair and F01–F10 traceability](docs/verification/PRE_MAIN_R10_R14.md).
+No main promotion or stable publication; hosted verification and Owner E5 remain separate.
+
 ### Documentation and project presentation
 
 - Refreshed the English README and added a Thai introduction.

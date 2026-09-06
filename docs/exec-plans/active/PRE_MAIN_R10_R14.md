@@ -63,9 +63,9 @@ Unavailable checks remain NOT RUN. No old artifact relabelling.
 - [x] R11/R12 CONFIRMED: RED 14/17 identity tests; validated same-byte authentication and bounded no-follow companion reads; one serialized OpenSSH fingerprint. GREEN focused 49/49, fixed vector and local ssh-keygen match. Full E1 421 pass / 2 unavailable skips; E2 173 pass / 3 evidence-category skips. No real VPS.
 - [x] R13 CONFIRMED: production Refresh-command regression RED (no command dispatched); GREEN real composition, 12 independently rendered facts, malformed/nonzero/oversized/timeout partial results, cancellation and replacement barriers. F02 explicit cancel reaches real connection lifecycle; F05 explicit public-only view/copy revalidates identity and remains local while disconnected. Combined new overview/key suite 30/30 E1; full regression pending.
 - [x] R14 CONFIRMED: RED 3/3 zero-plan index-refresh cases (success/failure/cancel). Clear preview/confirmation at refresh and session changes; bind plans to transport; revalidate count plus version-selection digest before mutation, with the same privileged environment and conffile policy as apply. GREEN full interim E1 441 pass / 2 unavailable skips; E2 173 pass / 3 category skips. Added matching-count/changed-version, changed-count, unavailable preview, connection binding, root/sudo shell-contract tests. Final-head checks pending.
-- [ ] F01–F10 traceability and confirmed entry-path omissions.
-- [ ] Clean E0–E4 available checks; exact-head evidence/artifacts.
-- [ ] Behavioral, privacy and production/test-parity SELF-REVIEW.
+- [x] F01–F10 traceability and confirmed entry-path omissions: see docs/verification/PRE_MAIN_R10_R14.md; guide, English/Thai README and semantic entry guards aligned.
+- [x] Clean local E0 restore/build/analyzers/format, repository safety/policy checks, dependency audit and startup-script self-test passed. Full interim E1 442/0/2, E2 173/0/3. Exact committed-head reruns and E4 archive provenance are recorded in the canonical Workpad after commit; E3/hosted/matching-host unavailability remains explicit.
+- [x] Behavioral, privacy and production/test-parity SELF-REVIEW documented; added stable overview diagnostic errors/duration. Same engineer, not independent QA.
 - [ ] Reviewable PR to release; final trackers/board and handoff.
 
 ## Decision log
@@ -87,5 +87,8 @@ Keep partial/uncertain mutations visible. Do not silently broaden package plans.
 
 ## Outcomes and follow-up
 
-Pending implementation and exact-head validation. The single #149 Workpad holds
-current results, PR and archive provenance. REAL VPS: NOT TESTED.
+R10–R14 implementation complete. The single #149 Workpad is the live final-head
+validation and handoff record (including exact PR, artifacts and checksums);
+post-commit evidence does not require relabelling historical archives or making
+another documentation-only SHA look runtime-tested. No target branch is merged.
+REAL VPS: NOT TESTED.

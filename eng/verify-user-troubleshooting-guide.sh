@@ -35,6 +35,20 @@ grep -Fq 'explicitly local sanitized' "$guide"
 ! grep -Fq 'intentionally an unavailable-action surface' "$guide"
 
 grep -Fq 'REAL VPS: NOT TESTED' "$guide"
+grep -Fq '**Cancel connection**' "$guide"
+grep -Fq '**Refresh server facts**' "$guide"
+grep -Fq '**View public key**' "$guide"
+grep -Fq '**Copy public key**' "$guide"
+grep -Fq 'Index refresh immediately invalidates any earlier plan' "$guide"
+! grep -Fq 'yet render the full server-fact list' "$guide"
+# Entry-path guards complement compiled XAML and real service/VM tests.
+grep -Fq 'ConnectionOverview.CancelConnectionCommand' src/VpsReady.Desktop/MainWindow.axaml
+grep -Fq 'ConnectionOverview.Facts' src/VpsReady.Desktop/MainWindow.axaml
+grep -Fq 'ConnectionOverview.RefreshCommand' src/VpsReady.Desktop/MainWindow.axaml
+grep -Fq 'Click="ViewPublicKeyAsync"' src/VpsReady.Desktop/MainWindow.axaml
+grep -Fq 'Click="CopyPublicKeyAsync"' src/VpsReady.Desktop/MainWindow.axaml
+grep -Fq 'await ssh.ReadPublicKeyForCopyAsync()' src/VpsReady.Desktop/MainWindow.axaml.cs
+grep -Fq 'AddSingleton<IServerOverviewReader, ServerOverviewReader>()' src/VpsReady.Desktop/DesktopComposition.cs
 grep -Fq 'never uploads diagnostics automatically' "$guide"
 ! grep -Eq -- '-----BEGIN [A-Z ]*PRIVATE KEY-----|VPSREADY_(SEEDED|TEST)_SECRET' "$guide"
 

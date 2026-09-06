@@ -1,5 +1,27 @@
 # Project status
 
+## Current — pre-main repair, not integrated
+
+The external review of release `4ed708a99907c8bebc68664903e28b3d86ea02ee`
+is **NOT READY FOR MAIN**. R10–R14 corrections are on
+`fix/149-pre-main-repair`, targeting `release/0.1.0` through review only.
+No self-merge, main promotion or stable publication is authorized.
+
+See [repair dispositions and F01–F10 wiring](verification/PRE_MAIN_R10_R14.md)
+and the [current #149 Workpad](https://github.com/ZillionBuilds/VPSReady/issues/149#issuecomment-5556353152)
+for the exact repair head, PR, final E0–E4 results and archive checksums.
+The handoff target is **READY_FOR_EXTERNAL_CODE_REVIEW** with
+**HOSTED_VERIFICATION_PENDING**, not Owner-test/main approval.
+Owner E5 is **NOT RUN**. **REAL VPS: NOT TESTED.**
+
+Documentation sync PRs #154/#155 and main PR #156 remain separate. This repair
+does not merge either documentation PR or silently synchronize target branches.
+The earlier runtime/archive baseline is `2c7786b7856dc1b9009b5e3b25b226fc69193302`;
+the difference through reviewed `4ed708a` is documentation only. New R10–R14
+runtime changes require new tests/packages; old artifacts are not relabelled.
+
+<details><summary>Historical R8/R9 evidence — not current-head readiness</summary>
+
 [Project home](../README.md) · [Documentation](README.md) · [Changelog](../CHANGELOG.md)
 
 > [!IMPORTANT]
@@ -70,3 +92,5 @@ upgrade policy preserves existing conffiles, but does not make package
 maintainer scripts or partial upgrades reversible. The overview, Activity and
 native password-input/IME limitations remain documented in the
 [user guide](user-guide/V0.1_USER_AND_TROUBLESHOOTING_GUIDE.md).
+
+</details>

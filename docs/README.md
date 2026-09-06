@@ -40,6 +40,7 @@ approve a newer candidate. **REAL VPS: NOT TESTED.**
 ## Follow changes and decisions
 
 - [Changelog](../CHANGELOG.md) — notable changes, without implying a stable release.
+- [Pre-main R10–R14 repair](verification/PRE_MAIN_R10_R14.md) — current corrections, F01–F10 wiring and verification boundaries.
 - [Final RC source repairs](verification/RC_FINAL_SOURCE_REPAIR.md) — R1–R7 repair evidence.
 - [Release follow-up](verification/RC_FOLLOWUP_R8_R9.md) — R8/R9 and ignore-policy evidence.
 - [Dependency baseline](research/R001_DEPENDENCY_BASELINE.md) — dated dependency research.
