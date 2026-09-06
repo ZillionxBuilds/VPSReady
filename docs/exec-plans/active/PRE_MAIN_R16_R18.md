@@ -68,13 +68,23 @@ three SELF-REVIEW passes and honest skips in Workpad. Synthetic input only.
   Actual composite script bootstraps an empty old main and creates a two-parent
   prospective commit; moved-base revalidation changes SHA and rejects old SHA.
   These are local E0 semantic tests, not GitHub-hosted execution.
-- [ ] Same-class pass; full exact-head E0–E4; final self-review and PR handoff.
+- [x] Bounded same-class pass: six RED cases for old system continuation/UI
+  Working state and reusable reboot approval; four RED local SSH config ABA
+  cases. Corrections consume approvals and invalidate changed targets.
+- [ ] Full exact-head E0–E4 and external-review PR handoff; record final results
+  in the existing Workpads rather than changing the tested source identity.
 
 ## Decision log
 
 R16: consume exact approval before asynchronous mutation, invalidate generations
 on input/session changes, publish approved target only in explicit plan UI.
 Do not normalize approved input a second time or log raw proposed values.
+
+R17: an independent complete read establishes mutation snapshot freshness even
+when the mutation failed. A separate typed server-port read gates TCP removal;
+its metadata-only command event is linked to the displayed operation ID.
+R18: extend the existing Blind CI filters; retain workflow-SHA bootstrap and
+current-base prospective validation, never a privileged alternate trigger.
 
 ## Surprises and discoveries
 

@@ -117,8 +117,8 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsUpgradeConfirmed { get => isUpgradeConfirmed; set { if (SetProperty(ref isUpgradeConfirmed, value)) { OnPlanAvailabilityChanged(); } } }
-    public bool IsRebootConfirmed { get => isRebootConfirmed; set { if (SetProperty(ref isRebootConfirmed, value)) { OnPlanAvailabilityChanged(); } } }
+    public bool IsUpgradeConfirmed { get => isUpgradeConfirmed; set { if (SetProperty(ref isUpgradeConfirmed, value && HasUpgradePlan && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
+    public bool IsRebootConfirmed { get => isRebootConfirmed; set { if (SetProperty(ref isRebootConfirmed, value && RebootRequired == true && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
     public bool IsHostnameConfirmed { get => isHostnameConfirmed; set { if (SetProperty(ref isHostnameConfirmed, value && HasHostnamePlan && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
     public bool IsTimezoneConfirmed { get => isTimezoneConfirmed; set { if (SetProperty(ref isTimezoneConfirmed, value && HasTimezonePlan && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
 
@@ -199,7 +199,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         "reboot-apply",
         async (transport, token) =>
         {
-            var completed = await rebootWorkflow.RebootAsync(transport, IsRebootConfirmed, token).ConfigureAwait(false);
+            var confirmed = IsRebootConfirmed;
+            IsRebootConfirmed = false;
+            RebootRequired = null;
+            var completed = await rebootWorkflow.RebootAsync(transport, confirmed, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, () =>
             {
                 if (completed.Result.Succeeded)
@@ -367,7 +370,14 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             var workflowError = completed is { } terminal && ReferenceEquals(result, terminal.Result)
                 ? terminal.ErrorCode
                 : null;
-            if (!IsCurrentSession(expectedSession) || presentation != presentationRevision || disposed) { return; }
+            if (!IsCurrentSession(expectedSession) || disposed) { return; }
+            if (presentation != presentationRevision)
+            {
+                // Keep the input-change explanation, not a completed operation's
+                // obsolete status. The UI must also leave its working state.
+                if (ReferenceEquals(activeCancellation, cancellation)) { State = SystemActionsScreenState.Ready; }
+                return;
+            }
             if (completed is { } accepted && ReferenceEquals(result, accepted.Result)
                 && string.Equals(expectedSession, session.Snapshot.SessionId, StringComparison.Ordinal))
             {
@@ -452,6 +462,11 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             hostnameRevision++;
             timezoneRevision++;
             presentationRevision++;
+            lock (operationLock)
+            {
+                activeCancellation?.Cancel();
+                activeCancellation = null;
+            }
             ClearHostnamePlan();
             ClearTimezonePlan();
             IsRebootConfirmed = false;
