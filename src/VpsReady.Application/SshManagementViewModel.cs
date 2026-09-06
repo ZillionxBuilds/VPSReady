@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
 using System.Windows.Input;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -11,7 +10,8 @@ namespace VpsReady.Application;
 /// <summary>
 /// Safe presentation state for the SSH key-management journey. The view model
 /// composes accepted workflows; it neither builds remote commands nor owns a
-/// transport, and intentionally never exposes a key path or key material.
+/// transport. Private material and paths are never exposed; a separate explicit
+/// view/copy action can disclose the selected public key only.
 /// </summary>
 public enum SshManagementScreenState
 {
@@ -52,6 +52,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private string? errorCode;
     private bool disposed;
     private string? observedSessionId;
+    private string? publicKeyDisplay;
 
     public SshManagementViewModel(
         IApplicationSession session,
@@ -76,10 +77,47 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         trustedHostStatus = CreateTrustedHostStatus();
         observedSessionId = session.Snapshot.SessionId;
         CancelCommand = new DelegateCommand(Cancel);
+        HidePublicKeyCommand = new DelegateCommand(() => PublicKeyDisplay = null);
         session.StateChanged += OnSessionStateChanged;
     }
 
     public ICommand CancelCommand { get; }
+    public ICommand HidePublicKeyCommand { get; }
+    public string? PublicKeyDisplay { get => publicKeyDisplay; private set => SetProperty(ref publicKeyDisplay, value); }
+    public bool CanReadPublicKey => !IsBusy && HasSelectedKey;
+
+    /// <summary>Intentional public-only disclosure. Revalidates the pair; no private bytes enter presentation.</summary>
+    public async Task<string?> ReadPublicKeyForCopyAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBegin(SshManagementScreenState.Working, requiresSession: false, out var cancellation, cancellationToken)) { return null; }
+        try
+        {
+            if (selectedKey is null) { CompletePreconditionFailure("Select a validated local key first."); return null; }
+            var read = await selector.ReadPublicKeyAsync(selectedKey, CorrelationIds.Create("public_key_read"), cancellation.Token).ConfigureAwait(false);
+            using var material = read.Material;
+            if (!read.Operation.Succeeded || material is null || cancellation.IsCancellationRequested)
+            {
+                InvalidateSelection();
+                Complete(read.Operation, null, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
+                return null;
+            }
+            var characters = material.CopyForUse();
+            try
+            {
+                Complete(read.Operation, null, "The validated public key is available for this explicit local view/copy action. Clipboard contents may be read by other applications.", SshManagementScreenState.Ready);
+                return new string(characters);
+            }
+            finally { Array.Clear(characters); }
+        }
+        finally { End(cancellation); }
+    }
+
+    public async Task ViewPublicKeyAsync(CancellationToken cancellationToken = default) =>
+        PublicKeyDisplay = await ReadPublicKeyForCopyAsync(cancellationToken).ConfigureAwait(false);
+
+    public void ReportPublicKeyCopy(bool copied) => Status = copied
+        ? "Public key copied by your request. Other applications or clipboard history may retain it."
+        : "Public key could not be copied. Use View public key to inspect it locally.";
 
     public SshManagementScreenState State { get => state; private set => SetProperty(ref state, value); }
 
@@ -384,6 +422,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private void InvalidateSelection()
     {
         selectedKey = null;
+        PublicKeyDisplay = null;
         IsDeploymentConfirmed = false;
         IsConfigConfirmed = false;
         OnPropertyChanged(nameof(HasSelectedKey));
@@ -552,6 +591,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private void OnEligibilityChanged()
     {
         OnPropertyChanged(nameof(CanDeploy));
+        OnPropertyChanged(nameof(CanReadPublicKey));
         OnPropertyChanged(nameof(CanVerifyKeyAuthentication));
         OnPropertyChanged(nameof(DeploymentEligibilityMessage));
         OnPropertyChanged(nameof(KeyAuthenticationEligibilityMessage));

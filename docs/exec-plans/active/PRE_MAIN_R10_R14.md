@@ -61,7 +61,7 @@ Unavailable checks remain NOT RUN. No old artifact relabelling.
 - [x] Reconcile refs/issues/PRs; claim #149; update #1/#20 and existing Kanban.
 - [x] R10 CONFIRMED: diagnostic-await barrier suite RED 9/10 (1 ordinary deployment pass); corrected authoritative UI completion, session-bound key-auth, stale dispatch bookkeeping. GREEN 10/10; with existing SSH/session tests 18/18. E1 only.
 - [x] R11/R12 CONFIRMED: RED 14/17 identity tests; validated same-byte authentication and bounded no-follow companion reads; one serialized OpenSSH fingerprint. GREEN focused 49/49, fixed vector and local ssh-keygen match. Full E1 421 pass / 2 unavailable skips; E2 173 pass / 3 evidence-category skips. No real VPS.
-- [ ] R13 service/composition/UI facts journey and regressions.
+- [x] R13 CONFIRMED: production Refresh-command regression RED (no command dispatched); GREEN real composition, 12 independently rendered facts, malformed/nonzero/oversized/timeout partial results, cancellation and replacement barriers. F02 explicit cancel reaches real connection lifecycle; F05 explicit public-only view/copy revalidates identity and remains local while disconnected. Combined new overview/key suite 30/30 E1; full regression pending.
 - [ ] R14 fresh preview/confirmation policy and regressions.
 - [ ] F01–F10 traceability and confirmed entry-path omissions.
 - [ ] Clean E0–E4 available checks; exact-head evidence/artifacts.

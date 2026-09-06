@@ -85,6 +85,25 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ViewPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh) { await ssh.ViewPublicKeyAsync(); }
+    }
+
+    private async void CopyPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh) { return; }
+        var text = await ssh.ReadPublicKeyForCopyAsync();
+        if (text is null) { return; }
+        try
+        {
+            if (Clipboard is not { } clipboard) { ssh.ReportPublicKeyCopy(false); return; }
+            await clipboard.SetTextAsync(text);
+            ssh.ReportPublicKeyCopy(true);
+        }
+        catch { ssh.ReportPublicKeyCopy(false); }
+    }
+
     private async void AcceptUnknownHostKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (viewModel?.ConnectionOverview is { } connection)

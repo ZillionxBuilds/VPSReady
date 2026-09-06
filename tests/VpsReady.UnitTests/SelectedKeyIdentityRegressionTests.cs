@@ -12,6 +12,32 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class SelectedKeyIdentityRegressionTests
 {
+    [Fact]
+    public async Task PublicViewAndCopyAreExplicitValidatedLocalOnlyActions()
+    {
+        await using var a = new KeyWorkspace();
+        await using var b = new KeyWorkspace();
+        await GenerateAsync(a);
+        await GenerateAsync(b);
+        await using var session = new ApplicationSession();
+        var sink = new CollectingDiagnosticSink();
+        using var vm = new SshManagementViewModel(session, new Ed25519OpenSshKeyPairGenerator(sink),
+            new ExistingOpenSshKeySelector(sink), new CountDeployment(), new CountAuthentication(), new NoConfig());
+        await vm.SelectAsync(a.PrivateKeyPath);
+        Assert.Null(vm.PublicKeyDisplay);
+        var copy = await vm.ReadPublicKeyForCopyAsync();
+        Assert.StartsWith("ssh-ed25519 ", copy);
+        Assert.DoesNotContain("PRIVATE", copy, StringComparison.Ordinal);
+        Assert.Null(vm.PublicKeyDisplay);
+        await vm.ViewPublicKeyAsync();
+        Assert.Equal(copy, vm.PublicKeyDisplay);
+        vm.HidePublicKeyCommand.Execute(null);
+        Assert.Null(vm.PublicKeyDisplay);
+        File.Copy(b.PublicKeyPath, a.PublicKeyPath, overwrite: true);
+        Assert.Null(await vm.ReadPublicKeyForCopyAsync());
+        Assert.False(vm.HasSelectedKey);
+        Assert.Null(vm.PublicKeyDisplay);
+    }
     [Theory]
     [InlineData("other", false)]
     [InlineData("missing", false)]

@@ -115,6 +115,13 @@
               </StackPanel>
               <TextBlock Text="{Binding SshManagement.SelectedKeyMetadata.Algorithm}" />
               <TextBlock Text="{Binding SshManagement.SelectedKeyMetadata.Fingerprint}" FontFamily="Consolas" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="ViewPublicKeyAsync" IsEnabled="{Binding SshManagement.CanReadPublicKey}" Content="View public key" />
+                <Button Click="CopyPublicKeyAsync" IsEnabled="{Binding SshManagement.CanReadPublicKey}" Content="Copy public key" />
+                <Button Command="{Binding SshManagement.HidePublicKeyCommand}" Content="Hide public key" />
+              </StackPanel>
+              <TextBlock Text="{Binding SshManagement.PublicKeyDisplay}" FontFamily="Consolas" TextWrapping="Wrap" />
+              <TextBlock Text="Public-key text appears only after View, or goes to the system clipboard only after Copy. Clipboard history and other applications may retain it. Private keys are never displayed or copied." TextWrapping="Wrap" />
               <TextBlock FontWeight="SemiBold" Text="Deploy and verify" />
               <CheckBox IsChecked="{Binding SshManagement.IsDeploymentConfirmed, Mode=TwoWay}" Content="I confirm deployment of the selected public key to the current verified session." />
               <TextBlock AutomationProperties.Name="SSH key deployment eligibility" Text="{Binding SshManagement.DeploymentEligibilityMessage}" TextWrapping="Wrap" />
@@ -189,7 +196,10 @@
                 <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" />
               </Border>
               <TextBlock Text="Type the password using your keyboard layout. Backspace deletes the last character; Escape clears it. Tab moves to the next control. Clipboard paste is not supported in this version. Input is cleared after submission." TextWrapping="Wrap" />
-              <Button Click="TestConnectionAsync" Content="Test Connection" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="TestConnectionAsync" IsEnabled="{Binding ConnectionOverview.CanTestConnection}" Content="Test Connection" />
+                <Button Command="{Binding ConnectionOverview.CancelConnectionCommand}" IsEnabled="{Binding ConnectionOverview.IsConnecting}" Content="Cancel connection" />
+              </StackPanel>
               <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.State}" />
               <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
@@ -211,8 +221,19 @@
               </Border>
               <TextBlock Text="{Binding ConnectionOverview.OverviewStatus}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.OverviewState}" />
+              <ItemsControl ItemsSource="{Binding ConnectionOverview.Facts}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="application:OverviewFactRow">
+                    <Grid ColumnDefinitions="170,*" Margin="0,4">
+                      <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
               <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Command="{Binding ConnectionOverview.RefreshCommand}" Content="Refresh connection state" />
+                <Button Command="{Binding ConnectionOverview.RefreshCommand}" IsEnabled="{Binding ConnectionOverview.CanRefresh}" Content="Refresh server facts" />
+                <Button Command="{Binding ConnectionOverview.CancelRefreshCommand}" IsEnabled="{Binding ConnectionOverview.IsRefreshing}" Content="Cancel refresh" />
                 <Button Command="{Binding ConnectionOverview.DisconnectCommand}" Content="Disconnect" />
               </StackPanel>
               <TextBlock Text="Use Activity &amp; Diagnostics to Copy Safe Issue Report; credentials, raw host data and raw command output are never shown there." TextWrapping="Wrap" />
