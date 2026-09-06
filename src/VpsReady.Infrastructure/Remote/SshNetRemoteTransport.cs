@@ -6,6 +6,7 @@ using Renci.SshNet.Common;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.Infrastructure.Remote;
 
@@ -207,19 +208,8 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             SshClient? candidate = null;
             try
             {
-                PrivateKeyFile keyFile;
-                try
-                {
-                    keyFile = new PrivateKeyFile(privateKey.PrivateKeyPath);
-                }
-                catch
-                {
-                    // Local key parsing/access details, including its path,
-                    // remain outside the transport and diagnostics boundary.
-                    throw new RemoteTransportException(RemoteTransportFailureKind.Authentication);
-                }
-
-                var authentication = new PrivateKeyAuthenticationMethod(endpoint.UserName, keyFile);
+                using var keyFile = await ExistingOpenSshKeySelector.OpenForAuthenticationAsync(privateKey, cancellationToken).ConfigureAwait(false);
+                using var authentication = new PrivateKeyAuthenticationMethod(endpoint.UserName, keyFile);
                 var connection = new ConnectionInfo(endpoint.Host, endpoint.Port, endpoint.UserName, authentication)
                 {
                     Timeout = timeout,

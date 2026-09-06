@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Utilities;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 
 namespace VpsReady.Infrastructure.Remote;
@@ -26,7 +27,6 @@ public static class UbuntuAuthorizedKeysCommandCatalog
         var characters = material.CopyForUse();
         byte[]? encoded = null;
         byte[]? decoded = null;
-        byte[]? fingerprint = null;
         try
         {
             var source = new string(characters).Trim();
@@ -43,8 +43,7 @@ public static class UbuntuAuthorizedKeysCommandCatalog
             }
 
             encoded = Encoding.ASCII.GetBytes(tokens[1]);
-            fingerprint = SHA256.HashData(decoded);
-            var printableFingerprint = $"SHA256:{Convert.ToBase64String(fingerprint).TrimEnd('=')}";
+            var printableFingerprint = OpenSshUserKeyFingerprint.FromBlob(decoded);
             if (!FingerprintPattern.IsMatch(printableFingerprint))
             {
                 return false;
@@ -68,10 +67,6 @@ public static class UbuntuAuthorizedKeysCommandCatalog
             if (decoded is not null)
             {
                 CryptographicOperations.ZeroMemory(decoded);
-            }
-            if (fingerprint is not null)
-            {
-                CryptographicOperations.ZeroMemory(fingerprint);
             }
         }
     }

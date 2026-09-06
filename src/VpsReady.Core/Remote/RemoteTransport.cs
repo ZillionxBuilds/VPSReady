@@ -390,6 +390,7 @@ public enum RemoteTransportFailureKind
     Timeout,
     Authentication,
     HostTrust,
+    KeyIdentity,
 }
 
 /// <summary>
@@ -410,6 +411,7 @@ public sealed class RemoteTransportException : Exception
         RemoteTransportFailureKind.Timeout => "The SSH transport timed out.",
         RemoteTransportFailureKind.Authentication => "SSH authentication was not accepted.",
         RemoteTransportFailureKind.HostTrust => "The SSH host identity requires explicit review.",
+        RemoteTransportFailureKind.KeyIdentity => "The selected local key identity could not be revalidated. Select the key again.",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown SSH transport failure kind."),
     };
 }

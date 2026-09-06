@@ -186,6 +186,11 @@ public sealed class SshManagementViewModelTests
 
     private class RecordingSelector(ExistingSshKeySelectionResult result) : IExistingSshKeySelector
     {
+        // Explicit unit fixture payload. Production validation is exercised by
+        // SelectedKeyIdentityRegressionTests with real generated disposable pairs.
+        public Task<SelectedPublicKeyReadResult> ReadPublicKeyAsync(ExistingSshKeySelectionResult selectedKey, CorrelationIds correlation, CancellationToken cancellationToken) =>
+            Task.FromResult(new SelectedPublicKeyReadResult(OperationResult.Success(correlation.OperationId), new PublicKeyDeploymentMaterial("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest".AsSpan())));
+
         public int Calls { get; private set; }
         public virtual Task<ExistingSshKeySelectionResult> SelectAsync(ExistingSshKeySelectionRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
         {

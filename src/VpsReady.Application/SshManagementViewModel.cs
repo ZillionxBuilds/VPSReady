@@ -209,10 +209,12 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var sessionSnapshot = session.Snapshot;
-            var materialResult = await TryLoadPublicMaterialAsync(selected.Location!, cancellation.Token).ConfigureAwait(false);
+            var materialResult = await selector.ReadPublicKeyAsync(selected, CorrelationIds.Create("key_deploy_validate"), cancellation.Token).ConfigureAwait(false);
             if (materialResult.Material is null)
             {
-                Complete(materialResult.Result, PublicKeyDeploymentErrorCatalog.InvalidInput, "The selected public-key companion could not be prepared safely.");
+                InvalidateSelection();
+                Complete(materialResult.Operation, PublicKeyDeploymentErrorCatalog.InvalidInput);
+                Status += " Select the key again before confirming deployment.";
                 return;
             }
 
@@ -260,6 +262,17 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var snapshot = session.Snapshot;
+            var validation = await selector.ReadPublicKeyAsync(selectedKey, CorrelationIds.Create("key_auth_validate"), cancellation.Token).ConfigureAwait(false);
+            using (validation.Material)
+            {
+                if (validation.Material is null)
+                {
+                    InvalidateSelection();
+                    Complete(validation.Operation, KeyAuthenticationVerificationErrorCatalog.InvalidInput);
+                    Status += " Select the key again before testing authentication.";
+                    return;
+                }
+            }
             var request = new KeyAuthenticationVerificationRequest(
                 snapshot.Identity!,
                 new KnownHostIdentity(snapshot.Identity!.Host, snapshot.Identity.Port),
@@ -276,6 +289,11 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             CompleteSessionResult(snapshot, result, verified?.Result, verified?.VerificationErrorCode,
                 "The separate key-authenticated connection was verified. Password access remains unchanged.",
                 SshManagementScreenState.KeyAuthenticationVerified);
+            if (verified?.VerificationErrorCode == KeyAuthenticationVerificationErrorCatalog.InvalidInput)
+            {
+                InvalidateSelection();
+                Status += " Select the key again; its identity could not be revalidated.";
+            }
         }
         catch (ArgumentException)
         {
@@ -344,6 +362,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
     private async Task SelectCoreAsync(string privateKeyPath, CancellationToken cancellationToken)
     {
+        InvalidateSelection();
         var selection = await selector.SelectAsync(
             new ExistingSshKeySelectionRequest(privateKeyPath),
             CorrelationIds.Create("select_key"),
@@ -360,6 +379,16 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             ? "The local key was validated. Deploy its public companion only after explicit confirmation."
             : null,
             selection.Succeeded ? SshManagementScreenState.KeySelected : null);
+    }
+
+    private void InvalidateSelection()
+    {
+        selectedKey = null;
+        IsDeploymentConfirmed = false;
+        IsConfigConfirmed = false;
+        OnPropertyChanged(nameof(HasSelectedKey));
+        OnPropertyChanged(nameof(SelectedKeyMetadata));
+        OnEligibilityChanged();
     }
 
     private bool TryBegin(SshManagementScreenState busyState, bool requiresSession, out CancellationTokenSource cancellation, CancellationToken callerCancellation)
@@ -528,57 +557,4 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(KeyAuthenticationEligibilityMessage));
     }
 
-    private static async Task<PublicKeyMaterialLoadResult> TryLoadPublicMaterialAsync(ExistingSshKeyLocation key, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var publicPath = key.PrivateKeyPath + ".pub";
-            var bytes = await File.ReadAllBytesAsync(publicPath, cancellationToken).ConfigureAwait(false);
-            try
-            {
-                if (bytes.Length == 0 || bytes.Length > 16 * 1024)
-                {
-                    return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.Validation);
-                }
-
-                var characters = Encoding.UTF8.GetChars(bytes);
-                try
-                {
-                    return new PublicKeyMaterialLoadResult(
-                        new PublicKeyDeploymentMaterial(characters),
-                        OperationResult.Success(DiagnosticCorrelationFactory.NewOperationId(), OperationState.Unchanged));
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(characters.AsSpan()));
-                }
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(bytes);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.Cancelled);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.LocalIo);
-        }
-        catch (IOException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.LocalIo);
-        }
-        catch (ArgumentException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.Validation);
-        }
-    }
-
-    private sealed record PublicKeyMaterialLoadResult(PublicKeyDeploymentMaterial? Material, OperationResult Result)
-    {
-        public static PublicKeyMaterialLoadResult Failure(OperationErrorCode error) =>
-            new(null, OperationResult.Failure(DiagnosticCorrelationFactory.NewOperationId(), error, OperationState.Unchanged));
-    }
 }
