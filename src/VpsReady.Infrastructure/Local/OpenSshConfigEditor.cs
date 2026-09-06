@@ -46,7 +46,7 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
 
             configPath = platformPaths.ResolvePath(LocalStorageArea.Ssh, "config");
             originalSnapshot = await ReadSnapshotAsync(configPath, cancellationToken).ConfigureAwait(false);
-            if (!TryDecodeConfig(originalSnapshot.Contents, out var document, out var hasUtf8Bom) || !TryParseHostBlocks(document, out var blocks))
+            if (!TryDecodeConfig(originalSnapshot.Contents, out var document, out var hasUtf8Bom) || !TryParseHostBlocks(document, out var blocks, out var insertionOffset))
             {
                 return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.InvalidConfig, OperationErrorCode.Parse, DiagnosticPhase.Validate, OperationState.Unchanged, OperationVerification.NotRun).ConfigureAwait(false);
             }
@@ -70,11 +70,13 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
                 return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.AliasExists, OperationErrorCode.Validation, DiagnosticPhase.Preflight, OperationState.Unchanged, OperationVerification.NotRun).ConfigureAwait(false);
             }
 
-            // A generated block is prepended so its values are obtained before
-            // any preserved wildcard/default block. This deliberately respects
-            // OpenSSH's first-obtained-value rule without changing that text.
+            // Keep global directives global. Place the exact alias before any
+            // Host defaults, while leaving the original preamble and all blocks
+            // in their original scope. Complex includes/matches are refused.
             var newline = DetermineLineEnding(document);
-            var replacementDocument = desired.Render(newline) + document;
+            var preamble = document[..insertionOffset];
+            var separator = preamble.Length > 0 && !preamble.EndsWith('\n') ? newline : string.Empty;
+            var replacementDocument = preamble + separator + desired.Render(newline) + document[insertionOffset..];
             var replacement = EncodeConfig(replacementDocument, hasUtf8Bom);
             cancellationToken.ThrowIfCancellationRequested();
             committedWrite = await fileStore.WriteAtomicallyAsync(
@@ -327,21 +329,33 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
 
     private static string DetermineLineEnding(string document) => document.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
 
-    private static bool TryParseHostBlocks(string document, out IReadOnlyList<HostBlock> blocks)
+    private static bool TryParseHostBlocks(string document, out IReadOnlyList<HostBlock> blocks, out int insertionOffset)
     {
         var parsed = new List<HostBlock>();
         HostBlock? current = null;
-        foreach (var line in document.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        insertionOffset = document.Length;
+        var offset = 0;
+        foreach (var line in document.Split('\n'))
         {
+            var lineOffset = offset;
+            offset += line.Length + 1;
             var trimmed = line.Trim();
             if (trimmed.Length == 0 || trimmed.StartsWith('#'))
             {
                 continue;
             }
 
-            var separator = IndexOfWhitespace(trimmed);
+            var separator = trimmed.IndexOfAny([' ', '\t', '=']);
             var directive = separator < 0 ? trimmed : trimmed[..separator];
-            var remainder = separator < 0 ? string.Empty : trimmed[(separator + 1)..].TrimStart();
+            var remainder = separator < 0 ? string.Empty : trimmed[separator..].TrimStart(' ', '\t', '=').TrimStart();
+            if (string.Equals(directive, "Include", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(directive, "Match", StringComparison.OrdinalIgnoreCase)
+                || trimmed.EndsWith('\\')
+                || (current is null && ManagedDirectives.Contains(directive, StringComparer.OrdinalIgnoreCase)))
+            {
+                blocks = [];
+                return false;
+            }
             if (string.Equals(directive, "Host", StringComparison.OrdinalIgnoreCase))
             {
                 var patterns = SplitArguments(remainder);
@@ -352,13 +366,11 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
                 }
 
                 current = new HostBlock(patterns);
+                if (parsed.Count == 0)
+                {
+                    insertionOffset = lineOffset;
+                }
                 parsed.Add(current);
-                continue;
-            }
-
-            if (string.Equals(directive, "Match", StringComparison.OrdinalIgnoreCase))
-            {
-                current = null;
                 continue;
             }
 
@@ -377,19 +389,6 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
 
         blocks = parsed;
         return true;
-    }
-
-    private static int IndexOfWhitespace(string value)
-    {
-        for (var index = 0; index < value.Length; index++)
-        {
-            if (char.IsWhiteSpace(value[index]))
-            {
-                return index;
-            }
-        }
-
-        return -1;
     }
 
     private static List<string>? SplitArguments(string value)
