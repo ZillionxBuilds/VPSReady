@@ -1,4 +1,3 @@
-using System.Globalization;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
@@ -21,7 +20,12 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, command.Id.Value, null).ConfigureAwait(false);
             var planned = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, planned, command.Id.Value).ConfigureAwait(false);
-            if (!planned.Succeeded || !TryParsePlan(planned.StandardOutput, out var count))
+            if (!planned.Succeeded)
+            {
+                return await PlanFailureAsync(correlation, OperationErrorCode.Apt, planned.AptLockContended ? PackageUpgradeErrorCatalog.Locked : PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+            }
+
+            if (planned.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuAptUpgradePlan, Number: { } count })
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
             }
@@ -74,9 +78,8 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
             if (!applied.Succeeded)
             {
-                var (error, code) = applied.ExitCode switch
+                var (error, code) = applied.AptLockContended ? (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Locked) : applied.ExitCode switch
                 {
-                    100 => (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Locked),
                     30 => (OperationErrorCode.Command, PackageUpgradeErrorCatalog.Interactive),
                     13 or 77 => (OperationErrorCode.Privilege, PackageUpgradeErrorCatalog.Privilege),
                     _ => (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Command),
@@ -88,7 +91,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
-            if (!verified.Succeeded || !string.Equals(verified.StandardOutput.Trim(), "package_upgrade=verified", StringComparison.Ordinal))
+            if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
             }
@@ -96,7 +99,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             var reboot = UbuntuPackageCommandCatalog.CreateRebootRequiredRequest();
             var rebootState = await transport.ExecuteAsync(reboot, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, rebootState, reboot.Id.Value).ConfigureAwait(false);
-            if (!rebootState.Succeeded || !TryParseRebootRequired(rebootState.StandardOutput, out var rebootRequired))
+            if (!rebootState.Succeeded || rebootState.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuRebootRequiredRead, Flag: { } rebootRequired })
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, reboot.Id.Value, OperationState.Applied).ConfigureAwait(false);
             }
@@ -172,39 +175,4 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         try { await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "Package upgrade", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Package upgrade command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Command.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false); } catch { }
     }
 
-    private static bool TryParsePlan(string output, out int count)
-    {
-        count = 0;
-        return TryReadSingleRecord(output, "upgrade_plan_packages=", out var value)
-            && int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out count)
-            && count >= 0;
-    }
-
-    private static bool TryParseRebootRequired(string output, out bool required)
-    {
-        required = false;
-        return TryReadSingleRecord(output, "reboot_required=", out var value)
-            && (value == "true" || value == "false")
-            && bool.TryParse(value, out required);
-    }
-
-    private static bool TryReadSingleRecord(string output, string prefix, out string value)
-    {
-        value = string.Empty;
-        if (string.IsNullOrEmpty(output))
-        {
-            return false;
-        }
-
-        var line = output.EndsWith("\r\n", StringComparison.Ordinal) ? output[..^2]
-            : output.EndsWith('\n') ? output[..^1]
-            : output;
-        if (line.Contains('\r') || line.Contains('\n') || !line.StartsWith(prefix, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        value = line[prefix.Length..];
-        return !string.IsNullOrEmpty(value);
-    }
 }

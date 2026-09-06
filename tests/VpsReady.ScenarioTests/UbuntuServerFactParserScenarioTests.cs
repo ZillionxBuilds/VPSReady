@@ -23,8 +23,9 @@ public sealed class UbuntuServerFactParserScenarioTests
 
         Assert.Equal(operatingSystemKnown, snapshot.OperatingSystem.IsKnown);
         Assert.Equal(hostnameKnown, snapshot.Hostname.IsKnown);
-        Assert.True(snapshot.SessionSshPort.IsKnown);
-        Assert.Equal(2222, snapshot.SessionSshPort.Value);
+        // These fixtures contain no server-session port evidence. The external
+        // endpoint cannot supply the missing fact (it may be translated).
+        Assert.False(snapshot.SessionSshPort.IsKnown);
         Assert.Equal(completeOperationalFactsKnown, snapshot.Uptime.IsKnown);
         Assert.Equal(completeOperationalFactsKnown, snapshot.Memory.IsKnown);
         Assert.Equal(completeOperationalFactsKnown, snapshot.RootDisk.IsKnown);

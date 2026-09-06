@@ -14,7 +14,7 @@ namespace VpsReady.ScenarioTests;
 public sealed class PublicKeyDeploymentWorkflowScenarioTests
 {
     [Fact]
-    public async Task DeploymentPreservesExistingEntriesRepairsPermissionsAndIsIdempotent()
+    public async Task DeploymentPreservesExistingEntriesAndSafePermissionsAndIsIdempotent()
     {
         await using var services = ScenarioComposition.Create("scenario.e2.public-key-deployment");
         var state = services.GetRequiredService<ScenarioHostState>();
@@ -22,8 +22,8 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
         var workflow = new PublicKeyDeploymentWorkflow(services.GetRequiredService<IDiagnosticSink>());
         var path = $"/home/{state.Ssh.UserName}/.ssh/authorized_keys";
         var directory = $"/home/{state.Ssh.UserName}/.ssh";
-        state.RemoteFiles.Files[path] = state.RemoteFiles.Files[path] with { Contents = "legacy-entry\n", Owner = "wrong", Group = "wrong", Permissions = "0644" };
-        state.RemoteFiles.Files[directory] = state.RemoteFiles.Files[directory] with { Owner = "wrong", Group = "wrong", Permissions = "0755" };
+        state.RemoteFiles.Files[path] = state.RemoteFiles.Files[path] with { Contents = "legacy-entry\n", Group = "retained-group", Permissions = "0644" };
+        state.RemoteFiles.Files[directory] = state.RemoteFiles.Files[directory] with { Permissions = "0755" };
 
         var characters = await CreatePublicKeyCharactersAsync();
         try
@@ -34,8 +34,9 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
             Assert.True(first.Result.Succeeded);
             Assert.False(first.AlreadyPresent);
             Assert.StartsWith("legacy-entry", state.RemoteFiles.Files[path].Contents, StringComparison.Ordinal);
-            Assert.Equal("0700", state.RemoteFiles.Files[directory].Permissions);
-            Assert.Equal("0600", state.RemoteFiles.Files[path].Permissions);
+            Assert.Equal("0755", state.RemoteFiles.Files[directory].Permissions);
+            Assert.Equal("0644", state.RemoteFiles.Files[path].Permissions);
+            Assert.Equal("retained-group", state.RemoteFiles.Files[path].Group);
             Assert.Equal(state.Ssh.UserName, state.RemoteFiles.Files[path].Owner);
 
             using var retry = new PublicKeyDeploymentMaterial(characters);
@@ -48,6 +49,21 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
         {
             CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(characters.AsSpan()));
         }
+    }
+
+    [Fact]
+    public async Task DeploymentCannotTakeOverForeignOwnedAuthorizedKeys()
+    {
+        await using var services = ScenarioComposition.Create("scenario.e2.public-key-foreign-owner");
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var path = $"/home/{host.State.Ssh.UserName}/.ssh/authorized_keys";
+        var original = host.State.RemoteFiles.Files[path] with { Owner = "foreign-owner" };
+        host.State.RemoteFiles.Files[path] = original;
+        using var key = await CreateMaterialAsync();
+        var result = await new PublicKeyDeploymentWorkflow(services.GetRequiredService<IDiagnosticSink>()).DeployAsync(host, key);
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(original, host.State.RemoteFiles.Files[path]);
+        Assert.Empty(host.State.Ssh.AuthorizedKeyFingerprints);
     }
 
     [Fact]

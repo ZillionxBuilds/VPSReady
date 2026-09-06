@@ -60,7 +60,7 @@ public static partial class UbuntuServerFactParser
         ArgumentNullException.ThrowIfNull(result);
         if (!result.Succeeded)
         {
-            return UfwRuleListRead(UfwFirewallState.Error, UfwRuleListReadStatus.RemoteFailure);
+            return UfwRuleListRead(UfwFirewallState.Error, result.ExitCode is 13 or 77 ? UfwRuleListReadStatus.PrivilegeFailure : UfwRuleListReadStatus.RemoteFailure);
         }
 
         if (Encoding.UTF8.GetByteCount(result.StandardOutput) > UbuntuFactCommandCatalog.MaximumOutputBytes)

@@ -72,7 +72,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         }
 
         var phase = command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeVerify ? DiagnosticPhase.Verify : DiagnosticPhase.Plan;
-        var response = await ExecuteAsync(command, phase, cancellationToken).ConfigureAwait(false);
+        var response = await ExecuteWireAsync(command, phase, cancellationToken).ConfigureAwait(false);
         return response.Succeeded && HostnameChangeValidator.TryNormalize(response.StandardOutput, out var hostname)
             ? new HostnameReadResult(hostname, true)
             : HostnameReadResult.Unavailable;
@@ -88,6 +88,14 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         RemoteCommand command,
         DiagnosticPhase phase,
         CancellationToken cancellationToken)
+    {
+        var wire = await ExecuteWireAsync(command, phase, cancellationToken).ConfigureAwait(false);
+        return RemoteCommandCatalog.IsKnown(command.Id.Value)
+            ? await VpsReady.Tests.ProductionOutput.CaptureAsync(command, wire, cancellationToken).ConfigureAwait(false)
+            : wire;
+    }
+
+    internal async Task<RemoteCommandResult> ExecuteWireAsync(RemoteCommand command, DiagnosticPhase phase, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(command.Id);
@@ -139,6 +147,12 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
                     State.Ssh.CommandLatency + faultResult.Duration,
                     command.OutputCapturePolicy);
             }
+        }
+
+        if (!HasPrivilege() && State.Ufw.Status != ScenarioUfwStatus.Absent
+            && command.Id.Value is RemoteCommandCatalog.UbuntuUfwStatusRead or RemoteCommandCatalog.UbuntuUfwDetectionRead or RemoteCommandCatalog.UbuntuUfwRuleListRead or RemoteCommandCatalog.UbuntuUfwAddedRulesRead)
+        {
+            return Failure(77, "Non-interactive UFW read privilege is unavailable.");
         }
 
         var result = command.Id.Value switch
@@ -367,6 +381,29 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             return Failure(2, "A staged public-key fingerprint is required; key material is never a command argument.");
         }
 
+        if (command.Id.Value == RemoteCommandCatalog.UbuntuAuthorizedKeysInstall)
+        {
+            var targetDirectory = $"/home/{State.Ssh.UserName}/.ssh";
+            var target = $"{targetDirectory}/authorized_keys";
+            if (!State.RemoteFiles.Files.TryGetValue(targetDirectory, out var directoryEntry)
+                || !State.RemoteFiles.Files.TryGetValue(target, out var keyEntry)
+                || !directoryEntry.IsDirectory || keyEntry.IsDirectory
+                || directoryEntry.Owner != State.Ssh.UserName || keyEntry.Owner != State.Ssh.UserName
+                || directoryEntry.Permissions is not ("0700" or "0750" or "0755")
+                || keyEntry.Permissions is not ("0600" or "0640" or "0644")
+                || State.RemoteFiles.ReadOnlyPaths.Contains(target) || State.RemoteFiles.PermissionDeniedPaths.Contains(target))
+            {
+                return Failure(77, "Authorized-keys state requires explicit review.");
+            }
+            var installed = State.Ssh.AuthorizedKeyFingerprints.Add(fingerprint);
+            if (installed)
+            {
+                var separator = keyEntry.Contents.Length == 0 || keyEntry.Contents.EndsWith('\n') ? string.Empty : "\n";
+                State.RemoteFiles.Files[target] = keyEntry with { Contents = keyEntry.Contents + separator + publicKey + "\n" };
+            }
+            return Result(string.Empty);
+        }
+
         if (!HasPrivilege())
         {
             return Failure(13, "Permission denied while updating authorized keys.");
@@ -411,11 +448,9 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             || !sshDirectory.IsDirectory
             || keys.IsDirectory
             || sshDirectory.Owner != State.Ssh.UserName
-            || sshDirectory.Group != State.Ssh.UserName
-            || sshDirectory.Permissions != "0700"
+            || sshDirectory.Permissions is not ("0700" or "0750" or "0755")
             || keys.Owner != State.Ssh.UserName
-            || keys.Group != State.Ssh.UserName
-            || keys.Permissions != "0600")
+            || keys.Permissions is not ("0600" or "0640" or "0644"))
         {
             return Failure(4, "Authorized-keys state did not pass fresh verification.");
         }

@@ -51,7 +51,7 @@ public sealed class UbuntuServerFactParserTests
         Assert.False(snapshot.Memory.IsKnown);
         Assert.False(snapshot.UfwStatus.IsKnown);
         Assert.True(snapshot.SessionSshPort.IsKnown);
-        Assert.Equal(2202, snapshot.SessionSshPort.Value);
+        Assert.Equal(65000, snapshot.SessionSshPort.Value);
     }
 
     [Fact]
@@ -71,6 +71,9 @@ public sealed class UbuntuServerFactParserTests
     private static Dictionary<string, RemoteCommandResult> Results(params (string Id, string Output)[] values) =>
         values.ToDictionary(
             value => value.Id,
-            value => new RemoteCommandResult(0, value.Output, string.Empty, TimeSpan.Zero),
+            value => new RemoteCommandResult(0, value.Id == RemoteCommandCatalog.SshSessionPortRead ? string.Empty : value.Output, string.Empty, TimeSpan.Zero)
+            {
+                ParserEvidence = CommandParserEvidence.Parse(value.Id, value.Output),
+            },
             StringComparer.Ordinal);
 }

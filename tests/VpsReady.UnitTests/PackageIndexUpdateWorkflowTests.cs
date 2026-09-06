@@ -35,7 +35,7 @@ public sealed class PackageIndexUpdateWorkflowTests
     }
 
     [Theory]
-    [InlineData(100, PackageIndexUpdateErrorCatalog.Locked)]
+    [InlineData(100, PackageIndexUpdateErrorCatalog.Command)]
     [InlineData(1, PackageIndexUpdateErrorCatalog.Command)]
     public async Task AptExitIsTypedAndVerificationNeverRuns(int exitCode, string expected)
     {
@@ -111,7 +111,7 @@ public sealed class PackageIndexUpdateWorkflowTests
     {
         private readonly Queue<RemoteCommandResult> responses = new(responses);
         public List<RemoteCommand> Commands { get; } = [];
-        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return Task.FromResult(responses.Dequeue()); }
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return VpsReady.Tests.ProductionOutput.CaptureAsync(command, responses.Dequeue(), cancellationToken); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

@@ -91,6 +91,7 @@ public sealed class UfwRuleListRefresher
             {
                 UfwRuleListReadStatus.Complete => null,
                 UfwRuleListReadStatus.RemoteFailure => OperationErrorCode.Command,
+                UfwRuleListReadStatus.PrivilegeFailure => OperationErrorCode.Privilege,
                 _ => OperationErrorCode.Parse,
             };
             await ReportAsync(
@@ -124,6 +125,7 @@ public sealed class UfwRuleListRefresher
     private static OperationErrorCode ErrorForRead(UfwRuleListReadStatus status) => status switch
     {
         UfwRuleListReadStatus.RemoteFailure => OperationErrorCode.Command,
+        UfwRuleListReadStatus.PrivilegeFailure => OperationErrorCode.Privilege,
         UfwRuleListReadStatus.Complete => OperationErrorCode.Unexpected,
         _ => OperationErrorCode.Parse,
     };

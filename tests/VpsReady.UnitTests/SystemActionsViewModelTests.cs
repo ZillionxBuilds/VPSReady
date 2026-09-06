@@ -56,15 +56,15 @@ public sealed class SystemActionsViewModelTests
             switch (command.Id.Value)
             {
                 case RemoteCommandCatalog.UbuntuAptUpgradePlan:
-                    return Ok("upgrade_plan_packages=1");
+                    return await VpsReady.Tests.ProductionOutput.CaptureAsync(command, Ok("upgrade_plan_packages=1"), CancellationToken.None);
                 case RemoteCommandCatalog.UbuntuAptUpgradeApply:
                     ApplyEntered.TrySetResult();
                     await AllowLateCompletion.Task.ConfigureAwait(false);
                     return Ok("applied");
                 case RemoteCommandCatalog.UbuntuAptUpgradeVerify:
-                    return Ok("package_upgrade=verified");
+                    return await VpsReady.Tests.ProductionOutput.CaptureAsync(command, Ok("package_upgrade=verified"), CancellationToken.None);
                 case RemoteCommandCatalog.UbuntuRebootRequiredRead:
-                    return Ok("reboot_required=false");
+                    return await VpsReady.Tests.ProductionOutput.CaptureAsync(command, Ok("reboot_required=false"), CancellationToken.None);
                 default:
                     throw new ArgumentException("Unexpected test command.", nameof(command));
             }

@@ -104,7 +104,7 @@ public sealed class UfwRuleListRefreshScenarioTests
             exitCode: 13);
         var denied = await refresher.RefreshAsync(host, prior.Snapshot);
         Assert.False(denied.Replaced);
-        Assert.Equal(UfwRuleListReadStatus.RemoteFailure, denied.ReadStatus);
+        Assert.Equal(UfwRuleListReadStatus.PrivilegeFailure, denied.ReadStatus);
         Assert.Same(prior.Snapshot, denied.Snapshot);
         Assert.Equal(beforeRules, state.Ufw.Rules);
     }

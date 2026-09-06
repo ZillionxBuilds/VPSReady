@@ -52,6 +52,7 @@ public enum UfwRuleListReadStatus
 {
     Complete,
     RemoteFailure,
+    PrivilegeFailure,
     Malformed,
     Unsupported,
     Ambiguous,

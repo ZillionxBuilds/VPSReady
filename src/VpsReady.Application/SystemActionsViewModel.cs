@@ -277,7 +277,12 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             (OperationResult Result, string? ErrorCode, Action? Apply)? completed = null;
             var result = await session.RunOperationAsync(
                 NewSessionOperationId(action),
-                OperationTimeout,
+                action switch
+                {
+                    "package-upgrade-apply" => TimeSpan.FromMinutes(65),
+                    "package-index-refresh" => TimeSpan.FromMinutes(12),
+                    _ => OperationTimeout,
+                },
                 async (transport, token) =>
                 {
                     completed = await execute(transport, token).ConfigureAwait(false);

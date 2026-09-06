@@ -154,11 +154,13 @@ public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
     {
         var state = ScenarioHostState.CreateDefault("scenario.c304.privilege");
         state.Ufw.Status = ScenarioUfwStatus.Active;
-        state.Ssh.RootAvailable = false;
-        state.Ssh.SudoAvailable = false;
         state.Ufw.Rules.Add(new ScenarioFirewallRule("c304-app", ScenarioRuleProtocol.Udp, 5353, "Anywhere", ScenarioIpFamily.Ipv4));
         var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
         var selected = await SelectionAsync(host, 5353, ScenarioIpFamily.Ipv4);
+        // A previously displayed selection must not authorize removal after
+        // privilege is lost; the fresh read fails before any mutation.
+        state.Ssh.RootAvailable = false;
+        state.Ssh.SudoAvailable = false;
         var (workflow, diagnostics) = CreateWorkflow();
 
         var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));

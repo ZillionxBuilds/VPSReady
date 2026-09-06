@@ -180,7 +180,7 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
-            return Task.FromResult(results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue());
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue(), cancellationToken);
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

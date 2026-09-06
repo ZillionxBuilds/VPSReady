@@ -40,7 +40,7 @@ public sealed class PackageUpgradeWorkflowTests
     }
 
     [Theory]
-    [InlineData(100, PackageUpgradeErrorCatalog.Locked)]
+    [InlineData(100, PackageUpgradeErrorCatalog.Command)]
     [InlineData(30, PackageUpgradeErrorCatalog.Interactive)]
     [InlineData(1, PackageUpgradeErrorCatalog.Command)]
     public async Task ApplyFailuresAreTypedAndNeverVerify(int exitCode, string expected)
@@ -114,7 +114,7 @@ public sealed class PackageUpgradeWorkflowTests
     {
         private readonly Queue<RemoteCommandResult> results = new(results);
         public List<RemoteCommand> Commands { get; } = [];
-        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return Task.FromResult(results.Dequeue()); }
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Dequeue(), cancellationToken); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

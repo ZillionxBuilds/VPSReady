@@ -75,6 +75,20 @@ public sealed class UfwToggleWorkflowTests
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("65536")]
+    [InlineData("22\n2222")]
+    public async Task MissingOrAmbiguousServerPortCannotEnableFirewall(string port)
+    {
+        var transport = new RecordingTransport(Result(port));
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, confirmed: true);
+        Assert.False(result.Result.Succeeded);
+        Assert.Single(transport.Commands);
+        Assert.Equal(RemoteCommandCatalog.SshSessionPortRead, transport.Commands[0].Id.Value);
+    }
+
     [Fact]
     public async Task EnableEnsuresBothFamiliesThenSucceedsOnlyAfterFreshActiveVerification()
     {
@@ -173,7 +187,7 @@ public sealed class UfwToggleWorkflowTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
-            return Task.FromResult(results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue());
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue(), cancellationToken);
         }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

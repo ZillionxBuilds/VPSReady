@@ -89,7 +89,14 @@ public sealed class RemoteCommandContractTests
             Assert.Equal(definition.MaximumOutputBytes, request.MaximumOutputBytes);
             Assert.DoesNotContain("password", request.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
 
-            if (definition.Execution == UbuntuFactCommandExecution.Remote)
+            if (definition.Id.Value == RemoteCommandCatalog.SshSessionPortRead)
+            {
+                Assert.Equal(UbuntuFactCommandExecution.Remote, definition.Execution);
+                Assert.Contains("SSH_CONNECTION", definition.ShellCommand, StringComparison.Ordinal);
+                Assert.Equal(OutputCapturePolicy.MetadataOnly, definition.OutputCapturePolicy);
+                Assert.Equal(0, definition.MaximumOutputBytes);
+            }
+            else if (definition.Execution == UbuntuFactCommandExecution.Remote)
             {
                 Assert.StartsWith("LC_ALL=C LANG=C; export LC_ALL LANG; ", definition.ShellCommand, StringComparison.Ordinal);
                 Assert.Equal(OutputCapturePolicy.SanitizedTruncated, definition.OutputCapturePolicy);

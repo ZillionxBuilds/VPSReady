@@ -252,8 +252,8 @@ public sealed record RemoteCommand
 
     /// <summary>
     /// Maximum UTF-8 byte count a transport may retain for either standard
-    /// stream. A value of zero is valid only for a metadata-only/no-output
-    /// request that has no remote stream to capture.
+    /// ordinary stream. Zero means no ordinary output is retained; explicitly
+    /// allowlisted parser evidence uses its own bounded transient path.
     /// </summary>
     public int MaximumOutputBytes { get; }
 
@@ -320,6 +320,14 @@ public sealed record RemoteCommandResult
     public OutputCapturePolicy OutputCapturePolicy { get; }
 
     public bool Succeeded => ExitCode == 0;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public CommandParserEvidence? ParserEvidence { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool AptLockContended { get; init; }
+
+    public override string ToString() => $"RemoteCommandResult [exit={ExitCode}, policy={OutputCapturePolicy}]";
 }
 
 /// <summary>

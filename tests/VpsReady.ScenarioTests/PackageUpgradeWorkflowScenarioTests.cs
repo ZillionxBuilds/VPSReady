@@ -34,7 +34,8 @@ public sealed class PackageUpgradeWorkflowScenarioTests
     {
         await using var services = ScenarioComposition.Create(scenario);
         var faults = services.GetRequiredService<ScenarioFaultPlan>();
-        faults.Inject(DiagnosticPhase.Apply, kind, scenario, RemoteCommandCatalog.UbuntuAptUpgradeApply, exitCode);
+        faults.Inject(DiagnosticPhase.Apply, kind, scenario, RemoteCommandCatalog.UbuntuAptUpgradeApply, exitCode,
+            standardError: exitCode == 100 ? "Could not get lock (contained fixture)." : "Injected failure.");
         var diagnostics = services.GetRequiredService<IDiagnosticSink>();
         var workflow = new PackageUpgradeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
         var host = services.GetRequiredService<DeterministicScenarioHost>();
