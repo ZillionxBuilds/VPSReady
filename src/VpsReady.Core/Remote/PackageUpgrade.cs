@@ -5,6 +5,7 @@ namespace VpsReady.Core.Remote;
 public static class PackageUpgradeErrorCatalog
 {
     public const string Confirmation = "APT_UPGRADE_CONFIRMATION_REQUIRED";
+    public const string StalePlan = "APT_UPGRADE_PLAN_CHANGED";
     public const string Privilege = "APT_UPGRADE_PRIVILEGE_FAILED";
     public const string Locked = "APT_UPGRADE_LOCKED";
     public const string Interactive = "APT_UPGRADE_INTERACTIVE_BLOCKED";
@@ -15,12 +16,25 @@ public static class PackageUpgradeErrorCatalog
     public const string Unexpected = "APT_UPGRADE_UNEXPECTED_FAILED";
 
     public static IReadOnlyCollection<string> All { get; } =
-    [Confirmation, Privilege, Locked, Interactive, Command, Verification, Timeout, Cancelled, Unexpected];
+    [Confirmation, StalePlan, Privilege, Locked, Interactive, Command, Verification, Timeout, Cancelled, Unexpected];
 }
 
-public sealed record PackageUpgradePlan(OperationResult Result, int PlannedPackageCount)
+public sealed record PackageUpgradePlan
 {
-    public bool IsReady => Result.Succeeded;
+    private readonly IRemoteTransport? boundTransport;
+    public PackageUpgradePlan(OperationResult result, int plannedPackageCount, string? selectionFingerprint = null, IRemoteTransport? transport = null)
+    {
+        Result = result;
+        PlannedPackageCount = plannedPackageCount;
+        SelectionFingerprint = selectionFingerprint;
+        boundTransport = transport;
+    }
+    public OperationResult Result { get; }
+    public int PlannedPackageCount { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? SelectionFingerprint { get; }
+    public bool IsReady => Result.Succeeded && SelectionFingerprint is not null && boundTransport is not null;
+    public bool IsForTransport(IRemoteTransport transport) => ReferenceEquals(boundTransport, transport);
     public override string ToString() => "PackageUpgradePlan [safe summary only]";
 }
 

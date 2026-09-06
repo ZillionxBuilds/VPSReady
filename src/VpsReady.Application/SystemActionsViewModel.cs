@@ -36,6 +36,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
     private string hostname = string.Empty;
     private string timezone = string.Empty;
     private bool disposed;
+    private string? observedSessionId;
 
     public SystemActionsViewModel(
         IApplicationSession session,
@@ -56,6 +57,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             ? "Connect and verify a server session before reading or changing system settings."
             : "Read the current system state, review a plan, then explicitly confirm each change.";
         CancelCommand = new DelegateCommand(Cancel);
+        observedSessionId = session.Snapshot.SessionId;
         session.StateChanged += OnSessionStateChanged;
     }
 
@@ -127,13 +129,17 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         ? "Validate and review the timezone plan before applying it." : !IsTimezoneConfirmed
             ? "Explicitly confirm the reviewed timezone change before applying it." : string.Empty;
 
-    public Task RefreshPackageIndexAsync(CancellationToken cancellationToken = default) => RunAsync(
+    public Task RefreshPackageIndexAsync(CancellationToken cancellationToken = default)
+    {
+        ClearUpgradePlan();
+        return RunAsync(
         "package-index-refresh",
         async (transport, token) =>
         {
             var completed = await packageIndexUpdater.UpdateAsync(transport, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, (Action?)null);
         }, cancellationToken);
+    }
 
     public Task PlanUpgradeAsync(CancellationToken cancellationToken = default) => RunAsync(
         "package-upgrade-plan",
@@ -267,6 +273,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         CancellationToken callerCancellation,
         Action? invalidateOnOverriddenResult = null)
     {
+        var expectedSession = session.Snapshot.SessionId;
         if (!TryBegin(callerCancellation, out var cancellation))
         {
             return;
@@ -274,8 +281,9 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
 
         try
         {
+            if (action is "package-upgrade-plan" or "reboot-apply") { ClearUpgradePlan(); }
             (OperationResult Result, string? ErrorCode, Action? Apply)? completed = null;
-            var result = await session.RunOperationAsync(
+            var result = await session.RunOperationForSessionAsync(
                 NewSessionOperationId(action),
                 action switch
                 {
@@ -288,15 +296,16 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
                     completed = await execute(transport, token).ConfigureAwait(false);
                     return completed.Value.Result;
                 },
-                cancellation.Token).ConfigureAwait(false);
+                expectedSession!, cancellation.Token).ConfigureAwait(false);
             // ApplicationSession can replace a late workflow success with its
             // own timeout/cancellation result. Do not retain a plan or state
             // derived from such a late result; a fresh explicit read is then
             // required before any apply action can be enabled.
-            var workflowError = completed is { } terminal && string.Equals(result.OperationId, terminal.Result.OperationId, StringComparison.Ordinal)
+            var workflowError = completed is { } terminal && ReferenceEquals(result, terminal.Result)
                 ? terminal.ErrorCode
                 : null;
-            if (completed is { } accepted && string.Equals(result.OperationId, accepted.Result.OperationId, StringComparison.Ordinal))
+            if (completed is { } accepted && ReferenceEquals(result, accepted.Result)
+                && string.Equals(expectedSession, session.Snapshot.SessionId, StringComparison.Ordinal))
             {
                 accepted.Apply?.Invoke();
             }
@@ -351,6 +360,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         Status = result.Succeeded
             ? "System operation was verified. Review Activity & Diagnostics with this operation ID if needed."
             : $"{result.UserMessage} {result.NextAction}";
+        if (workflowErrorCode == PackageUpgradeErrorCatalog.StalePlan)
+        {
+            Status = "Package selection or versions changed, or could not be revalidated. No upgrade was started. Read a new plan and confirm it again.";
+        }
         State = result.Succeeded ? SystemActionsScreenState.Ready : result.Cancelled ? SystemActionsScreenState.Cancelled : SystemActionsScreenState.Failed;
     }
 
@@ -369,6 +382,11 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
 
     private void OnSessionStateChanged(object? sender, EventArgs e)
     {
+        if (!string.Equals(observedSessionId, session.Snapshot.SessionId, StringComparison.Ordinal))
+        {
+            observedSessionId = session.Snapshot.SessionId;
+            ClearUpgradePlan();
+        }
         if (!session.Snapshot.IsConnected)
         {
             Cancel();

@@ -102,7 +102,7 @@
           <Border IsVisible="{Binding SelectedPage.IsSshManagementPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
             <StackPanel Spacing="10">
               <TextBlock FontWeight="SemiBold" Text="Safe SSH key management" />
-              <TextBlock Text="Private keys, public-key text, local paths, raw commands, server addresses, and credentials are never shown in Activity or this summary." TextWrapping="Wrap" />
+              <TextBlock Text="Private keys, local paths, raw commands, server addresses and credentials are never shown in Activity or this summary. Public-key text has a separate intentional View/Copy action below." TextWrapping="Wrap" />
               <TextBlock Text="{Binding SshManagement.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding SshManagement.State}" />
               <TextBlock Text="{Binding SshManagement.TrustedHostStatus}" TextWrapping="Wrap" />

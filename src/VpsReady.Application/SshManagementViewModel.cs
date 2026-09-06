@@ -98,7 +98,8 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             if (!read.Operation.Succeeded || material is null || cancellation.IsCancellationRequested)
             {
                 InvalidateSelection();
-                Complete(read.Operation, null, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
+                Complete(cancellation.IsCancellationRequested ? OperationResult.Cancellation(read.Operation.OperationId, OperationState.Unchanged) : read.Operation,
+                    null, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
                 return null;
             }
             var characters = material.CopyForUse();

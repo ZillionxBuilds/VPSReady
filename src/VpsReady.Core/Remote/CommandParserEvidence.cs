@@ -8,16 +8,19 @@ namespace VpsReady.Core.Remote;
 /// </summary>
 public sealed class CommandParserEvidence
 {
-    private CommandParserEvidence(string commandId, int? number = null, bool? flag = null)
+    private static readonly System.Buffers.SearchValues<char> HexCharacters = System.Buffers.SearchValues.Create("0123456789abcdef");
+    private CommandParserEvidence(string commandId, int? number = null, bool? flag = null, string? fingerprint = null)
     {
         CommandId = commandId;
         Number = number;
         Flag = flag;
+        Fingerprint = fingerprint;
     }
 
     public string CommandId { get; }
     public int? Number { get; }
     public bool? Flag { get; }
+    public string? Fingerprint { get; }
     public override string ToString() => "[parser evidence]";
 
     public const int MaximumBytes = 128;
@@ -53,10 +56,16 @@ public sealed class CommandParserEvidence
         }
 
         const string prefix = "upgrade_plan_packages=";
-        if (commandId == RemoteCommandCatalog.UbuntuAptUpgradePlan && line.StartsWith(prefix, StringComparison.Ordinal)
-            && int.TryParse(line.AsSpan(prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var count))
+        if (commandId == RemoteCommandCatalog.UbuntuAptUpgradePlan && line.StartsWith(prefix, StringComparison.Ordinal))
         {
-            return new(commandId, number: count);
+            var separator = line.IndexOf(':', prefix.Length);
+            if (separator > prefix.Length && line.Length - separator - 1 == 64
+                && int.TryParse(line.AsSpan(prefix.Length, separator - prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var count)
+                && line.AsSpan(separator + 1).IndexOfAnyExcept(HexCharacters) < 0)
+            {
+                return new(commandId, number: count, fingerprint: line[(separator + 1)..]);
+            }
+            return null;
         }
 
         if (commandId == RemoteCommandCatalog.SshSessionPortRead

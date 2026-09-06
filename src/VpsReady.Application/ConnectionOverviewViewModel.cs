@@ -229,7 +229,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         else if (State != ConnectionScreenState.Testing)
         {
             State = ConnectionScreenState.Connected;
-            Status = "A verified server session is available. Overview values remain Unknown until refreshed.";
+            Status = "A verified server session is available. Refresh to inspect current server facts.";
         }
         OnPropertyChanged(nameof(HasConnectedSession));
         OnPropertyChanged(nameof(CanRefresh));

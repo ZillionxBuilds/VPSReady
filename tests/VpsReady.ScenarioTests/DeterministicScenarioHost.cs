@@ -206,7 +206,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuUfwDisable => DisableUfwProduction(),
             RemoteCommandCatalog.UbuntuAptIndexUpdate => AptIndexUpdate(),
             RemoteCommandCatalog.UbuntuAptIndexVerify => AptIndexVerify(),
-            RemoteCommandCatalog.UbuntuAptUpgradePlan => Result($"upgrade_plan_packages={State.Apt.PlannedUpgradePackageCount}"),
+            RemoteCommandCatalog.UbuntuAptUpgradePlan => Result($"upgrade_plan_packages={State.Apt.PlannedUpgradePackageCount}:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             RemoteCommandCatalog.UbuntuAptUpgradeApply => AptUpgradeProduction(),
             RemoteCommandCatalog.UbuntuAptUpgradeVerify => AptUpgradeVerify(),
             RemoteCommandCatalog.UbuntuRebootRequiredRead => Result($"reboot_required={State.Apt.RebootRequired.ToString().ToLowerInvariant()}"),

@@ -50,7 +50,7 @@ public sealed class ProductionOutputContractTests
 
     [Theory]
     [InlineData(RemoteCommandCatalog.UbuntuAptIndexVerify, "apt_index=refreshed\n")]
-    [InlineData(RemoteCommandCatalog.UbuntuAptUpgradePlan, "upgrade_plan_packages=3\r\n")]
+    [InlineData(RemoteCommandCatalog.UbuntuAptUpgradePlan, "upgrade_plan_packages=3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n")]
     [InlineData(RemoteCommandCatalog.UbuntuAptUpgradeVerify, "package_upgrade=verified\n")]
     [InlineData(RemoteCommandCatalog.UbuntuRebootRequiredRead, "reboot_required=false\n")]
     [InlineData(RemoteCommandCatalog.SshReconnectVerify, "reconnect=verified\n")]
@@ -115,7 +115,7 @@ public sealed class ProductionOutputContractTests
     [Fact]
     public async Task UpgradePlanVerificationAndRebootStateSurviveTheActualCaptureBoundary()
     {
-        var transport = new StreamTransport("upgrade_plan_packages=2\n", "", "package_upgrade=verified\n", "reboot_required=true\n");
+        var transport = new StreamTransport("upgrade_plan_packages=2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "upgrade_plan_packages=2:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", "", "package_upgrade=verified\n", "reboot_required=true\n");
         var workflow = new PackageUpgradeWorkflow(new Allowed(), new Sink());
         var plan = await workflow.PlanAsync(transport);
         Assert.True(plan.IsReady);

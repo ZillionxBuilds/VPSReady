@@ -8,6 +8,41 @@ public sealed class PackageNoninteractiveContractTests
     [UnixTheory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task PreviewUsesApplyPrivilegeEnvironmentAndHashesVersionSelection(bool root)
+    {
+        using var sandbox = new ShellSandbox();
+        sandbox.Stub("id", root ? "printf '0\\n'" : "printf '1000\\n'");
+        sandbox.Stub("sudo", "[ \"$1\" = -n ] || exit 77; shift; exec env -i PATH=\"$PATH\" \"$@\"");
+        if (OperatingSystem.IsMacOS()) { sandbox.Stub("sha256sum", "exec /usr/bin/shasum -a 256"); }
+        sandbox.Environment["APT_CONFIG"] = "ignored-fixture";
+        var selection = Path.Combine(sandbox.Root, "selection");
+        sandbox.Stub("apt-get", """
+            [ "${DEBIAN_FRONTEND-}" = noninteractive ] && [ "${LC_ALL-}" = C ] && [ "${LANG-}" = C ] || exit 31
+            [ -z "${APT_CONFIG-}" ] || exit 32
+            case "$*" in *--simulate*--assume-yes*Dpkg::Options::=--force-confold*upgrade*) ;; *) exit 33;; esac
+            if read -r answer; then exit 34; fi
+            """ + "\ncat " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(selection));
+        var command = UbuntuPackageCommandCatalog.CreateUpgradePlanRequest();
+        var shell = UbuntuPackageCommandCatalog.RequireShellCommand(command).Replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+            "PATH=" + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(Path.Combine(sandbox.Root, "bin") + ":/usr/bin:/bin"), StringComparison.Ordinal);
+        await File.WriteAllTextAsync(selection, "Reading package lists...\nInst fixture [1.0] (2.0 Ubuntu:24.04 [amd64])\nConf fixture (2.0 Ubuntu:24.04 [amd64])\n");
+        var first = await sandbox.RunAsync(shell);
+        await File.WriteAllTextAsync(selection, "Reading package lists...\nInst fixture [1.0] (3.0 Ubuntu:24.04 [amd64])\nConf fixture (3.0 Ubuntu:24.04 [amd64])\n");
+        var second = await sandbox.RunAsync(shell);
+        Assert.Equal(0, first.ExitCode);
+        Assert.Equal(0, second.ExitCode);
+        var firstEvidence = VpsReady.Core.Remote.CommandParserEvidence.Parse(command.Id.Value, first.Output);
+        var secondEvidence = VpsReady.Core.Remote.CommandParserEvidence.Parse(command.Id.Value, second.Output);
+        Assert.NotNull(firstEvidence);
+        Assert.NotNull(secondEvidence);
+        Assert.Equal(1, firstEvidence.Number);
+        Assert.Equal(firstEvidence.Number, secondEvidence.Number);
+        Assert.NotEqual(firstEvidence.Fingerprint, secondEvidence.Fingerprint);
+        Assert.DoesNotContain("fixture", first.Output, StringComparison.Ordinal);
+    }
+    [UnixTheory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task UpgradeReceivesExplicitEnvironmentKeepOldConffilesAndClosedStdin(bool root)
     {
         using var sandbox = new ShellSandbox();

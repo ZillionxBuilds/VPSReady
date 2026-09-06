@@ -38,7 +38,7 @@ public static class UbuntuPackageCommandCatalog
         // Freshness is established by the preceding strict update exit status.
         // This independent read checks cache usability, not stale Release files.
         RemoteCommandCatalog.UbuntuAptIndexVerify => "LC_ALL=C LANG=C; export LC_ALL LANG; apt-cache policy >/dev/null && printf 'apt_index=refreshed\\n'",
-        RemoteCommandCatalog.UbuntuAptUpgradePlan => "LC_ALL=C LANG=C; export LC_ALL LANG; plan=$(apt-get -s upgrade) || exit $?; printf '%s\\n' \"$plan\" | awk '/^Inst / { count++ } END { printf \"upgrade_plan_packages=%d\\n\", count + 0 }'",
+        RemoteCommandCatalog.UbuntuAptUpgradePlan => UpgradePlan,
         RemoteCommandCatalog.UbuntuAptUpgradeApply => "if [ \"$(id -u)\" -eq 0 ]; then " + NoninteractiveUpgrade + "; else sudo -n " + NoninteractiveUpgrade + "; fi",
         RemoteCommandCatalog.UbuntuAptUpgradeVerify => "LC_ALL=C LANG=C; export LC_ALL LANG; audit=$(dpkg --audit); status=$?; [ \"$status\" -eq 0 ] || exit \"$status\"; test -z \"$audit\" && printf 'package_upgrade=verified\\n'",
         RemoteCommandCatalog.UbuntuRebootRequiredRead => "if test -f /var/run/reboot-required; then printf 'reboot_required=true\\n'; else printf 'reboot_required=false\\n'; fi",
@@ -53,6 +53,18 @@ public static class UbuntuPackageCommandCatalog
     // Keep modified conffiles (no confdef/confnew fallback); unsupported package
     // interactions receive EOF and must fail, not wait on user/password input.
     private const string NoninteractiveUpgrade = "/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C LANG=C DEBIAN_FRONTEND=noninteractive apt-get --assume-yes -o Dpkg::Options::=--force-confold upgrade </dev/null";
+
+    private static readonly string UpgradePlan = """
+        LC_ALL=C LANG=C; export LC_ALL LANG
+        """ + "\n" + "if [ \"$(id -u)\" -eq 0 ]; then plan=$(" + NoninteractiveUpgrade.Replace("apt-get --assume-yes", "apt-get --simulate --assume-yes", StringComparison.Ordinal) + "); else plan=$(sudo -n " + NoninteractiveUpgrade.Replace("apt-get --assume-yes", "apt-get --simulate --assume-yes", StringComparison.Ordinal) + "); fi" + "\n" + """
+        status=$?; [ "$status" -eq 0 ] || exit "$status"
+        count=$(printf '%s\n' "$plan" | awk '/^Inst / { count++ } END { printf "%d", count + 0 }') || exit 2
+        fingerprint=$(printf '%s\n' "$plan" | awk '/^(Inst|Remv|Conf) /' | sort | sha256sum) || exit 2
+        fingerprint=${fingerprint%% *}
+        [ "${#fingerprint}" -eq 64 ] || exit 2
+        case "$fingerprint" in *[!0-9a-f]*) exit 2;; esac
+        printf 'upgrade_plan_packages=%s:%s\n' "$count" "$fingerprint"
+        """;
 
     private static RemoteCommand Create(string commandId, string action) => RemoteCommand.Create(
         RemoteCommandCatalog.RequireKnown(commandId),
