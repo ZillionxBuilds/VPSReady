@@ -64,6 +64,22 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         OnPropertyChanged(nameof(SecretDisplay));
     }
 
+    public void AppendSecretText(ReadOnlySpan<char> value)
+    {
+        if (!SecretInput.TryAppendText(value))
+        {
+            ClearSecretInput();
+            RejectSecretCharacter();
+        }
+        OnPropertyChanged(nameof(SecretDisplay));
+    }
+
+    public void RejectSecretPaste()
+    {
+        State = ConnectionScreenState.Failed;
+        Status = "Clipboard paste is not supported for this password field. Type the password, or press Escape to clear and start again.";
+    }
+
     public void BackspaceSecretCharacter()
     {
         SecretInput.Backspace();
@@ -79,7 +95,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public void RejectSecretCharacter()
     {
         State = ConnectionScreenState.Failed;
-        Status = "This password input character is not supported by the secure input boundary.";
+        Status = "Password input was cleared because the text was invalid or exceeded 4096 characters. Re-enter the password.";
     }
 
     /// <summary>Accepts transient characters only; it never stores a password string.</summary>
@@ -207,16 +223,31 @@ public sealed class ConnectionSecretInput : IDisposable
     }
     public void Append(char value)
     {
-        if (char.IsControl(value) || value > 0x7f)
+        if (!TryAppendText([value]))
         {
             throw new ArgumentOutOfRangeException(nameof(value));
         }
+    }
+
+    public bool TryAppendText(ReadOnlySpan<char> value)
+    {
+        if (value.Length > 4096 - Length) { return false; }
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (char.IsControl(value[i])) { return false; }
+            if (char.IsHighSurrogate(value[i]))
+            {
+                if (++i >= value.Length || !char.IsLowSurrogate(value[i])) { return false; }
+            }
+            else if (char.IsLowSurrogate(value[i])) { return false; }
+        }
         var current = characters ?? [];
-        var next = new char[current.Length + 1];
+        var next = new char[current.Length + value.Length];
         current.CopyTo(next, 0);
-        next[^1] = value;
+        value.CopyTo(next.AsSpan(current.Length));
         Clear();
         characters = next;
+        return true;
     }
     public void Backspace()
     {
@@ -225,7 +256,8 @@ public sealed class ConnectionSecretInput : IDisposable
         {
             return;
         }
-        var next = current[..^1];
+        var remove = current.Length >= 2 && char.IsLowSurrogate(current[^1]) && char.IsHighSurrogate(current[^2]) ? 2 : 1;
+        var next = current[..^remove];
         Clear();
         characters = next;
     }
