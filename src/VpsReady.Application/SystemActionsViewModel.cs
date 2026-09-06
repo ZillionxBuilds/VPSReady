@@ -39,7 +39,6 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
     private string? observedSessionId;
     private long hostnameRevision;
     private long timezoneRevision;
-    private long presentationRevision;
     private string? hostnamePlanSession;
     private string? timezonePlanSession;
 
@@ -95,7 +94,6 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             if (SetProperty(ref hostname, value ?? string.Empty))
             {
                 hostnameRevision++;
-                presentationRevision++;
                 ClearHostnamePlan();
                 Status = "Hostname input changed. Read a new plan and confirm that exact value.";
             }
@@ -110,7 +108,6 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             if (SetProperty(ref timezone, value ?? string.Empty))
             {
                 timezoneRevision++;
-                presentationRevision++;
                 ClearTimezonePlan();
                 Status = "Timezone input changed. Read a new plan and confirm that exact value.";
             }
@@ -166,20 +163,33 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             );
         }, cancellationToken);
 
-    public Task UpgradeAsync(CancellationToken cancellationToken = default) => RunAsync(
-        "package-upgrade-apply",
-        async (transport, token) =>
+    public Task UpgradeAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsBusy) { return Task.CompletedTask; }
+        if (!CanUpgrade) { return RefuseUnreviewedPlan(); }
+        var plan = upgradePlan;
+        var confirmed = IsUpgradeConfirmed;
+        return RunAsync("package-upgrade-apply", async (transport, token) =>
         {
-            var completed = await packageUpgrader.UpgradeAsync(transport, upgradePlan, IsUpgradeConfirmed, token).ConfigureAwait(false);
+            if (!ReferenceEquals(plan, upgradePlan) || !IsUpgradeConfirmed)
+            {
+                return (OperationResult.Failure(NewSessionOperationId("upgrade-stale"), OperationErrorCode.Validation), null, (Action?)null);
+            }
+            // Approval belongs to this attempt, not its eventual presentation.
+            // Consume it before the workflow's first asynchronous step. Old
+            // reboot evidence is also invalid until this attempt verifies it.
+            ClearUpgradePlan();
+            IsRebootConfirmed = false;
+            RebootRequired = null;
+            var completed = await packageUpgrader.UpgradeAsync(transport, plan, confirmed, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, () =>
             {
-                upgradePlan = null;
-                IsUpgradeConfirmed = false;
                 RebootRequired = completed.RebootRequired;
                 OnPlanAvailabilityChanged();
             }
             );
         }, cancellationToken, ClearUpgradePlan);
+    }
 
     public Task InspectRebootRequiredAsync(CancellationToken cancellationToken = default) => RunAsync(
         "reboot-required-inspect",
@@ -233,7 +243,8 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
                 OnPlanAvailabilityChanged();
             }
             );
-        }, cancellationToken, ClearHostnamePlan);
+        }, cancellationToken, ClearHostnamePlan,
+            () => revision == hostnameRevision && IsCurrentSession(identity));
     }
 
     public Task ApplyHostnameAsync(CancellationToken cancellationToken = default)
@@ -275,7 +286,8 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
                 OnPlanAvailabilityChanged();
             }
             );
-        }, cancellationToken, ClearTimezonePlan);
+        }, cancellationToken, ClearTimezonePlan,
+            () => revision == timezoneRevision && IsCurrentSession(identity));
     }
 
     public Task ApplyTimezoneAsync(CancellationToken cancellationToken = default)
@@ -335,10 +347,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         string action,
         Func<IRemoteTransport, CancellationToken, Task<(OperationResult Result, string? ErrorCode, Action? Apply)>> execute,
         CancellationToken callerCancellation,
-        Action? invalidateOnOverriddenResult = null)
+        Action? invalidateOnOverriddenResult = null,
+        Func<bool>? isPlanCurrent = null)
     {
         var expectedSession = session.Snapshot.SessionId;
-        var presentation = presentationRevision;
         if (!TryBegin(callerCancellation, out var cancellation))
         {
             return;
@@ -370,16 +382,13 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             var workflowError = completed is { } terminal && ReferenceEquals(result, terminal.Result)
                 ? terminal.ErrorCode
                 : null;
-            if (!IsCurrentSession(expectedSession) || disposed) { return; }
-            if (presentation != presentationRevision)
-            {
-                // Keep the input-change explanation, not a completed operation's
-                // obsolete status. The UI must also leave its working state.
-                if (ReferenceEquals(activeCancellation, cancellation)) { State = SystemActionsScreenState.Ready; }
-                return;
-            }
-            if (completed is { } accepted && ReferenceEquals(result, accepted.Result)
-                && string.Equals(expectedSession, session.Snapshot.SessionId, StringComparison.Ordinal))
+            if (!IsCurrentSession(expectedSession) || disposed
+                || !ReferenceEquals(activeCancellation, cancellation)) { return; }
+            // Input revisions govern pending plan payloads only. They must not
+            // suppress terminal failure/cancellation, mandatory cleanup, or the
+            // verified state returned by an already-dispatched system action.
+            var planIsCurrent = isPlanCurrent?.Invoke() ?? true;
+            if (planIsCurrent && completed is { } accepted && ReferenceEquals(result, accepted.Result))
             {
                 accepted.Apply?.Invoke();
             }
@@ -391,6 +400,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
                 invalidateOnOverriddenResult?.Invoke();
             }
             Complete(result, workflowError);
+            if (result.Succeeded && !planIsCurrent)
+            {
+                Status = "Input changed while this plan was being read. Read a new plan and confirm the current value before applying it.";
+            }
         }
         finally
         {
@@ -461,7 +474,6 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             observedSessionId = session.Snapshot.SessionId;
             hostnameRevision++;
             timezoneRevision++;
-            presentationRevision++;
             lock (operationLock)
             {
                 activeCancellation?.Cancel();
