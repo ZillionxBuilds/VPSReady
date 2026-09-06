@@ -2,6 +2,7 @@
 
 Solo source repair on `fix/149-pre-main-repair`, based on reviewed release
 `4ed708a99907c8bebc68664903e28b3d86ea02ee`. Target: `release/0.1.0`, review only.
+[PR #157](https://github.com/ZillionBuilds/VPSReady/pull/157) contains the repair.
 The [canonical Workpad](https://github.com/ZillionBuilds/VPSReady/issues/149#issuecomment-5556353152)
 records the final exact head/PR, commands, E0–E4 results and package checksums.
 No agents, independent QA/Principal approval, integration or stable publication.
@@ -81,6 +82,10 @@ cross-platform IME/clipboard UX or real-server behavior.
   returns unsupported-host exit 2 on macOS; Docker daemon was unavailable and
   no alternate local container/VM runner was found. No host accounts/services
   were modified and no public endpoint or VPS was contacted.
+  Separately, cached public Ubuntu UFW package/source checksums were revalidated
+  against the R8/R9 record and all four offline root/sudo/package fixture cases
+  passed. Full E1 at `77a60e6`: 446 pass / 0 fail / 1 E3 skip; E2: 173 pass /
+  0 fail / 3 other-evidence category skips. This adds offline E1, not E3/E5.
 - Retry only normal hosted Actions dispatch after push. Preserve the observed
   response without attributing an account/billing cause or bypassing controls.
 - Final handoff target: **READY_FOR_EXTERNAL_CODE_REVIEW**, with

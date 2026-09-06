@@ -66,7 +66,7 @@ Unavailable checks remain NOT RUN. No old artifact relabelling.
 - [x] F01–F10 traceability and confirmed entry-path omissions: see docs/verification/PRE_MAIN_R10_R14.md; guide, English/Thai README and semantic entry guards aligned.
 - [x] Clean local E0 restore/build/analyzers/format, repository safety/policy checks, dependency audit and startup-script self-test passed. Full interim E1 442/0/2, E2 173/0/3. Exact committed-head reruns and E4 archive provenance are recorded in the canonical Workpad after commit; E3/hosted/matching-host unavailability remains explicit.
 - [x] Behavioral, privacy and production/test-parity SELF-REVIEW documented; added stable overview diagnostic errors/duration. Same engineer, not independent QA.
-- [ ] Reviewable PR to release; final trackers/board and handoff.
+- [x] Reviewable PR #157 targets release/0.1.0; no self-merge. Final trackers/board, exact-head reruns and archive checksums are maintained in #149/#1/#20 after the evidence run, without another runtime-relabelled documentation commit.
 
 ## Decision log
 
@@ -92,3 +92,9 @@ validation and handoff record (including exact PR, artifacts and checksums);
 post-commit evidence does not require relabelling historical archives or making
 another documentation-only SHA look runtime-tested. No target branch is merged.
 REAL VPS: NOT TESTED.
+
+Offline UFW package fixtures were recovered from the earlier disposable cache
+and their public archive checksums revalidated against RC_FOLLOWUP_R8_R9.md.
+The production-shell fixture tests now run (not skipped): full local E1 at
+77a60e6 was 446 passed, 0 failed, 1 E3 skip; E2 173 passed, 0 failed, 3 category
+skips. This is E1 public-package/synthetic-file evidence, not installed UFW or E3.
