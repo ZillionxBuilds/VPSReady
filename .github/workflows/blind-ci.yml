@@ -125,9 +125,7 @@ jobs:
 
       - name: E0 tracked-secret scan (C003)
         shell: bash
-        run: |
-          bash eng/verify-tracked-secrets.sh
-          bash eng/verify-gitignore.sh
+        run: bash eng/verify-tracked-secrets.sh
 
       - name: E0 user and troubleshooting guide semantic guard (C603)
         shell: bash

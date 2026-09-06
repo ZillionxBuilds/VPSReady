@@ -33,7 +33,8 @@ objects, disposable shell/file fixtures and local build/package tools only.
 - [x] Implement bounded family-aware evidence and aligned scenarios.
 - [x] Implement explicit privileged environment/conffile policy and regressions.
 - [x] Tighten gitignore without hiding reviewed ordinary fixtures/source.
-- [ ] Clean E0, full E1/E2, available E3/E4; new exact-SHA packages/checksums.
+- [x] Clean E0 and full Release E1/E2 (395/173 pass; 1/3 skips respectively).
+- [ ] Final-SHA available E4 packages/checksums; E3 unavailable on this host.
 - [x] SELF-REVIEW behavior, privacy and production/test parity (see verification report).
 - [ ] Reviewable PR, ordinary release push per current Owner instruction, final trackers.
 
@@ -54,7 +55,10 @@ SHA evidence. No real VPS absence blocker, independent QA, or approval claim.
 
 ## Outcomes
 
-Source corrections implemented; clean exact-head validation and push remain.
+Source corrections implemented and clean E0/E1/E2 passed. Final-SHA E4/push
+remain; see current Workpad for completion beyond this source checkpoint.
+The optional workflow edit was withdrawn after GitHub rejected the push for
+missing OAuth workflow scope; no scope/account/policy changes were attempted.
 Complete source review/provenance: `docs/verification/RC_FOLLOWUP_R8_R9.md`.
 Exact head, final evidence and next review action will be in #149.
 REAL VPS: NOT TESTED.

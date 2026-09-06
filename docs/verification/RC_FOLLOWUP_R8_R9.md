@@ -80,7 +80,9 @@ checked dpkg audit, lock-versus-generic-100 classification, typed parser evidenc
 Removed blanket fixture-tree negations that overrode private-key/credential
 ignores. Added Python caches and editor swap files. Reviewed ordinary fixture,
 source and lock files remain trackable; `eng/verify-gitignore.sh` asserts both
-sides and is included in Blind CI. No tracked build output required deletion.
+sides. The optional new CI workflow step was withdrawn because repository write
+credentials do not have workflow scope; existing workflows are unchanged. Run
+the guard locally. No tracked build output required deletion.
 
 A Release run exposed an existing flaky R1 privacy assertion: the substring
 `22` sometimes appeared in elapsed-time ticks, not leaked port evidence. The
