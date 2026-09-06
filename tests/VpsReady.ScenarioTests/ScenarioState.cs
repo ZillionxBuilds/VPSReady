@@ -232,6 +232,9 @@ public sealed class ScenarioUbuntuState
 
 public sealed class ScenarioFirewallState
 {
+    public bool Ipv6Enabled { get; set; } = true;
+    public bool SessionIsIpv6 { get; set; }
+    public bool StoredProfileSupported { get; set; } = true;
     public ScenarioUfwStatus Status { get; set; } = ScenarioUfwStatus.Inactive;
 
     public string ErrorMessage { get; set; } = "UFW scenario error.";

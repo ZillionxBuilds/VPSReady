@@ -66,7 +66,13 @@ public sealed class ProductionOutputContractTests
             Assert.Equal(wire == record, captured.ParserEvidence is not null);
             Assert.Empty(captured.StandardOutput);
             Assert.Empty(captured.StandardError);
-            Assert.DoesNotContain(record.Trim(), System.Text.Json.JsonSerializer.Serialize(captured), StringComparison.Ordinal);
+            // A port such as 22 can occur coincidentally in elapsed ticks. Check
+            // the actual serialization boundary rather than numeric substrings.
+            using var json = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(captured));
+            Assert.False(json.RootElement.TryGetProperty(nameof(RemoteCommandResult.ParserEvidence), out _));
+            Assert.False(json.RootElement.TryGetProperty(nameof(RemoteCommandResult.StoredSshEvidence), out _));
+            Assert.Equal(string.Empty, json.RootElement.GetProperty(nameof(RemoteCommandResult.StandardOutput)).GetString());
+            Assert.Equal(string.Empty, json.RootElement.GetProperty(nameof(RemoteCommandResult.StandardError)).GetString());
             Assert.DoesNotContain("fixture-sensitive-error", captured.ToString(), StringComparison.Ordinal);
         }
         using var failedOut = new MemoryStream(Encoding.UTF8.GetBytes(record));

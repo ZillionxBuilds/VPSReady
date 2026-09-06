@@ -97,6 +97,7 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuUfwAllowRuleAdd,
         RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove,
         RemoteCommandCatalog.UbuntuUfwAddedRulesRead,
+        RemoteCommandCatalog.UbuntuUfwStoredSshRead,
         RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure,
         RemoteCommandCatalog.UbuntuUfwEnable,
         RemoteCommandCatalog.UbuntuUfwDisable,

@@ -150,7 +150,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         }
 
         if (!HasPrivilege() && State.Ufw.Status != ScenarioUfwStatus.Absent
-            && command.Id.Value is RemoteCommandCatalog.UbuntuUfwStatusRead or RemoteCommandCatalog.UbuntuUfwDetectionRead or RemoteCommandCatalog.UbuntuUfwRuleListRead or RemoteCommandCatalog.UbuntuUfwAddedRulesRead)
+            && command.Id.Value is RemoteCommandCatalog.UbuntuUfwStatusRead or RemoteCommandCatalog.UbuntuUfwDetectionRead or RemoteCommandCatalog.UbuntuUfwRuleListRead or RemoteCommandCatalog.UbuntuUfwAddedRulesRead or RemoteCommandCatalog.UbuntuUfwStoredSshRead)
         {
             return Failure(77, "Non-interactive UFW read privilege is unavailable.");
         }
@@ -194,6 +194,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             RemoteCommandCatalog.UbuntuUfwDetectionRead => FirewallDetection(),
             RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallRuleList(),
             RemoteCommandCatalog.UbuntuUfwAddedRulesRead => FirewallAddedRules(),
+            RemoteCommandCatalog.UbuntuUfwStoredSshRead => FirewallStoredRules(),
             RemoteCommandCatalog.UbuntuUfwAllowRuleAdd => AddUfwRule(command),
             RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove => RemoveUfwRuleBySemantic(command),
             RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure => AddUfwRule(command),
@@ -541,9 +542,20 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             return Failure(1, State.Ufw.ErrorMessage);
         }
 
-        var rules = State.Ufw.Rules.Select(rule =>
-            $"ufw {rule.Action.ToLowerInvariant()} from {(rule.Source == "Anywhere" ? rule.IpFamily == ScenarioIpFamily.Ipv4 ? "0.0.0.0/0" : "::/0" : rule.Source)} to any port {rule.Port.ToString(CultureInfo.InvariantCulture)} proto {rule.Protocol.ToString().ToLowerInvariant()}");
+        var rules = State.Ufw.Rules.Select(rule => rule.Source == "Anywhere"
+            ? $"ufw {rule.Action.ToLowerInvariant()} {rule.Port.ToString(CultureInfo.InvariantCulture)}/{rule.Protocol.ToString().ToLowerInvariant()}"
+            : $"ufw {rule.Action.ToLowerInvariant()} from {rule.Source} to any port {rule.Port.ToString(CultureInfo.InvariantCulture)} proto {rule.Protocol.ToString().ToLowerInvariant()}").Distinct(StringComparer.Ordinal);
         return Result(string.Join(Environment.NewLine, ["Added user rules (see 'ufw status' for running firewall):", .. rules]));
+    }
+
+    private RemoteCommandResult FirewallStoredRules()
+    {
+        if (!State.Ufw.StoredProfileSupported) { return Failure(2, "Unsupported stored policy fixture."); }
+        string Rules(ScenarioIpFamily family) => string.Concat(State.Ufw.Rules.Where(rule => rule.IpFamily == family).Select(rule =>
+            $"-A {(family == ScenarioIpFamily.Ipv6 ? "ufw6" : "ufw")}-user-input -p {rule.Protocol.ToString().ToLowerInvariant()} --dport {rule.Port}"
+            + (rule.Source == "Anywhere" ? "" : $" -s {rule.Source}") + $" -j {(rule.Action == "ALLOW" ? "ACCEPT" : "DROP")}\n"));
+        return Result(VpsReady.Tests.StoredUfwFixture.Create(State.Ssh.ActiveSshPort, ipv6: State.Ufw.Ipv6Enabled,
+            session6: State.Ufw.SessionIsIpv6, rules4: Rules(ScenarioIpFamily.Ipv4), rules6: Rules(ScenarioIpFamily.Ipv6)));
     }
 
     private RemoteCommandResult DisableUfwProduction()

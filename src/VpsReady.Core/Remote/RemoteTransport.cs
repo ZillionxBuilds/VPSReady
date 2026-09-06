@@ -54,6 +54,7 @@ public static class RemoteCommandCatalog
     public const string UbuntuUfwAllowRuleAdd = DiagnosticCommandCatalog.UbuntuUfwAllowRuleAdd;
     public const string UbuntuUfwSelectedRuleRemove = DiagnosticCommandCatalog.UbuntuUfwSelectedRuleRemove;
     public const string UbuntuUfwAddedRulesRead = DiagnosticCommandCatalog.UbuntuUfwAddedRulesRead;
+    public const string UbuntuUfwStoredSshRead = DiagnosticCommandCatalog.UbuntuUfwStoredSshRead;
     public const string UbuntuUfwActiveSshAllowEnsure = DiagnosticCommandCatalog.UbuntuUfwActiveSshAllowEnsure;
     public const string UbuntuUfwEnable = DiagnosticCommandCatalog.UbuntuUfwEnable;
     public const string UbuntuUfwDisable = DiagnosticCommandCatalog.UbuntuUfwDisable;
@@ -97,6 +98,7 @@ public static class RemoteCommandCatalog
         UbuntuUfwAllowRuleAdd,
         UbuntuUfwSelectedRuleRemove,
         UbuntuUfwAddedRulesRead,
+        UbuntuUfwStoredSshRead,
         UbuntuUfwActiveSshAllowEnsure,
         UbuntuUfwEnable,
         UbuntuUfwDisable,
@@ -323,6 +325,9 @@ public sealed record RemoteCommandResult
 
     [System.Text.Json.Serialization.JsonIgnore]
     public CommandParserEvidence? ParserEvidence { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public UfwStoredSshEvidence? StoredSshEvidence { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore]
     public bool AptLockContended { get; init; }
