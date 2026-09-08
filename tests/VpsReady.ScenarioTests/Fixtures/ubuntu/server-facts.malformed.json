@@ -1,0 +1,13 @@
+{
+  "ubuntu.facts.os-release.read": "ID=debian\nVERSION=untrusted",
+  "ubuntu.facts.kernel-architecture.read": "Linux 6.8.0 x86_64 extra",
+  "ubuntu.facts.hostname.read": "bad host name",
+  "ubuntu.facts.uptime.read": "-1 0",
+  "ubuntu.facts.current-user.read": "bad user",
+  "ubuntu.facts.privilege.read": "root=true\nsudo=available",
+  "ubuntu.facts.cpu.read": "model name : no processor count",
+  "ubuntu.facts.memory.read": "MemTotal: invalid kB\nMemAvailable: 2 kB",
+  "ubuntu.facts.root-disk.read": "/dev/vda1 21474836480 22548578304 0 105% /",
+  "ubuntu.facts.ufw-availability.read": "ufw=maybe",
+  "ubuntu.facts.ufw-status.read": "Status: enabled"
+}

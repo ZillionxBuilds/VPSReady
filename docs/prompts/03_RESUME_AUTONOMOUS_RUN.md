@@ -1,35 +1,14 @@
-# Prompt 03 — Resume an Interrupted Blind Autonomous Run
+# Prompt 03 — Resume SOLO migration/release review
 
-Use when a Codex session ends or is replaced before release readiness or Owner retest readiness.
+Current assignment is SOLO, not historical autonomous delivery. Do not spawn agents or restart completed development.
 
-```text
-Resume VPSReady v0.1 blind autonomous delivery as the primary Orchestrator using Terra with high reasoning.
+1. Read AGENTS.md and middleman/repository-migration/identity-map.json. Verify `gh api repos/ZillionxBuilds/VPSReady --jq '{id,full_name,permissions}'` gives repository ID 1361332816 and the canonical name. Verify authenticated USER, never log in as the organization or print credentials.
+2. Inspect dirty status, remotes including push URLs, worktrees, all current PRs and existing schedules before any write. Preserve existing work and backups; no reset, force push, deletion, duplicate worker or broad mirror push.
+3. Read the actual mapped issue types/titles/Workpads. New #1 is migration; release #2; repair/validation #3; R19 #4; Owner E5 #5; draft release-to-main PR #6. Reverify from the map/API rather than assuming numbers; null mappings are unusable. Legacy #1/#20 and historic milestones do not route to new numbers.
+4. Fetch current release/0.1.0 as the product baseline. Development has a docs-only migration packet and older product ancestry; do not merge it into release to obtain instructions. Read pinned packet 9a879fde3a715d4ca7221d57fd1ad83702a59077 with git show. Read current migration Workpad and report for next safe task.
+5. Keep one Workpad per active purpose. Do only tracked migration, validation and narrowly reproduced release corrections in isolated release-based branches with reviewable PRs. No main/release self-merge, stable publication or fabricated approvals. Self-review is not independent QA.
+6. Reconcile E0–E4 actual exact-source results and NOT_RUN entries; run current R19 regressions rather than inheriting older counts. Keep diagnostics correlation, redaction, fail-closed authority, no false-success and all R1–R19 safety boundaries.
+7. No real VPS, public SSH endpoint, provider access, Owner credentials or host UFW/apt/SSH/reboot mutation. E3 is disposable contained protocol only. E5 and main approval remain Owner-only.
+8. Keep existing watchdog paused unless Owner explicitly authorizes safe resumption. No rival controller. Report missing Project/app/schedule/Actions permissions precisely and complete other safe work.
 
-Do not rely on prior chat/session memory and do not duplicate work. No real VPS or Owner credential is available to agents; never request one.
-
-Reconstruct authoritative state from:
-- AGENTS.md and every required linked document;
-- release tracker #1 and its single Codex Workpad;
-- milestones #2–#8, gates #9–#11, M0 issues #12–#18, completed governance #19, and Owner-test tracker #20;
-- all open active/blocked/QA/gate/Owner-feedback issues;
-- open PRs, branches, worktrees, latest development/release SHA and CI/package evidence;
-- docs/exec-plans/active/V0.1_CORE_BASIC.md;
-- unresolved review feedback and evidence labels.
-
-Reconcile:
-1. active owners/workspaces and stale claims;
-2. branches/PRs corresponding to issues;
-3. #1 Workpad, #20 status, and active ExecPlan;
-4. evidence classes E0–E4 and explicit `REAL VPS: NOT TESTED` state before Owner evidence;
-5. any Owner E5 result tied to exact release SHA without requesting credentials/direct access;
-6. safe reassignment only for stale/inactive work;
-7. next valid routine-card, major-gate, release-fix, or Owner-retest transition.
-
-Preserve the same roles, issue-first protocol, update cadence, blind-development boundary, diagnostic contract, fast routine loop, Gate A/B/C, safety invariants and Principal-only release rule.
-
-Before a release branch exists, continue until `release/0.1.0` is Principal-created and `READY_FOR_OWNER_VPS_TEST`, or a genuine Owner-only/GitHub/CI permission blocker prevents safe progress.
-
-After Owner feedback exists, follow Prompt 04 semantics: diagnose only from safe reviewed evidence, reproduce in the blind harness, fix from the release branch, rerun E0–E4, obtain Principal re-approval, sync to development, and return exact Owner retest steps.
-
-Expected lack of a VPS is not a blocker. Never merge to main or publish stable without explicit Owner approval.
-```
+End with MIGRATION_OPERATIONAL or MIGRATION_PARTIAL, separate release validation state, exact refs/PRs/evidence, minimum external actions and REAL VPS: NOT TESTED. Neither migration state means READY_FOR_MAIN.

@@ -1,0 +1,289 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:application="using:VpsReady.Application"
+        x:Class="VpsReady.Desktop.MainWindow"
+        x:DataType="application:AppViewModel"
+        Width="1040"
+        Height="680"
+        MinWidth="680"
+        MinHeight="480"
+        Title="{Binding Title}">
+  <Grid RowDefinitions="Auto,*,Auto">
+    <Border Grid.Row="0" Padding="24,18" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+        <StackPanel Spacing="4">
+          <TextBlock FontSize="26" FontWeight="SemiBold" Text="{Binding Title}" />
+          <TextBlock AutomationProperties.Name="Connection status" Text="{Binding Status}" TextWrapping="Wrap" />
+        </StackPanel>
+        <Border Grid.Column="1" IsVisible="{Binding HasStartupFailure}" Background="{DynamicResource SystemControlErrorTextForegroundBrush}" CornerRadius="4" Padding="10,6">
+          <TextBlock Foreground="White" FontWeight="SemiBold" Text="Safe limited state" />
+        </Border>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="1" ColumnDefinitions="240,*">
+      <Border Grid.Column="0" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" BorderThickness="0,0,1,0">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="12" Spacing="4">
+            <TextBlock Margin="12,8,12,4" FontWeight="SemiBold" Text="Navigation" />
+            <ItemsControl ItemsSource="{Binding NavigationItems}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="application:ShellNavigationItem">
+                  <Button HorizontalAlignment="Stretch"
+                          HorizontalContentAlignment="Left"
+                          Command="{Binding NavigateCommand}"
+                          ToolTip.Tip="{Binding Hint}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                      <TextBlock IsVisible="{Binding IsSelected}" FontWeight="SemiBold" Text="Selected" />
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
+
+      <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="32" MaxWidth="760" Spacing="18">
+          <TextBlock FontSize="24" FontWeight="SemiBold" Text="{Binding SelectedPage.Heading}" TextWrapping="Wrap" />
+          <TextBlock FontSize="16" Text="{Binding SelectedPage.Description}" TextWrapping="Wrap" />
+          <Border IsVisible="{Binding SelectedPage.IsPlaceholderPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="8">
+              <TextBlock FontWeight="SemiBold" Text="Action unavailable" />
+              <Button IsEnabled="{Binding SelectedPage.IsActionAvailable}" HorizontalAlignment="Left" Content="{Binding SelectedPage.UnavailableAction}" />
+              <TextBlock Text="{Binding SelectedPage.UnavailableReason}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding SelectedPage.IsFirewallPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Safe firewall management" />
+              <TextBlock Text="Rules and state are refreshed from the verified session. Firewall changes require explicit confirmation and are only successful after verification." TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Firewall.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Firewall.State}" />
+              <TextBlock Text="{Binding Firewall.FirewallState}" />
+              <TextBlock IsVisible="{Binding Firewall.OperationId}" FontFamily="Consolas" Text="{Binding Firewall.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding Firewall.ErrorCode}" FontFamily="Consolas" Text="{Binding Firewall.ErrorCode}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="RefreshFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Refresh firewall state" />
+                <Button Command="{Binding Firewall.CancelCommand}" IsEnabled="{Binding Firewall.CanCancel}" Content="Cancel operation" />
+              </StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Current verified rules" />
+              <TextBlock Text="{Binding Firewall.RuleListingStatus}" TextWrapping="Wrap" />
+              <ListBox ItemsSource="{Binding Firewall.Rules}" SelectedItem="{Binding Firewall.SelectedRule, Mode=TwoWay}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="application:FirewallRuleRow">
+                    <TextBlock Text="{Binding Display}" TextWrapping="Wrap" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock FontWeight="SemiBold" Text="Add allow rule" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <RadioButton GroupName="FirewallProtocol" IsChecked="{Binding Firewall.IsTcp, Mode=TwoWay}" Content="TCP" />
+                <RadioButton GroupName="FirewallProtocol" IsChecked="{Binding Firewall.IsUdp, Mode=TwoWay}" Content="UDP" />
+                <RadioButton GroupName="FirewallFamily" IsChecked="{Binding Firewall.IsIpv4, Mode=TwoWay}" Content="IPv4" />
+                <RadioButton GroupName="FirewallFamily" IsChecked="{Binding Firewall.IsIpv6, Mode=TwoWay}" Content="IPv6" />
+              </StackPanel>
+              <TextBox Watermark="Port (1–65535)" Text="{Binding Firewall.AddPort, Mode=TwoWay}" />
+              <TextBox Watermark="Source (Anywhere, IP, or CIDR)" Text="{Binding Firewall.AddSource, Mode=TwoWay}" />
+              <Button Click="AddFirewallRuleAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Add verified allow rule" />
+              <TextBlock FontWeight="SemiBold" Text="Risky actions" />
+              <CheckBox IsChecked="{Binding Firewall.IsRemoveConfirmed, Mode=TwoWay}" Content="I confirm removal of the selected current rule." />
+              <TextBlock AutomationProperties.Name="Firewall removal eligibility" Text="{Binding Firewall.RemovalEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="RemoveFirewallRuleAsync" IsEnabled="{Binding Firewall.CanRemoveSelected}" Content="Remove selected rule" />
+              <CheckBox IsChecked="{Binding Firewall.IsEnableConfirmed, Mode=TwoWay}" Content="I confirm enabling the firewall after its SSH access plan is verified." />
+              <Button Click="EnableFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Enable firewall" />
+              <CheckBox IsChecked="{Binding Firewall.IsDisableConfirmed, Mode=TwoWay}" Content="I confirm disabling the firewall." />
+              <Button Click="DisableFirewallAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Disable firewall" />
+              <TextBlock Text="The normal flow blocks removal of any TCP rule on the active SSH port. Use Activity &amp; Diagnostics and the operation ID for a Safe Issue Report; no raw remote command or secret is shown." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding SelectedPage.IsSshManagementPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Safe SSH key management" />
+              <TextBlock Text="Private keys, local paths, raw commands, server addresses and credentials are never shown in Activity or this summary. Public-key text has a separate intentional View/Copy action below." TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SshManagement.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SshManagement.State}" />
+              <TextBlock Text="{Binding SshManagement.TrustedHostStatus}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SshManagement.OperationId}" FontFamily="Consolas" Text="{Binding SshManagement.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SshManagement.ErrorCode}" FontFamily="Consolas" Text="{Binding SshManagement.ErrorCode}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="GenerateSshKeyAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Generate local Ed25519 key" />
+                <Button Click="SelectSshKeyAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Select existing local key" />
+                <Button Command="{Binding SshManagement.CancelCommand}" IsEnabled="{Binding SshManagement.CanCancel}" Content="Cancel operation" />
+              </StackPanel>
+              <TextBlock Text="{Binding SshManagement.SelectedKeyMetadata.Algorithm}" />
+              <TextBlock Text="{Binding SshManagement.SelectedKeyMetadata.Fingerprint}" FontFamily="Consolas" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="ViewPublicKeyAsync" IsEnabled="{Binding SshManagement.CanReadPublicKey}" Content="View public key" />
+                <Button Click="CopyPublicKeyAsync" IsEnabled="{Binding SshManagement.CanReadPublicKey}" Content="Copy public key" />
+                <Button Command="{Binding SshManagement.HidePublicKeyCommand}" Content="Hide public key" />
+              </StackPanel>
+              <TextBlock Text="{Binding SshManagement.PublicKeyDisplay}" FontFamily="Consolas" TextWrapping="Wrap" />
+              <TextBlock Text="Public-key text appears only after View, or goes to the system clipboard only after Copy. Clipboard history and other applications may retain it. Private keys are never displayed or copied." TextWrapping="Wrap" />
+              <TextBlock FontWeight="SemiBold" Text="Deploy and verify" />
+              <CheckBox IsChecked="{Binding SshManagement.IsDeploymentConfirmed, Mode=TwoWay}" Content="I confirm deployment of the selected public key to the current verified session." />
+              <TextBlock AutomationProperties.Name="SSH key deployment eligibility" Text="{Binding SshManagement.DeploymentEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="DeploySshKeyAsync" IsEnabled="{Binding SshManagement.CanDeploy}" Content="Deploy and verify public key" />
+              <TextBlock AutomationProperties.Name="SSH key-authentication eligibility" Text="{Binding SshManagement.KeyAuthenticationEligibilityMessage}" TextWrapping="Wrap" />
+              <Button Click="VerifySshKeyAuthenticationAsync" IsEnabled="{Binding SshManagement.CanVerifyKeyAuthentication}" Content="Test separate key authentication" />
+              <TextBlock Text="Key-authentication success is only shown after a new connection to the same trusted host completes its minimum verification. This screen never disables password access." TextWrapping="Wrap" />
+              <TextBlock FontWeight="SemiBold" Text="Local OpenSSH alias" />
+              <TextBox Watermark="Alias" Text="{Binding SshManagement.Alias, Mode=TwoWay}" />
+              <TextBox Watermark="Host name" Text="{Binding SshManagement.HostName, Mode=TwoWay}" />
+              <TextBox Watermark="User name" Text="{Binding SshManagement.UserName, Mode=TwoWay}" />
+              <TextBox Watermark="SSH port" Text="{Binding SshManagement.Port, Mode=TwoWay}" />
+              <CheckBox IsChecked="{Binding SshManagement.IsConfigConfirmed, Mode=TwoWay}" Content="I confirm saving this local OpenSSH alias." />
+              <Button Click="SaveSshConfigAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Save verified local alias" />
+              <TextBlock Text="Use Activity &amp; Diagnostics and the operation ID to Copy a Safe Issue Report or export a sanitized support bundle. Nothing is uploaded automatically." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding SelectedPage.IsSystemActionsPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Safe system actions" />
+              <TextBlock Text="Every change reads state, creates a plan where applicable, requires your explicit confirmation, then verifies the result. Package actions never offer a distribution release upgrade." TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.State}" />
+              <TextBlock IsVisible="{Binding SystemActions.OperationId}" FontFamily="Consolas" Text="{Binding SystemActions.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SystemActions.ErrorCode}" FontFamily="Consolas" Text="{Binding SystemActions.ErrorCode}" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding SystemActions.CancelCommand}" IsEnabled="{Binding SystemActions.CanCancel}" Content="Cancel operation" />
+              </StackPanel>
+              <TextBlock FontWeight="SemiBold" Text="Packages" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="RefreshPackageIndexAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Refresh package index" />
+                <Button Click="PlanPackageUpgradeAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Read upgrade plan" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.UpgradeEligibilityMessage}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.UpgradePlanStatus}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsUpgradeConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed normal package upgrade." />
+              <Button Click="ApplyPackageUpgradeAsync" IsEnabled="{Binding SystemActions.CanUpgrade}" Content="Apply and verify package upgrade" />
+              <TextBlock FontWeight="SemiBold" Text="Reboot" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="InspectRebootRequiredAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Inspect reboot requirement" />
+                <TextBlock Text="{Binding SystemActions.RebootRequirementStatus}" VerticalAlignment="Center" TextWrapping="Wrap" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.RebootEligibilityMessage}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsRebootConfirmed, Mode=TwoWay}" Content="I confirm reboot. Connection loss is expected; reconnect and revalidation are bounded." />
+              <Button Click="RebootSystemAsync" IsEnabled="{Binding SystemActions.CanReboot}" Content="Reboot and verify reconnect" />
+              <TextBlock FontWeight="SemiBold" Text="Hostname" />
+              <TextBox Watermark="New hostname" Text="{Binding SystemActions.Hostname, Mode=TwoWay}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="PlanHostnameAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Validate and read hostname plan" />
+                <Button Click="ApplyHostnameAsync" IsEnabled="{Binding SystemActions.CanApplyHostname}" Content="Apply and verify hostname" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.HostnameEligibilityMessage}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.HostnamePlanTarget}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsHostnameConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed hostname change." />
+              <TextBlock FontWeight="SemiBold" Text="Timezone" />
+              <TextBox Watermark="IANA timezone, for example Europe/London" Text="{Binding SystemActions.Timezone, Mode=TwoWay}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="PlanTimezoneAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Validate and read timezone plan" />
+                <Button Click="ApplyTimezoneAsync" IsEnabled="{Binding SystemActions.CanApplyTimezone}" Content="Apply and verify timezone" />
+              </StackPanel>
+              <TextBlock Text="{Binding SystemActions.TimezoneEligibilityMessage}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding SystemActions.TimezonePlanTarget}" TextWrapping="Wrap" />
+              <CheckBox IsChecked="{Binding SystemActions.IsTimezoneConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed timezone change." />
+              <TextBlock Text="Use the operation ID in Activity &amp; Diagnostics to prepare a Safe Issue Report or a local sanitized support bundle. No raw command, endpoint, credential or secret is displayed or uploaded." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding SelectedPage.IsConnectionSurfacePage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="8">
+              <TextBlock FontWeight="SemiBold" Text="Connection and overview" />
+              <TextBox x:Name="ConnectionHost" Watermark="Host or IP" />
+              <TextBox x:Name="ConnectionPort" Watermark="SSH port (default 22)" />
+              <TextBox x:Name="ConnectionUser" Watermark="Username" />
+              <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" TextInput="ConnectionPasswordTextInput" AutomationProperties.Name="Password input" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" Padding="8">
+                <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" />
+              </Border>
+              <TextBlock Text="Type the password using your keyboard layout. Backspace deletes the last character; Escape clears it. Tab moves to the next control. Clipboard paste is not supported in this version. Input is cleared after submission." TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Click="TestConnectionAsync" IsEnabled="{Binding ConnectionOverview.CanTestConnection}" Content="Test Connection" />
+                <Button Command="{Binding ConnectionOverview.CancelConnectionCommand}" IsEnabled="{Binding ConnectionOverview.IsConnecting}" Content="Cancel connection" />
+              </StackPanel>
+              <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.State}" />
+              <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
+              <Border IsVisible="{Binding ConnectionOverview.HasHostTrustReview}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumBrush}" BorderThickness="1" CornerRadius="4" Padding="12">
+                <StackPanel Spacing="6">
+                  <TextBlock FontWeight="SemiBold" Text="{Binding ConnectionOverview.TrustReviewTitle}" />
+                  <TextBlock Text="Review this observed SSH host key before any trust data is saved. This display is limited to this review; it is not copied into diagnostics or public reports." TextWrapping="Wrap" />
+                  <TextBlock AutomationProperties.Name="Host-key review host" Text="{Binding ConnectionOverview.TrustHost}" TextWrapping="Wrap" />
+                  <TextBlock AutomationProperties.Name="Host-key review port" Text="{Binding ConnectionOverview.TrustPort}" />
+                  <TextBlock AutomationProperties.Name="Host-key algorithm" Text="{Binding ConnectionOverview.TrustAlgorithm}" FontFamily="Consolas" TextWrapping="Wrap" />
+                  <TextBlock AutomationProperties.Name="Host-key fingerprint" Text="{Binding ConnectionOverview.TrustFingerprint}" FontFamily="Consolas" TextWrapping="Wrap" />
+                  <TextBlock IsVisible="{Binding ConnectionOverview.IsChangedHostKey}" Text="The previously trusted host key no longer matches. Do not replace it unless you have independently verified this change." TextWrapping="Wrap" />
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button IsVisible="{Binding ConnectionOverview.IsUnknownHostKey}" Click="AcceptUnknownHostKeyAsync" Content="Trust host key" />
+                    <Button IsVisible="{Binding ConnectionOverview.IsChangedHostKey}" Click="ReplaceChangedHostKeyAsync" Content="Replace trusted host key" />
+                  </StackPanel>
+                  <TextBlock Text="Saving this decision does not connect to the server. Re-enter the password and test the connection again; success is shown only after authentication and verification." TextWrapping="Wrap" />
+                </StackPanel>
+              </Border>
+              <TextBlock Text="{Binding ConnectionOverview.OverviewStatus}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding ConnectionOverview.OverviewState}" />
+              <ItemsControl ItemsSource="{Binding ConnectionOverview.Facts}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="application:OverviewFactRow">
+                    <Grid ColumnDefinitions="170,*" Margin="0,4">
+                      <TextBlock Text="{Binding Label}" FontWeight="SemiBold" />
+                      <TextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding ConnectionOverview.RefreshCommand}" IsEnabled="{Binding ConnectionOverview.CanRefresh}" Content="Refresh server facts" />
+                <Button Command="{Binding ConnectionOverview.CancelRefreshCommand}" IsEnabled="{Binding ConnectionOverview.IsRefreshing}" Content="Cancel refresh" />
+                <Button Command="{Binding ConnectionOverview.DisconnectCommand}" Content="Disconnect" />
+              </StackPanel>
+              <TextBlock Text="Use Activity &amp; Diagnostics to Copy Safe Issue Report; credentials, raw host data and raw command output are never shown there." TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding SelectedPage.IsActivityPage}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="10">
+              <TextBlock FontWeight="SemiBold" Text="Local Activity &amp; Diagnostics" />
+              <TextBlock Text="Activity is redacted before display and stored only on this device. VPSReady never uploads diagnostics automatically." TextWrapping="Wrap" />
+              <TextBox Watermark="Filter safe activity" Text="{Binding ActivityDiagnostics.Filter}" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Command="{Binding ActivityDiagnostics.RefreshCommand}" Content="Refresh activity" />
+                <Button Command="{Binding ActivityDiagnostics.ClearCommand}" Content="Clear diagnostics" />
+                <Button Command="{Binding ActivityDiagnostics.OpenFolderCommand}" Content="Open log folder" />
+                <Button Command="{Binding ActivityDiagnostics.CopySafeIssueReportCommand}" Content="Copy Safe Issue Report" />
+                <Button Command="{Binding ActivityDiagnostics.ExportSanitizedSupportBundleCommand}" Content="Export Sanitized Support Bundle" />
+              </StackPanel>
+              <TextBlock Text="{Binding ActivityDiagnostics.Status}" TextWrapping="Wrap" />
+              <TextBlock FontFamily="Consolas" Text="{Binding ActivityDiagnostics.LogDirectory}" TextWrapping="Wrap" />
+              <TextBlock Text="Select an entry before copying a report or exporting a bundle to limit material to that safe correlated run. Diagnostics remain local until you explicitly share reviewed material." TextWrapping="Wrap" />
+              <ListBox ItemsSource="{Binding ActivityDiagnostics.Entries}" SelectedItem="{Binding ActivityDiagnostics.SelectedEntry, Mode=TwoWay}" MaxHeight="360">
+                <ListBox.ItemTemplate>
+                  <DataTemplate>
+                    <StackPanel Margin="0,4,0,4">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding State}" />
+                      <TextBlock Text="{Binding Action}" />
+                      <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                      <TextBlock FontFamily="Consolas" Text="{Binding OperationId}" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <TextBlock Text="{Binding ActivityDiagnostics.SelectedDetail}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border IsVisible="{Binding HasStartupFailure}" Background="{DynamicResource SystemControlBackgroundAltHighBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="6">
+              <TextBlock FontWeight="SemiBold" Text="Startup was limited safely" />
+              <TextBlock Text="Restart VPSReady. If this persists, use the local diagnostics folder when it becomes available and include only a Safe Issue Report." TextWrapping="Wrap" />
+              <TextBlock FontFamily="Consolas" Text="{Binding StartupErrorId}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+    </Grid>
+
+    <Border Grid.Row="2" Padding="24,12" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" BorderThickness="0,1,0,0">
+      <TextBlock Text="Disconnected-first shell — remote actions remain unavailable until their verified workflow is ready." TextWrapping="Wrap" />
+    </Border>
+  </Grid>
+</Window>

@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    TreatWarningsAsErrors is the repository default. The SDK-provided 1701/1702
+    compatibility defaults are retained; any repository exception must be an
+    explicit, reviewed policy change with its rationale in the linked issue.
+  -->
+  <Target
+    Name="RejectUndocumentedWarningSuppressions"
+    BeforeTargets="CoreCompile"
+    Condition="('$(NoWarn)' != '' And '$(NoWarn)' != '1701;1702') Or '$(WarningsNotAsErrors)' != ''">
+    <Error
+      Text="VPSReady does not permit repository NoWarn or WarningsNotAsErrors. Resolve the warning, or make an explicit, reviewed policy change with a documented rationale." />
+  </Target>
+</Project>
