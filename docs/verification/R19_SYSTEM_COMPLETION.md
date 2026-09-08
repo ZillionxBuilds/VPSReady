@@ -1,5 +1,7 @@
 # R19 — system-operation completion (#160)
 
+> R19 was subsequently executed: 54 PASS at a4629b38, with 37 FAIL / 17 PASS on the pre-fix parent using the identical regression file. Clean integrated-candidate R19 at b835494e also passed 54/54. The editing-environment NOT RUN statements below are historical, not current validation status. See the [R19 Workpad](https://github.com/ZillionxBuilds/VPSReady/issues/4#issuecomment-5585173333) for exact-source results, skips and remaining external gates. Self-review is not independent QA.
+
 > Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
 
 Parent repair #149; release tracker #1; Owner evidence #20.
