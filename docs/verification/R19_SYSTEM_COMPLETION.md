@@ -1,5 +1,7 @@
 # R19 — system-operation completion (#160)
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 Parent repair #149; release tracker #1; Owner evidence #20.
 
 ## Scope and branch reconciliation

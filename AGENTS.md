@@ -1,5 +1,9 @@
 # VPSReady Agent Map
 
+## Current migration override
+
+Work SOLO; do not spawn agents or restart historical orchestration. Canonical repository is `ZillionxBuilds/VPSReady`, numeric ID `1361332816`; verify both before writes. Read `middleman/repository-migration/identity-map.json` and the migration coordinator Workpad first. New #1 is migration, not legacy release #1. Historical numbers below and in team/plan/role files are provenance only unless mapped and reverified. Current active purposes: release #2, validation #3, R19 #4, Owner E5 #5; draft review #6. Preserve safety/diagnostic rules. Current product base is release/0.1.0, not the older development tree. No main/release self-merge or stable publication; use reviewable branches.
+
 VPSReady is an Ubuntu-first, cross-platform C#/.NET desktop application built with Avalonia UI. It runs locally on Windows, macOS, and Linux and manages remote servers over SSH. No permanent VPSReady daemon is installed on a managed server.
 
 This file is the map, not the full manual. Read the linked source-of-truth documents before changing code.

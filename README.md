@@ -17,9 +17,9 @@ A local desktop app for SSH access, UFW firewall rules and everyday server setup
 ---
 
 > [!IMPORTANT]
-> **Pre-release software — not a stable release.** R10–R14 repairs are on
-> `fix/149-pre-main-repair` for external review, not yet merged into `release/0.1.0`.
-> Hosted verification remains pending; this is **NOT READY FOR MAIN**.
+> **Pre-release software — not a stable release.** The carried `release/0.1.0`
+> contains R1–R19, including R19 at `a4629b38`. Migration and current release
+> validation are tracked separately; this is **NOT READY FOR MAIN**.
 > A release branch alone is not Owner-test approval. Check the
 > [current status and evidence](docs/PROJECT_STATUS.md) before testing.
 > **REAL VPS: NOT TESTED.**
@@ -61,7 +61,7 @@ not imply support for other server distributions. The
 ### Review a candidate
 
 1. Check [project status](docs/PROJECT_STATUS.md) and the
-   [release tracker](https://github.com/ZillionBuilds/VPSReady/issues/1).
+   [release tracker](https://github.com/ZillionxBuilds/VPSReady/issues/2).
 2. Match the package's operating system, architecture, source revision and
    checksum to its evidence. Candidate packages are self-contained and unsigned;
    a separate .NET runtime is not required for those packages.
@@ -77,7 +77,7 @@ newer source repairs merely because both refer to v0.1.0.
 Install the .NET SDK selected by [global.json](global.json) and Git. Then:
 
 ```bash
-git clone --branch fix/149-pre-main-repair https://github.com/ZillionBuilds/VPSReady.git
+git clone --branch release/0.1.0 https://github.com/ZillionxBuilds/VPSReady.git
 cd VPSReady
 dotnet restore VpsReady.slnx --locked-mode
 dotnet build VpsReady.slnx --configuration Release --no-restore
@@ -136,7 +136,7 @@ docs/      Guides, architecture, safety contracts and evidence
 ## Support and license
 
 Start with the [safe troubleshooting path](docs/user-guide/V0.1_USER_AND_TROUBLESHOOTING_GUIDE.md#safe-troubleshooting-path).
-When opening an [issue](https://github.com/ZillionBuilds/VPSReady/issues/new/choose),
+When opening an [issue](https://github.com/ZillionxBuilds/VPSReady/issues/new/choose),
 share only reviewed, sanitized details; GitHub issues are public.
 
 VPSReady is licensed under the [Apache License 2.0](LICENSE).

@@ -1,5 +1,7 @@
 # Release follow-up R8/R9 — solo source review, #149
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 Baseline: `4da4bffce074649dadd1b3f41a34947338a7600c` on `release/0.1.0`.
 Repair: `fix/149-release-followup`. PR #150 was already merged at claim.
 The latest Owner request explicitly authorizes pushing the completed repair to

@@ -1,5 +1,7 @@
 # PR #157 follow-up — R15 root-disk byte contract
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 Solo repair of #149 on `fix/149-pre-main-repair`, following external source
 review of `0e5f6139a58dd022de4e883257872a6cba8fb806`. Preserve R1–R14; no
 independent QA/Principal claim, release/main push or self-merge.

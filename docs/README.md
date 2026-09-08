@@ -61,6 +61,6 @@ and the [active v0.1 plan](exec-plans/active/V0.1_CORE_BASIC.md).
 The specification defines scope, contracts define safety constraints, and the
 user guide describes the implemented UI. GitHub Issues and their persistent
 Workpads track live execution. Begin with the
-[release tracker](https://github.com/ZillionBuilds/VPSReady/issues/1) and
-[source-repair follow-up](https://github.com/ZillionBuilds/VPSReady/issues/149).
+[release tracker](https://github.com/ZillionxBuilds/VPSReady/issues/2) and
+[source-repair follow-up](https://github.com/ZillionxBuilds/VPSReady/issues/3).
 Documentation edits do not advance runtime evidence or release gates.

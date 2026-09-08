@@ -1,5 +1,7 @@
 # Pre-main repair R10–R14 — #149
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 Solo source repair on `fix/149-pre-main-repair`, based on reviewed release
 `4ed708a99907c8bebc68664903e28b3d86ea02ee`. Target: `release/0.1.0`, review only.
 [PR #157](https://github.com/ZillionBuilds/VPSReady/pull/157) contains the repair.
