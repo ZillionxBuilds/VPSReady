@@ -1,5 +1,7 @@
 # Migration reconciliation — final local handoff, 2026-09-08
 
+> Historical pre-consolidation snapshot. PR #7 and #8 were subsequently merged; their pending-review statements and target refs below describe the earlier migration execution only. Current integrated-candidate evidence, settings and next actions are maintained in the [release Workpad](https://github.com/ZillionxBuilds/VPSReady/issues/2#issuecomment-5585172425) and [draft PR #6](https://github.com/ZillionxBuilds/VPSReady/pull/6). Do not replay these completed PRs or relabel the a4629b38 artifacts.
+
 Coordinator: https://github.com/ZillionxBuilds/VPSReady/issues/1. Canonical repository ID 1361332816 verified under authenticated user Zillion225 with admin/push; documentation SHA 9a879fde3a715d4ca7221d57fd1ad83702a59077. SOLO, self-review only.
 
 ## Plan and progress
