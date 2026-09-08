@@ -1,5 +1,6 @@
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
 
 namespace VpsReady.Core.Local;
 
@@ -33,9 +34,11 @@ public sealed class ExistingSshKeySelectionRequest
 }
 
 /// <summary>Application-only selected location. It must not be sent to diagnostic surfaces.</summary>
-public sealed class ExistingSshKeyLocation(string privateKeyPath)
+public sealed class ExistingSshKeyLocation(string privateKeyPath, string? expectedFingerprint = null)
 {
     public string PrivateKeyPath { get; } = privateKeyPath ?? throw new ArgumentNullException(nameof(privateKeyPath));
+
+    public string? ExpectedFingerprint { get; } = expectedFingerprint;
 
     public override string ToString() => "ExistingSshKeyLocation [path redacted]";
 }
@@ -106,4 +109,15 @@ public interface IExistingSshKeySelector
         ExistingSshKeySelectionRequest request,
         CorrelationIds correlation,
         CancellationToken cancellationToken);
+
+    /// <summary>Revalidates both bounded files and the selected identity; returns derived public material only.</summary>
+    Task<SelectedPublicKeyReadResult> ReadPublicKeyAsync(
+        ExistingSshKeySelectionResult selectedKey,
+        CorrelationIds correlation,
+        CancellationToken cancellationToken);
+}
+
+public sealed record SelectedPublicKeyReadResult(OperationResult Operation, PublicKeyDeploymentMaterial? Material)
+{
+    public override string ToString() => "SelectedPublicKeyReadResult [material redacted]";
 }

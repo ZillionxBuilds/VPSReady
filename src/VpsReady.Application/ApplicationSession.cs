@@ -294,7 +294,7 @@ public sealed class ApplicationSession : IApplicationSession
         lock (stateLock)
         {
             session = current;
-            if (session is not null)
+            if (session is not null && (expectedSessionId is null || string.Equals(session.SessionId, expectedSessionId, StringComparison.Ordinal)))
             {
                 session.ActiveOperationId = operationId;
             }
@@ -323,6 +323,7 @@ public sealed class ApplicationSession : IApplicationSession
 
             try
             {
+                linkedCancellation.Token.ThrowIfCancellationRequested();
                 var result = await operation(session.Transport, linkedCancellation.Token).ConfigureAwait(false);
 
                 // A transport may complete after cancellation. Never promote

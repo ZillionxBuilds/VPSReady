@@ -6,6 +6,7 @@ using Renci.SshNet.Common;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.Infrastructure.Remote;
 
@@ -207,19 +208,8 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             SshClient? candidate = null;
             try
             {
-                PrivateKeyFile keyFile;
-                try
-                {
-                    keyFile = new PrivateKeyFile(privateKey.PrivateKeyPath);
-                }
-                catch
-                {
-                    // Local key parsing/access details, including its path,
-                    // remain outside the transport and diagnostics boundary.
-                    throw new RemoteTransportException(RemoteTransportFailureKind.Authentication);
-                }
-
-                var authentication = new PrivateKeyAuthenticationMethod(endpoint.UserName, keyFile);
+                using var keyFile = await ExistingOpenSshKeySelector.OpenForAuthenticationAsync(privateKey, cancellationToken).ConfigureAwait(false);
+                using var authentication = new PrivateKeyAuthenticationMethod(endpoint.UserName, keyFile);
                 var connection = new ConnectionInfo(endpoint.Host, endpoint.Port, endpoint.UserName, authentication)
                 {
                     Timeout = timeout,
@@ -295,16 +285,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             throw new RemoteTransportException(RemoteTransportFailureKind.Network);
         }
 
-        if (UbuntuFactCommandCatalog.TryGet(command.Id.Value, out var factDefinition)
-            && factDefinition is { Execution: UbuntuFactCommandExecution.SessionMetadata })
-        {
-            return new RemoteCommandResult(
-                0,
-                connectedEndpoint.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                string.Empty,
-                TimeSpan.Zero,
-                command.OutputCapturePolicy);
-        }
+        UbuntuFactCommandCatalog.TryGet(command.Id.Value, out var factDefinition);
 
         var shellCommand = factDefinition is not null
             ? factDefinition.ShellCommand!
@@ -323,23 +304,11 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         {
             using var sshCommand = connectedClient.CreateCommand(shellCommand);
             sshCommand.CommandTimeout = command.Timeout;
-            await sshCommand.ExecuteAsync(linkedCancellation.Token).ConfigureAwait(false);
-            var standardOutput = await SshNetBoundedOutputCapture.ReadAsync(
-                sshCommand.OutputStream,
-                command.OutputCapturePolicy,
-                command.MaximumOutputBytes,
+            var execution = sshCommand.ExecuteAsync(linkedCancellation.Token);
+            async Task<int> ExitStatusAsync() { await execution.ConfigureAwait(false); return sshCommand.ExitStatus ?? 255; }
+            return await SshNetBoundedOutputCapture.ReadResultAsync(command, ExitStatusAsync(),
+                sshCommand.OutputStream, sshCommand.ExtendedOutputStream, Stopwatch.GetElapsedTime(startedAt),
                 linkedCancellation.Token).ConfigureAwait(false);
-            var standardError = await SshNetBoundedOutputCapture.ReadAsync(
-                sshCommand.ExtendedOutputStream,
-                command.OutputCapturePolicy,
-                command.MaximumOutputBytes,
-                linkedCancellation.Token).ConfigureAwait(false);
-            return new RemoteCommandResult(
-                sshCommand.ExitStatus ?? 255,
-                standardOutput,
-                standardError,
-                Stopwatch.GetElapsedTime(startedAt),
-                command.OutputCapturePolicy);
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
         {
@@ -703,6 +672,41 @@ internal static class SshNetBoundedOutputCapture
 {
     private const string TruncationMarker = "\n[output truncated]\n";
 
+    internal static Task<RemoteCommandResult> ReadResultAsync(RemoteCommand command, int exitCode,
+        Stream stdout, Stream stderr, TimeSpan duration, CancellationToken cancellationToken) =>
+        ReadResultAsync(command, Task.FromResult(exitCode), stdout, stderr, duration, cancellationToken);
+
+    internal static async Task<RemoteCommandResult> ReadResultAsync(RemoteCommand command, Task<int> exitStatus,
+        Stream stdout, Stream stderr, TimeSpan duration, CancellationToken cancellationToken)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        var storedSsh = command.Id.Value == RemoteCommandCatalog.UbuntuUfwStoredSshRead;
+        var parserOnly = command.OutputCapturePolicy == OutputCapturePolicy.MetadataOnly && (storedSsh || CommandParserEvidence.Supports(command.Id.Value));
+        var aptCommand = command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradePlan;
+        async Task<string?> ReadOrdinaryAsync(Stream stream) => await ReadAsync(stream, command.OutputCapturePolicy, command.MaximumOutputBytes, cancellationToken).ConfigureAwait(false);
+        // Drain both pipes during execution, not after it. In particular, apt
+        // progress must not accumulate in SSH.NET until a long upgrade ends.
+        var outputTask = parserOnly
+            ? ReadEphemeralSingleLineAsync(stdout, storedSsh ? UfwStoredSshParser.MaximumBytes : CommandParserEvidence.MaximumBytes, cancellationToken, trimLineEnding: false)
+            : ReadOrdinaryAsync(stdout);
+        var errorTask = aptCommand ? ReadEphemeralSingleLineAsync(stderr, 4096, cancellationToken)
+            : ReadOrdinaryAsync(stderr);
+        await Task.WhenAll(outputTask, errorTask, exitStatus).ConfigureAwait(false);
+        var exitCode = await exitStatus.ConfigureAwait(false);
+        var ephemeral = await outputTask.ConfigureAwait(false);
+        var transientError = await errorTask.ConfigureAwait(false);
+        return new RemoteCommandResult(exitCode, parserOnly ? string.Empty : ephemeral ?? string.Empty,
+            aptCommand ? string.Empty : transientError ?? string.Empty, duration + Stopwatch.GetElapsedTime(startedAt), command.OutputCapturePolicy)
+        {
+            ParserEvidence = parserOnly && exitCode == 0 ? CommandParserEvidence.Parse(command.Id.Value, ephemeral) : null,
+            StoredSshEvidence = parserOnly && storedSsh && exitCode == 0 ? UfwStoredSshParser.Parse(ephemeral) : null,
+            AptLockContended = aptCommand && exitCode != 0 && transientError is not null &&
+                (transientError.Contains("Could not get lock", StringComparison.Ordinal)
+                || transientError.Contains("Unable to acquire the dpkg frontend lock", StringComparison.Ordinal)
+                || transientError.Contains("Unable to lock directory", StringComparison.Ordinal)),
+        };
+    }
+
     public static async Task<string> ReadAsync(
         Stream source,
         OutputCapturePolicy policy,
@@ -752,7 +756,7 @@ internal static class SshNetBoundedOutputCapture
     /// diagnostic value. Callers must immediately transform it into an opaque
     /// domain token and must never forward it to UI, journals, or support data.
     /// </summary>
-    public static async Task<string?> ReadEphemeralSingleLineAsync(Stream source, int maximumBytes, CancellationToken cancellationToken)
+    public static async Task<string?> ReadEphemeralSingleLineAsync(Stream source, int maximumBytes, CancellationToken cancellationToken, bool trimLineEnding = true)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumBytes, 0);
@@ -784,6 +788,7 @@ internal static class SshNetBoundedOutputCapture
             }
 
             var text = Encoding.UTF8.GetString(retained, 0, count);
+            if (!trimLineEnding) { return text; }
             return text.EndsWith("\r\n", StringComparison.Ordinal) ? text[..^2]
                 : text.EndsWith('\n') ? text[..^1]
                 : text;

@@ -1,5 +1,7 @@
 # C608 Owner VPS Test Package (blind evidence)
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 Status: `PACKAGE_PREPARED` for Orchestrator review. This document is an
 evidence package for a future Owner test; it is not a release candidate, does
 not activate Owner testing, and does not authorize a release branch, tag,

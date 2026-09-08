@@ -36,6 +36,11 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
     private string hostname = string.Empty;
     private string timezone = string.Empty;
     private bool disposed;
+    private string? observedSessionId;
+    private long hostnameRevision;
+    private long timezoneRevision;
+    private string? hostnamePlanSession;
+    private string? timezonePlanSession;
 
     public SystemActionsViewModel(
         IApplicationSession session,
@@ -56,6 +61,7 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             ? "Connect and verify a server session before reading or changing system settings."
             : "Read the current system state, review a plan, then explicitly confirm each change.";
         CancelCommand = new DelegateCommand(Cancel);
+        observedSessionId = session.Snapshot.SessionId;
         session.StateChanged += OnSessionStateChanged;
     }
 
@@ -70,10 +76,14 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
     public bool CanStartOperation => !IsBusy && session.Snapshot.IsConnected;
     public bool CanCancel => IsBusy;
     public bool HasUpgradePlan => upgradePlan?.IsReady == true;
-    public bool HasHostnamePlan => hostnamePlan?.IsReady == true;
-    public bool HasTimezonePlan => timezonePlan?.IsReady == true;
+    public bool HasHostnamePlan => hostnamePlan?.IsReady == true && IsCurrentSession(hostnamePlanSession)
+        && string.Equals(Hostname, hostnamePlan.ProposedHostname, StringComparison.Ordinal);
+    public bool HasTimezonePlan => timezonePlan?.IsReady == true && IsCurrentSession(timezonePlanSession)
+        && string.Equals(Timezone, timezonePlan.SelectedTimezone, StringComparison.Ordinal);
+    public string HostnamePlanTarget => HasHostnamePlan ? hostnamePlan!.ProposedHostname! : "No current hostname plan.";
+    public string TimezonePlanTarget => HasTimezonePlan ? timezonePlan!.SelectedTimezone! : "No current timezone plan.";
     public int PlannedUpgradePackageCount => upgradePlan?.PlannedPackageCount ?? 0;
-    public string UpgradePlanStatus => HasUpgradePlan ? $"Packages in reviewed plan: {PlannedUpgradePackageCount}" : "No reviewed package-upgrade plan is available.";
+    public string UpgradePlanStatus => HasUpgradePlan ? $"Packages in reviewed plan: {PlannedUpgradePackageCount}. Existing configuration files will be kept; unsupported package prompts fail instead of waiting for input." : "No reviewed package-upgrade plan is available.";
     public string RebootRequirementStatus => RebootRequired is null ? "Reboot requirement has not been inspected." : RebootRequired == true ? "A reboot is required." : "A reboot is not currently required.";
 
     public string Hostname
@@ -83,9 +93,9 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref hostname, value ?? string.Empty))
             {
-                hostnamePlan = null;
-                IsHostnameConfirmed = false;
-                OnPlanAvailabilityChanged();
+                hostnameRevision++;
+                ClearHostnamePlan();
+                Status = "Hostname input changed. Read a new plan and confirm that exact value.";
             }
         }
     }
@@ -97,17 +107,17 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref timezone, value ?? string.Empty))
             {
-                timezonePlan = null;
-                IsTimezoneConfirmed = false;
-                OnPlanAvailabilityChanged();
+                timezoneRevision++;
+                ClearTimezonePlan();
+                Status = "Timezone input changed. Read a new plan and confirm that exact value.";
             }
         }
     }
 
-    public bool IsUpgradeConfirmed { get => isUpgradeConfirmed; set { if (SetProperty(ref isUpgradeConfirmed, value)) { OnPlanAvailabilityChanged(); } } }
-    public bool IsRebootConfirmed { get => isRebootConfirmed; set { if (SetProperty(ref isRebootConfirmed, value)) { OnPlanAvailabilityChanged(); } } }
-    public bool IsHostnameConfirmed { get => isHostnameConfirmed; set { if (SetProperty(ref isHostnameConfirmed, value)) { OnPlanAvailabilityChanged(); } } }
-    public bool IsTimezoneConfirmed { get => isTimezoneConfirmed; set { if (SetProperty(ref isTimezoneConfirmed, value)) { OnPlanAvailabilityChanged(); } } }
+    public bool IsUpgradeConfirmed { get => isUpgradeConfirmed; set { if (SetProperty(ref isUpgradeConfirmed, value && HasUpgradePlan && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
+    public bool IsRebootConfirmed { get => isRebootConfirmed; set { if (SetProperty(ref isRebootConfirmed, value && RebootRequired == true && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
+    public bool IsHostnameConfirmed { get => isHostnameConfirmed; set { if (SetProperty(ref isHostnameConfirmed, value && HasHostnamePlan && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
+    public bool IsTimezoneConfirmed { get => isTimezoneConfirmed; set { if (SetProperty(ref isTimezoneConfirmed, value && HasTimezonePlan && !IsBusy)) { OnPlanAvailabilityChanged(); } } }
 
     public bool CanUpgrade => CanStartOperation && HasUpgradePlan && IsUpgradeConfirmed;
     public bool CanReboot => CanStartOperation && RebootRequired == true && IsRebootConfirmed;
@@ -127,13 +137,17 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         ? "Validate and review the timezone plan before applying it." : !IsTimezoneConfirmed
             ? "Explicitly confirm the reviewed timezone change before applying it." : string.Empty;
 
-    public Task RefreshPackageIndexAsync(CancellationToken cancellationToken = default) => RunAsync(
+    public Task RefreshPackageIndexAsync(CancellationToken cancellationToken = default)
+    {
+        ClearUpgradePlan();
+        return RunAsync(
         "package-index-refresh",
         async (transport, token) =>
         {
             var completed = await packageIndexUpdater.UpdateAsync(transport, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, (Action?)null);
         }, cancellationToken);
+    }
 
     public Task PlanUpgradeAsync(CancellationToken cancellationToken = default) => RunAsync(
         "package-upgrade-plan",
@@ -149,20 +163,33 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             );
         }, cancellationToken);
 
-    public Task UpgradeAsync(CancellationToken cancellationToken = default) => RunAsync(
-        "package-upgrade-apply",
-        async (transport, token) =>
+    public Task UpgradeAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsBusy) { return Task.CompletedTask; }
+        if (!CanUpgrade) { return RefuseUnreviewedPlan(); }
+        var plan = upgradePlan;
+        var confirmed = IsUpgradeConfirmed;
+        return RunAsync("package-upgrade-apply", async (transport, token) =>
         {
-            var completed = await packageUpgrader.UpgradeAsync(transport, upgradePlan, IsUpgradeConfirmed, token).ConfigureAwait(false);
+            if (!ReferenceEquals(plan, upgradePlan) || !IsUpgradeConfirmed)
+            {
+                return (OperationResult.Failure(NewSessionOperationId("upgrade-stale"), OperationErrorCode.Validation), null, (Action?)null);
+            }
+            // Approval belongs to this attempt, not its eventual presentation.
+            // Consume it before the workflow's first asynchronous step. Old
+            // reboot evidence is also invalid until this attempt verifies it.
+            ClearUpgradePlan();
+            IsRebootConfirmed = false;
+            RebootRequired = null;
+            var completed = await packageUpgrader.UpgradeAsync(transport, plan, confirmed, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, () =>
             {
-                upgradePlan = null;
-                IsUpgradeConfirmed = false;
                 RebootRequired = completed.RebootRequired;
                 OnPlanAvailabilityChanged();
             }
             );
         }, cancellationToken, ClearUpgradePlan);
+    }
 
     public Task InspectRebootRequiredAsync(CancellationToken cancellationToken = default) => RunAsync(
         "reboot-required-inspect",
@@ -182,7 +209,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         "reboot-apply",
         async (transport, token) =>
         {
-            var completed = await rebootWorkflow.RebootAsync(transport, IsRebootConfirmed, token).ConfigureAwait(false);
+            var confirmed = IsRebootConfirmed;
+            IsRebootConfirmed = false;
+            RebootRequired = null;
+            var completed = await rebootWorkflow.RebootAsync(transport, confirmed, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, () =>
             {
                 if (completed.Result.Succeeded)
@@ -195,60 +225,115 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
             );
         }, cancellationToken);
 
-    public Task PlanHostnameAsync(CancellationToken cancellationToken = default) => RunAsync(
-        "hostname-plan",
-        async (transport, token) =>
+    public Task PlanHostnameAsync(CancellationToken cancellationToken = default)
+    {
+        if (!CanStartOperation) { return Task.CompletedTask; }
+        var input = Hostname;
+        var revision = ++hostnameRevision;
+        var identity = session.Snapshot.SessionId;
+        ClearHostnamePlan();
+        return RunAsync("hostname-plan", async (transport, token) =>
         {
-            var completed = await hostnameChanger.PlanAsync(transport, Hostname, token).ConfigureAwait(false);
+            var completed = await hostnameChanger.PlanAsync(transport, input, token).ConfigureAwait(false);
             return (completed.Result, completed.ErrorCode, () =>
             {
-                hostnamePlan = completed.IsReady ? completed : null;
-                IsHostnameConfirmed = false;
+                if (revision != hostnameRevision || !IsCurrentSession(identity)) { return; }
+                hostnamePlan = completed.IsReady && string.Equals(input, completed.ProposedHostname, StringComparison.Ordinal) ? completed : null;
+                hostnamePlanSession = identity;
                 OnPlanAvailabilityChanged();
             }
             );
-        }, cancellationToken);
+        }, cancellationToken, ClearHostnamePlan,
+            () => revision == hostnameRevision && IsCurrentSession(identity));
+    }
 
-    public Task ApplyHostnameAsync(CancellationToken cancellationToken = default) => RunAsync(
-        "hostname-apply",
-        async (transport, token) =>
+    public Task ApplyHostnameAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsBusy) { return Task.CompletedTask; }
+        if (!CanApplyHostname) { return RefuseUnreviewedPlan(); }
+        var plan = hostnamePlan;
+        var revision = hostnameRevision;
+        var identity = hostnamePlanSession;
+        return RunAsync("hostname-apply", async (transport, token) =>
         {
-            var completed = await hostnameChanger.ChangeAsync(transport, hostnamePlan, IsHostnameConfirmed, token).ConfigureAwait(false);
-            return (completed.Result, completed.ErrorCode, () =>
+            if (revision != hostnameRevision || !IsCurrentSession(identity)
+                || !ReferenceEquals(plan, hostnamePlan) || !IsHostnameConfirmed)
             {
-                hostnamePlan = null;
-                IsHostnameConfirmed = false;
-                OnPlanAvailabilityChanged();
+                return (OperationResult.Failure(NewSessionOperationId("hostname-stale"), OperationErrorCode.Validation), null, (Action?)null);
             }
-            );
-        }, cancellationToken);
+            // Consume this exact approval before the first asynchronous workflow step.
+            ClearHostnamePlan();
+            var completed = await hostnameChanger.ChangeAsync(transport, plan, true, token).ConfigureAwait(false);
+            return (completed.Result, completed.ErrorCode, (Action?)null);
+        }, cancellationToken, ClearHostnamePlan);
+    }
 
-    public Task PlanTimezoneAsync(CancellationToken cancellationToken = default) => RunAsync(
-        "timezone-plan",
-        async (transport, token) =>
+    public Task PlanTimezoneAsync(CancellationToken cancellationToken = default)
+    {
+        if (!CanStartOperation) { return Task.CompletedTask; }
+        var input = Timezone;
+        var revision = ++timezoneRevision;
+        var identity = session.Snapshot.SessionId;
+        ClearTimezonePlan();
+        return RunAsync("timezone-plan", async (transport, token) =>
         {
-            var completed = await timezoneChanger.PlanAsync(transport, Timezone, token).ConfigureAwait(false);
+            var completed = await timezoneChanger.PlanAsync(transport, input, token).ConfigureAwait(false);
             return (completed.Result, completed.Result.ErrorCode?.ToStableCode(), () =>
             {
-                timezonePlan = completed.IsReady ? completed : null;
-                IsTimezoneConfirmed = false;
+                if (revision != timezoneRevision || !IsCurrentSession(identity)) { return; }
+                timezonePlan = completed.IsReady && string.Equals(input, completed.SelectedTimezone, StringComparison.Ordinal) ? completed : null;
+                timezonePlanSession = identity;
                 OnPlanAvailabilityChanged();
             }
             );
-        }, cancellationToken);
+        }, cancellationToken, ClearTimezonePlan,
+            () => revision == timezoneRevision && IsCurrentSession(identity));
+    }
 
-    public Task ApplyTimezoneAsync(CancellationToken cancellationToken = default) => ApplyTimezoneCoreAsync(
-        async (transport, token) =>
+    public Task ApplyTimezoneAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsBusy) { return Task.CompletedTask; }
+        if (!CanApplyTimezone) { return RefuseUnreviewedPlan(); }
+        var plan = timezonePlan;
+        var revision = timezoneRevision;
+        var identity = timezonePlanSession;
+        return RunAsync("timezone-apply", async (transport, token) =>
         {
-            var completed = await timezoneChanger.ChangeAsync(transport, timezonePlan, IsTimezoneConfirmed, token).ConfigureAwait(false);
-            return (completed.Result, completed.ErrorCode, () =>
+            if (revision != timezoneRevision || !IsCurrentSession(identity)
+                || !ReferenceEquals(plan, timezonePlan) || !IsTimezoneConfirmed)
             {
-                timezonePlan = null;
-                IsTimezoneConfirmed = false;
-                OnPlanAvailabilityChanged();
+                return (OperationResult.Failure(NewSessionOperationId("timezone-stale"), OperationErrorCode.Validation), null, (Action?)null);
             }
-            );
-        }, cancellationToken);
+            ClearTimezonePlan();
+            var completed = await timezoneChanger.ChangeAsync(transport, plan, true, token).ConfigureAwait(false);
+            return (completed.Result, completed.ErrorCode, (Action?)null);
+        }, cancellationToken, ClearTimezonePlan);
+    }
+
+    private bool IsCurrentSession(string? identity) => identity is not null && session.Snapshot.IsConnected
+        && string.Equals(identity, session.Snapshot.SessionId, StringComparison.Ordinal);
+
+    private Task RefuseUnreviewedPlan()
+    {
+        Complete(OperationResult.Failure(NewSessionOperationId("confirmation"), OperationErrorCode.Validation), null);
+        return Task.CompletedTask;
+    }
+
+    private void ClearHostnamePlan()
+    {
+        hostnamePlan = null;
+        hostnamePlanSession = null;
+        IsHostnameConfirmed = false;
+        OnPlanAvailabilityChanged();
+    }
+
+    private void ClearTimezonePlan()
+    {
+        timezonePlan = null;
+        timezonePlanSession = null;
+        IsTimezoneConfirmed = false;
+        OnPlanAvailabilityChanged();
+    }
 
     public void Cancel()
     {
@@ -258,15 +343,14 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         }
     }
 
-    private Task ApplyTimezoneCoreAsync(Func<IRemoteTransport, CancellationToken, Task<(OperationResult Result, string? ErrorCode, Action? Apply)>> execute, CancellationToken cancellationToken) =>
-        RunAsync("timezone-apply", execute, cancellationToken);
-
     private async Task RunAsync(
         string action,
         Func<IRemoteTransport, CancellationToken, Task<(OperationResult Result, string? ErrorCode, Action? Apply)>> execute,
         CancellationToken callerCancellation,
-        Action? invalidateOnOverriddenResult = null)
+        Action? invalidateOnOverriddenResult = null,
+        Func<bool>? isPlanCurrent = null)
     {
+        var expectedSession = session.Snapshot.SessionId;
         if (!TryBegin(callerCancellation, out var cancellation))
         {
             return;
@@ -274,24 +358,37 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
 
         try
         {
+            if (!IsCurrentSession(expectedSession)) { return; }
+            if (action is "package-upgrade-plan" or "reboot-apply") { ClearUpgradePlan(); }
             (OperationResult Result, string? ErrorCode, Action? Apply)? completed = null;
-            var result = await session.RunOperationAsync(
+            var result = await session.RunOperationForSessionAsync(
                 NewSessionOperationId(action),
-                OperationTimeout,
+                action switch
+                {
+                    "package-upgrade-apply" => TimeSpan.FromMinutes(65),
+                    "package-index-refresh" => TimeSpan.FromMinutes(12),
+                    _ => OperationTimeout,
+                },
                 async (transport, token) =>
                 {
                     completed = await execute(transport, token).ConfigureAwait(false);
                     return completed.Value.Result;
                 },
-                cancellation.Token).ConfigureAwait(false);
+                expectedSession!, cancellation.Token).ConfigureAwait(false);
             // ApplicationSession can replace a late workflow success with its
             // own timeout/cancellation result. Do not retain a plan or state
             // derived from such a late result; a fresh explicit read is then
             // required before any apply action can be enabled.
-            var workflowError = completed is { } terminal && string.Equals(result.OperationId, terminal.Result.OperationId, StringComparison.Ordinal)
+            var workflowError = completed is { } terminal && ReferenceEquals(result, terminal.Result)
                 ? terminal.ErrorCode
                 : null;
-            if (completed is { } accepted && string.Equals(result.OperationId, accepted.Result.OperationId, StringComparison.Ordinal))
+            if (!IsCurrentSession(expectedSession) || disposed
+                || !ReferenceEquals(activeCancellation, cancellation)) { return; }
+            // Input revisions govern pending plan payloads only. They must not
+            // suppress terminal failure/cancellation, mandatory cleanup, or the
+            // verified state returned by an already-dispatched system action.
+            var planIsCurrent = isPlanCurrent?.Invoke() ?? true;
+            if (planIsCurrent && completed is { } accepted && ReferenceEquals(result, accepted.Result))
             {
                 accepted.Apply?.Invoke();
             }
@@ -303,6 +400,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
                 invalidateOnOverriddenResult?.Invoke();
             }
             Complete(result, workflowError);
+            if (result.Succeeded && !planIsCurrent)
+            {
+                Status = "Input changed while this plan was being read. Read a new plan and confirm the current value before applying it.";
+            }
         }
         finally
         {
@@ -346,6 +447,10 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         Status = result.Succeeded
             ? "System operation was verified. Review Activity & Diagnostics with this operation ID if needed."
             : $"{result.UserMessage} {result.NextAction}";
+        if (workflowErrorCode == PackageUpgradeErrorCatalog.StalePlan)
+        {
+            Status = "Package selection or versions changed, or could not be revalidated. No upgrade was started. Read a new plan and confirm it again.";
+        }
         State = result.Succeeded ? SystemActionsScreenState.Ready : result.Cancelled ? SystemActionsScreenState.Cancelled : SystemActionsScreenState.Failed;
     }
 
@@ -364,6 +469,29 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
 
     private void OnSessionStateChanged(object? sender, EventArgs e)
     {
+        if (!string.Equals(observedSessionId, session.Snapshot.SessionId, StringComparison.Ordinal))
+        {
+            observedSessionId = session.Snapshot.SessionId;
+            hostnameRevision++;
+            timezoneRevision++;
+            lock (operationLock)
+            {
+                activeCancellation?.Cancel();
+                activeCancellation = null;
+            }
+            ClearHostnamePlan();
+            ClearTimezonePlan();
+            IsRebootConfirmed = false;
+            RebootRequired = null;
+            ClearUpgradePlan();
+            if (session.Snapshot.IsConnected)
+            {
+                State = SystemActionsScreenState.Ready;
+                Status = "Read current system state for this new session; prior plans are no longer current.";
+                ErrorCode = null;
+                OperationId = null;
+            }
+        }
         if (!session.Snapshot.IsConnected)
         {
             Cancel();
@@ -404,6 +532,8 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasUpgradePlan));
         OnPropertyChanged(nameof(HasHostnamePlan));
         OnPropertyChanged(nameof(HasTimezonePlan));
+        OnPropertyChanged(nameof(HostnamePlanTarget));
+        OnPropertyChanged(nameof(TimezonePlanTarget));
         OnPropertyChanged(nameof(PlannedUpgradePackageCount));
         OnPropertyChanged(nameof(UpgradePlanStatus));
         OnPropertyChanged(nameof(RebootRequirementStatus));

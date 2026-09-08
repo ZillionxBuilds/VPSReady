@@ -1,5 +1,7 @@
 # Owner Real-VPS Test Protocol for `release/*`
 
+Current routing: verify canonical repository `ZillionxBuilds/VPSReady` ID `1361332816` and `middleman/repository-migration/identity-map.json`. Release tracker is new #2; Owner evidence is new #5; new #1 is migration only. All legacy-number references below refer to their mapped purposes, never identically numbered new issues. All current stages remain NOT_RUN until attributable Owner evidence exists for the exact candidate.
+
 Status: Binding Owner-validation protocol for v0.1 candidates
 
 The autonomous team develops without a real VPS. This protocol is the first real-infrastructure validation and begins only after the Principal creates `release/0.1.0` and marks the release tracker `READY_FOR_OWNER_VPS_TEST`.

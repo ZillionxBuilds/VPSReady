@@ -214,6 +214,7 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuUfwAllowRuleAdd = "ubuntu.ufw.rule.allow.add";
     public const string UbuntuUfwSelectedRuleRemove = "ubuntu.ufw.rule.selected.remove";
     public const string UbuntuUfwAddedRulesRead = "ubuntu.ufw.added-rules.read";
+    public const string UbuntuUfwStoredSshRead = "ubuntu.ufw.stored-ssh.read";
     public const string UbuntuUfwActiveSshAllowEnsure = "ubuntu.ufw.active-ssh-allow.ensure";
     public const string UbuntuUfwEnable = "ubuntu.ufw.enable";
     public const string UbuntuUfwDisable = "ubuntu.ufw.disable";
@@ -257,6 +258,7 @@ public static class DiagnosticCommandCatalog
         UbuntuUfwAllowRuleAdd,
         UbuntuUfwSelectedRuleRemove,
         UbuntuUfwAddedRulesRead,
+        UbuntuUfwStoredSshRead,
         UbuntuUfwActiveSshAllowEnsure,
         UbuntuUfwEnable,
         UbuntuUfwDisable,

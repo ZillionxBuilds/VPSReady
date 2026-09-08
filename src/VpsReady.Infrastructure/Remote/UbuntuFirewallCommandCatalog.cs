@@ -77,6 +77,7 @@ public static class UbuntuFirewallCommandCatalog
     public static string RequireShellCommand(RemoteCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwStoredSshRead) { return UfwStoredSshCommand.ShellCommand; }
         if (string.Equals(command.Id.Value, RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove, StringComparison.Ordinal))
         {
             return RequireSelectedRuleRemovalShellCommand(command);

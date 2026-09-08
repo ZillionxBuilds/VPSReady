@@ -20,7 +20,6 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*[0-9]+$", RegexOptions.CultureInvariant);
     private static readonly Regex CpuModel = new("^(?:model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
-    private static readonly Regex Quantity = new("^(?<number>[0-9]+(?:\\.[0-9]+)?)(?<unit>[KMGTEP]?)(?:i?B)?$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
     private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
@@ -60,7 +59,7 @@ public static partial class UbuntuServerFactParser
         ArgumentNullException.ThrowIfNull(result);
         if (!result.Succeeded)
         {
-            return UfwRuleListRead(UfwFirewallState.Error, UfwRuleListReadStatus.RemoteFailure);
+            return UfwRuleListRead(UfwFirewallState.Error, result.ExitCode is 13 or 77 ? UfwRuleListReadStatus.PrivilegeFailure : UfwRuleListReadStatus.RemoteFailure);
         }
 
         if (Encoding.UTF8.GetByteCount(result.StandardOutput) > UbuntuFactCommandCatalog.MaximumOutputBytes)
@@ -109,31 +108,6 @@ public static partial class UbuntuServerFactParser
         }
 
         return new UfwRuleListRead(new UfwSnapshot(UfwFirewallState.Active, rules), UfwRuleListReadStatus.Complete);
-    }
-
-    /// <summary>
-    /// C305's inactive-firewall pre-enable check. <c>ufw status numbered</c>
-    /// does not list stored rules while inactive, so accept only the two exact
-    /// C-locale full-rule forms that C305 itself ensures through UFW's
-    /// documented <c>show added</c> report. Unknown/normalized alternatives
-    /// fail closed instead of inferring SSH access safety.
-    /// </summary>
-    public static bool HasActiveSshAllowsInAddedRules(RemoteCommandResult result, int port)
-    {
-        if (!result.Succeeded || port is < 1 or > 65535 || Encoding.UTF8.GetByteCount(result.StandardOutput) > UbuntuFactCommandCatalog.MaximumOutputBytes)
-        {
-            return false;
-        }
-
-        var lines = Lines(result.StandardOutput);
-        if (lines.Length < 3 || !lines[0].StartsWith("Added user rules", StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        var portText = port.ToString(CultureInfo.InvariantCulture);
-        return lines.Skip(1).Contains($"ufw allow from 0.0.0.0/0 to any port {portText} proto tcp", StringComparer.Ordinal)
-            && lines.Skip(1).Contains($"ufw allow from ::/0 to any port {portText} proto tcp", StringComparer.Ordinal);
     }
 
     public static ServerFact<UbuntuOperatingSystem> ParseOperatingSystem(string output)
@@ -236,6 +210,11 @@ public static partial class UbuntuServerFactParser
 
     public static ServerFact<RootDiskFacts> ParseRootDisk(string output)
     {
+        if (Encoding.UTF8.GetByteCount(output) > 64 * 1024)
+        {
+            return ServerFact.Unknown<RootDiskFacts>();
+        }
+
         var line = SingleLine(output);
         var match = line is null ? null : Disk.Match(line);
         if (match is null || !match.Success || !IsSafeDisplayValue(match.Groups["source"].Value)
@@ -293,46 +272,12 @@ public static partial class UbuntuServerFactParser
         return values;
     }
 
-    private static bool TryParseBytes(string text, out long bytes)
-    {
-        bytes = 0;
-        var match = Quantity.Match(text);
-        if (!match.Success || !decimal.TryParse(match.Groups["number"].Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var quantity))
-        {
-            return false;
-        }
-
-        var power = match.Groups["unit"].Value.ToUpperInvariant() switch
-        {
-            "" => 0,
-            "K" => 1,
-            "M" => 2,
-            "G" => 3,
-            "T" => 4,
-            "E" => 5,
-            "P" => 6,
-            _ => -1,
-        };
-        if (power < 0)
-        {
-            return false;
-        }
-
-        var multiplier = 1m;
-        for (var index = 0; index < power; index++)
-        {
-            multiplier *= 1024m;
-        }
-
-        var calculated = quantity * multiplier;
-        if (calculated is < 0 or > long.MaxValue || decimal.Truncate(calculated) != calculated)
-        {
-            return false;
-        }
-
-        bytes = (long)calculated;
-        return true;
-    }
+    // The producer requests findmnt --bytes. Rounded human units are not exact
+    // byte evidence. Require ASCII digits too: numeric TryParse permits trailing
+    // NUL characters even with NumberStyles.None. Never accept those as bytes.
+    private static bool TryParseBytes(string text, out long bytes) =>
+        long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out bytes)
+        && text.All(char.IsAsciiDigit);
 
     private static string[]? SplitSingleLine(string output)
     {

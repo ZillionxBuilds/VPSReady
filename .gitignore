@@ -126,6 +126,11 @@ vpsready-issue-report-*.md
 *.scenario.tmp
 *.scenario.local.json
 *.scenario.local.jsonl
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.swp
+*.swo
 
 # -----------------------------------------------------------------------------
 # Local SSH/user state created during development or Owner testing
@@ -145,9 +150,4 @@ vpsready-issue-report-*.md
 # Sanitized golden fixtures and deterministic scenario data under tests/ are
 # intentionally NOT ignored. They are part of Blind Development evidence and
 # should be committed when reviewed and secret-free.
-!tests/**/fixtures/
-!tests/**/fixtures/**
-!tests/**/golden/
-!tests/**/golden/**
-!tests/**/scenarios/
-!tests/**/scenarios/**
+# Do not blanket-unignore these trees: credential/key rules must apply there too.

@@ -28,7 +28,7 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, update.Id.Value).ConfigureAwait(false);
             if (!applied.Succeeded)
             {
-                var locked = applied.ExitCode == 100;
+                var locked = applied.AptLockContended;
                 return await FailAsync(correlation, OperationErrorCode.Apt, locked ? PackageIndexUpdateErrorCatalog.Locked : PackageIndexUpdateErrorCatalog.Command, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
             }
 
@@ -36,7 +36,7 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
-            if (!verified.Succeeded || !string.Equals(verified.StandardOutput.Trim(), "apt_index=refreshed", StringComparison.Ordinal))
+            if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
             {
                 return await FailAsync(correlation, OperationErrorCode.Verification, PackageIndexUpdateErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
             }

@@ -189,16 +189,8 @@ public sealed class UfwSelectedRuleRemovalWorkflow
 
     private static bool TryReadPort(RemoteCommandResult result, out int port)
     {
-        port = 0;
-        if (!result.Succeeded || string.IsNullOrWhiteSpace(result.StandardOutput))
-        {
-            return false;
-        }
-
-        var lines = result.StandardOutput.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return lines.Length == 1
-            && int.TryParse(lines[0], NumberStyles.None, CultureInfo.InvariantCulture, out port)
-            && port is >= 1 and <= 65535;
+        port = result.ParserEvidence is { CommandId: RemoteCommandCatalog.SshSessionPortRead, Number: { } value } ? value : 0;
+        return result.Succeeded && port is >= 1 and <= 65535;
     }
 
     private static bool IsVerifiableActive(UfwRuleListRead read) => read.IsComplete && read.Snapshot.State == UfwFirewallState.Active;
@@ -206,6 +198,7 @@ public sealed class UfwSelectedRuleRemovalWorkflow
     private static OperationErrorCode ErrorForRead(UfwRuleListRead read) => read.Status switch
     {
         UfwRuleListReadStatus.RemoteFailure => OperationErrorCode.Command,
+        UfwRuleListReadStatus.PrivilegeFailure => OperationErrorCode.Privilege,
         UfwRuleListReadStatus.Complete => OperationErrorCode.Unsupported,
         _ => OperationErrorCode.Parse,
     };

@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Crypto.Utilities;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 
 namespace VpsReady.Infrastructure.Remote;
@@ -26,7 +27,6 @@ public static class UbuntuAuthorizedKeysCommandCatalog
         var characters = material.CopyForUse();
         byte[]? encoded = null;
         byte[]? decoded = null;
-        byte[]? fingerprint = null;
         try
         {
             var source = new string(characters).Trim();
@@ -43,8 +43,7 @@ public static class UbuntuAuthorizedKeysCommandCatalog
             }
 
             encoded = Encoding.ASCII.GetBytes(tokens[1]);
-            fingerprint = SHA256.HashData(decoded);
-            var printableFingerprint = $"SHA256:{Convert.ToBase64String(fingerprint).TrimEnd('=')}";
+            var printableFingerprint = OpenSshUserKeyFingerprint.FromBlob(decoded);
             if (!FingerprintPattern.IsMatch(printableFingerprint))
             {
                 return false;
@@ -68,10 +67,6 @@ public static class UbuntuAuthorizedKeysCommandCatalog
             if (decoded is not null)
             {
                 CryptographicOperations.ZeroMemory(decoded);
-            }
-            if (fingerprint is not null)
-            {
-                CryptographicOperations.ZeroMemory(fingerprint);
             }
         }
     }
@@ -158,27 +153,76 @@ public static class UbuntuAuthorizedKeysCommandCatalog
         + "if [ ! -d \"$d\" ] || [ -L \"$d\" ]; then exit 2; fi; "
         + "if [ ! -e \"$f\" ] && [ ! -L \"$f\" ]; then printf 'present=false\\n'; exit 0; fi; "
         + "if [ ! -f \"$f\" ] || [ -L \"$f\" ]; then exit 2; fi; "
-        + match + "if matches; then printf 'present=true\\n'; else printf 'present=false\\n'; fi";
+        + match + "if matches; then printf 'present=true\\n'; else rc=$?; [ \"$rc\" -eq 1 ] || exit \"$rc\"; printf 'present=false\\n'; fi";
 
-    private static string InstallScript(string key, string match) => CommonPrefix
-        + "d=\"${HOME:?}/.ssh\"; f=\"$d/authorized_keys\"; uid=\"$(id -u)\"; gid=\"$(id -g)\"; "
-        + "if { [ -e \"$d\" ] || [ -L \"$d\" ]; } && { [ ! -d \"$d\" ] || [ -L \"$d\" ]; }; then exit 2; fi; "
-        + "if { [ -e \"$f\" ] || [ -L \"$f\" ]; } && { [ ! -f \"$f\" ] || [ -L \"$f\" ]; }; then exit 2; fi; "
-        + "umask 077; if ! (mkdir -p -- \"$d\" && touch -- \"$f\"); then command -v sudo >/dev/null 2>&1 && sudo -n mkdir -p -- \"$d\" && sudo -n touch -- \"$f\" || exit 77; fi; "
-        + "if ! chown \"$uid:$gid\" \"$d\" \"$f\" 2>/dev/null; then command -v sudo >/dev/null 2>&1 && sudo -n chown \"$uid:$gid\" \"$d\" \"$f\" || exit 77; fi; "
-        + "if ! chmod 700 \"$d\" || ! chmod 600 \"$f\"; then command -v sudo >/dev/null 2>&1 && sudo -n chmod 700 \"$d\" && sudo -n chmod 600 \"$f\" || exit 77; fi; "
-        + match + "if ! matches; then if ! printf '%s\\n' " + key + " >> \"$f\"; then command -v sudo >/dev/null 2>&1 && printf '%s\\n' " + key + " | sudo -n tee -a \"$f\" >/dev/null || exit 77; fi; fi; "
-        + "test -f \"$f\" && ! test -L \"$f\" && matches";
+    private static string InstallScript(string key, string match) => CommonPrefix + $$"""
+        d="${HOME:?}/.ssh"; uid="$(id -u)"; umask 077
+        if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -- "$d" || exit 77; fi
+        [ -d "$d" ] && [ ! -L "$d" ] && [ "$(stat -c %u "$d")" = "$uid" ] || exit 77
+        case "$(stat -c %a "$d")" in 700|750|755) ;; *) exit 77;; esac
+        cd -P -- "$d" || exit 77
+        f=authorized_keys; lock=.vpsready-authorized-keys.lock
+        mkdir -- "$lock" 2>/dev/null || exit 75
+        tmp=''; trap 'if [ -n "$tmp" ]; then rm -f -- "$tmp"; fi; rmdir -- "$lock"' EXIT
+        {{match}}
+        existed=false; backup=''
+        if [ -e "$f" ] || [ -L "$f" ]; then
+          [ -f "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u "$f")" = "$uid" ] || exit 77
+          case "$(stat -c %a "$f")" in 600|640|644) ;; *) exit 77;; esac
+          if matches; then exit 0; else rc=$?; [ "$rc" -eq 1 ] || exit "$rc"; fi
+          existed=true
+          backup=$(mktemp .vpsready-authorized-keys.backup.XXXXXX) || exit 77
+          cp -pP -- "$f" "$backup" || exit 77
+          [ -f "$backup" ] && [ ! -L "$backup" ] || exit 77
+        fi
+        tmp=$(mktemp .vpsready-authorized-keys.new.XXXXXX) || exit 77
+        if [ "$existed" = true ]; then cp -pP -- "$backup" "$tmp" || exit 77; fi
+        [ -f "$tmp" ] && [ ! -L "$tmp" ] || exit 77
+        if [ -s "$tmp" ] && [ "$(tail -c 1 "$tmp" | od -An -tu1 | tr -d '[:space:]')" != 10 ]; then printf '\n' >> "$tmp"; fi
+        printf '%s\n' {{key}} >> "$tmp" || exit 77
+        f="$tmp"; matches || exit 2; f=authorized_keys
+        if [ "$existed" = true ]; then
+          [ -f "$f" ] && [ ! -L "$f" ] && cmp -s -- "$f" "$backup" || exit 75
+          [ "$(stat -c %u "$f")" = "$(stat -c %u "$backup")" ] && [ "$(stat -c %g "$f")" = "$(stat -c %g "$backup")" ] && [ "$(stat -c %a "$f")" = "$(stat -c %a "$backup")" ] || exit 75
+        else
+          [ ! -e "$f" ] && [ ! -L "$f" ] || exit 75
+        fi
+        mv -f -- "$tmp" "$f" || exit 77
+        tmp=''
+        [ -f "$f" ] && [ ! -L "$f" ] && matches
+        """;
 
     private static string VerifyScript(string match) => CommonPrefix
         + "d=\"${HOME:?}/.ssh\"; f=\"$d/authorized_keys\"; "
         + match
         + "test -d \"$d\" && ! test -L \"$d\" && test -f \"$f\" && ! test -L \"$f\" "
-        + "&& test \"$(stat -c %u \"$d\")\" = \"$(id -u)\" && test \"$(stat -c %g \"$d\")\" = \"$(id -g)\" "
-        + "&& test \"$(stat -c %u \"$f\")\" = \"$(id -u)\" && test \"$(stat -c %g \"$f\")\" = \"$(id -g)\" "
-        + "&& test \"$(stat -c %a \"$d\")\" = 700 && test \"$(stat -c %a \"$f\")\" = 600 && matches";
+        + "&& test \"$(stat -c %u \"$d\")\" = \"$(id -u)\" && test \"$(stat -c %u \"$f\")\" = \"$(id -u)\" || exit 77; "
+        + "case \"$(stat -c %a \"$d\")\" in 700|750|755) ;; *) exit 77;; esac; "
+        + "case \"$(stat -c %a \"$f\")\" in 600|640|644) ;; *) exit 77;; esac; matches";
 
-    private static string MatchFunction(string algorithm, string blob) => "matches() { awk -v a=" + algorithm + " -v b=" + blob + " '{ for (i = 1; i < NF; i++) if ($i == a && $(i + 1) == b) found = 1 } END { exit !found }' \"$f\"; }; ";
+    private static string MatchFunction(string algorithm, string blob) => $$"""
+        matches() { awk -v a={{algorithm}} -v b={{blob}} '
+        /^[[:space:]]*#/ { next }
+        {
+          line=$0; sub(/\r$/, "", line); n=0; word=""; quoted=0; escaped=0
+          for (i=1; i<=length(line); i++) {
+            c=substr(line,i,1)
+            if (escaped) { word=word c; escaped=0; continue }
+            if (c=="\\" && quoted) { escaped=1; word=word c; continue }
+            if (c=="\"") { quoted=!quoted; word=word c; continue }
+            if (c ~ /[[:space:]]/ && !quoted) {
+              if (length(word)) { fields[++n]=word; word=""; if(n==3) break }
+            } else { word=word c }
+          }
+          if (length(word) && n<3) fields[++n]=word
+          if (!quoted && n>=2 && fields[1]==a && fields[2]==b) found=1
+          # A selected key with options must never gain an unrestricted duplicate.
+          # Refuse it for explicit review; do not claim those restrictions allow login.
+          if (!quoted && n>=3 && fields[2]==a && fields[3]==b) restricted=1
+          delete fields
+        }
+        END { if(restricted) exit 2; exit !found }' "$f"; };
+        """;
 
     private const string CommonPrefix = "LC_ALL=C LANG=C; export LC_ALL LANG; set -eu; ";
 }

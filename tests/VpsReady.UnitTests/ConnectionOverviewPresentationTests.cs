@@ -76,7 +76,7 @@ public sealed class ConnectionOverviewPresentationTests
     public void ConnectionSecretInputRejectsUnsupportedCharactersFailClosed()
     {
         using var buffer = new ConnectionSecretInput();
-        Assert.Throws<ArgumentOutOfRangeException>(() => buffer.Append('é'));
+        Assert.Throws<ArgumentOutOfRangeException>(() => buffer.Append('\n'));
         Assert.Equal(0, buffer.Length);
     }
 

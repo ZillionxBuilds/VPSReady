@@ -1,5 +1,7 @@
 # Repository Quality Checks
 
+[Project home](../../README.md) · [Documentation](../README.md) · [Contributing](../../CONTRIBUTING.md)
+
 This is the reproducible E0 baseline for VPSReady development and CI. It
 checks only the local repository and NuGet package metadata; it requires no VPS
 endpoint, provider console, credential, or secret. It is not E5 evidence.
@@ -21,9 +23,10 @@ endpoint, provider console, credential, or secret. It is not E5 evidence.
   mode.
 - `.editorconfig` is the repository formatting policy. Verification never
   rewrites files.
-- `.gitignore` protects generated output and local state. Reviewed, sanitized
-  golden transcripts and deterministic fixtures in dedicated `tests/**/fixtures`,
-  `golden`, or `scenarios` paths are deliberately not ignored.
+- `.gitignore` protects generated output and local state. Ordinary reviewed,
+  sanitized golden transcripts and deterministic fixtures remain trackable.
+  Secret and private-key patterns still apply inside fixture, golden and
+  scenario directories; there is no blanket fixture exception.
 
 Do not add a package version to an individual project file. Do not add a
 warning suppression or a lock-file update without explaining it in the linked
@@ -42,6 +45,7 @@ dotnet build VpsReady.slnx --configuration Release --no-restore -p:RunAnalyzersD
 dotnet list VpsReady.slnx package --include-transitive
 dotnet list VpsReady.slnx package --vulnerable --include-transitive
 bash eng/verify-tracked-secrets.sh
+bash eng/verify-gitignore.sh
 ```
 
 `dotnet restore` performs the enforced NuGet audit at low-or-higher severity;

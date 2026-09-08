@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
 using System.Windows.Input;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -11,7 +10,8 @@ namespace VpsReady.Application;
 /// <summary>
 /// Safe presentation state for the SSH key-management journey. The view model
 /// composes accepted workflows; it neither builds remote commands nor owns a
-/// transport, and intentionally never exposes a key path or key material.
+/// transport. Private material and paths are never exposed; a separate explicit
+/// view/copy action can disclose the selected public key only.
 /// </summary>
 public enum SshManagementScreenState
 {
@@ -51,6 +51,8 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private string? operationId;
     private string? errorCode;
     private bool disposed;
+    private string? observedSessionId;
+    private string? publicKeyDisplay;
 
     public SshManagementViewModel(
         IApplicationSession session,
@@ -73,11 +75,50 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             ? "Connect and verify a server session before deploying or testing an SSH key."
             : "Select or generate a local key. Deployment and key authentication are separate verified steps.";
         trustedHostStatus = CreateTrustedHostStatus();
+        observedSessionId = session.Snapshot.SessionId;
         CancelCommand = new DelegateCommand(Cancel);
+        HidePublicKeyCommand = new DelegateCommand(() => PublicKeyDisplay = null);
         session.StateChanged += OnSessionStateChanged;
     }
 
     public ICommand CancelCommand { get; }
+    public ICommand HidePublicKeyCommand { get; }
+    public string? PublicKeyDisplay { get => publicKeyDisplay; private set => SetProperty(ref publicKeyDisplay, value); }
+    public bool CanReadPublicKey => !IsBusy && HasSelectedKey;
+
+    /// <summary>Intentional public-only disclosure. Revalidates the pair; no private bytes enter presentation.</summary>
+    public async Task<string?> ReadPublicKeyForCopyAsync(CancellationToken cancellationToken = default)
+    {
+        if (!TryBegin(SshManagementScreenState.Working, requiresSession: false, out var cancellation, cancellationToken)) { return null; }
+        try
+        {
+            if (selectedKey is null) { CompletePreconditionFailure("Select a validated local key first."); return null; }
+            var read = await selector.ReadPublicKeyAsync(selectedKey, CorrelationIds.Create("public_key_read"), cancellation.Token).ConfigureAwait(false);
+            using var material = read.Material;
+            if (!read.Operation.Succeeded || material is null || cancellation.IsCancellationRequested)
+            {
+                InvalidateSelection();
+                Complete(cancellation.IsCancellationRequested ? OperationResult.Cancellation(read.Operation.OperationId, OperationState.Unchanged) : read.Operation,
+                    null, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
+                return null;
+            }
+            var characters = material.CopyForUse();
+            try
+            {
+                Complete(read.Operation, null, "The validated public key is available for this explicit local view/copy action. Clipboard contents may be read by other applications.", SshManagementScreenState.Ready);
+                return new string(characters);
+            }
+            finally { Array.Clear(characters); }
+        }
+        finally { End(cancellation); }
+    }
+
+    public async Task ViewPublicKeyAsync(CancellationToken cancellationToken = default) =>
+        PublicKeyDisplay = await ReadPublicKeyForCopyAsync(cancellationToken).ConfigureAwait(false);
+
+    public void ReportPublicKeyCopy(bool copied) => Status = copied
+        ? "Public key copied by your request. Other applications or clipboard history may retain it."
+        : "Public key could not be copied. Use View public key to inspect it locally.";
 
     public SshManagementScreenState State { get => state; private set => SetProperty(ref state, value); }
 
@@ -119,13 +160,13 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             ? "Select or generate a validated local key before testing key authentication."
             : "A separate key-authenticated connection will be verified. Password access is not changed.";
 
-    public string Alias { get => alias; set => SetProperty(ref alias, value ?? string.Empty); }
+    public string Alias { get => alias; set { if (SetProperty(ref alias, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
-    public string HostName { get => hostName; set => SetProperty(ref hostName, value ?? string.Empty); }
+    public string HostName { get => hostName; set { if (SetProperty(ref hostName, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
-    public string UserName { get => userName; set => SetProperty(ref userName, value ?? string.Empty); }
+    public string UserName { get => userName; set { if (SetProperty(ref userName, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
-    public string Port { get => port; set => SetProperty(ref port, value ?? string.Empty); }
+    public string Port { get => port; set { if (SetProperty(ref port, value ?? string.Empty)) { IsConfigConfirmed = false; } } }
 
     public bool IsDeploymentConfirmed
     {
@@ -139,7 +180,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsConfigConfirmed { get => isConfigConfirmed; set => SetProperty(ref isConfigConfirmed, value); }
+    public bool IsConfigConfirmed { get => isConfigConfirmed; set => SetProperty(ref isConfigConfirmed, value && HasSelectedKey && !IsBusy); }
 
     /// <summary>
     /// The desktop host obtains a local destination through its picker and
@@ -207,10 +248,12 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var sessionSnapshot = session.Snapshot;
-            var materialResult = await TryLoadPublicMaterialAsync(selected.Location!, cancellation.Token).ConfigureAwait(false);
+            var materialResult = await selector.ReadPublicKeyAsync(selected, CorrelationIds.Create("key_deploy_validate"), cancellation.Token).ConfigureAwait(false);
             if (materialResult.Material is null)
             {
-                Complete(materialResult.Result, PublicKeyDeploymentErrorCatalog.InvalidInput, "The selected public-key companion could not be prepared safely.");
+                InvalidateSelection();
+                Complete(materialResult.Operation, PublicKeyDeploymentErrorCatalog.InvalidInput);
+                Status += " Select the key again before confirming deployment.";
                 return;
             }
 
@@ -227,10 +270,9 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                     },
                     sessionSnapshot.SessionId!,
                     cancellation.Token).ConfigureAwait(false);
-                Complete(deployed?.Result ?? result, deployed?.DeploymentErrorCode, deployed?.Result.Succeeded == true
-                    ? "Public-key deployment was verified. Run the separate key-authentication test before relying on the key."
-                    : null,
-                    deployed?.Result.Succeeded == true ? SshManagementScreenState.PublicKeyDeployed : null);
+                CompleteSessionResult(sessionSnapshot, result, deployed?.Result, deployed?.DeploymentErrorCode,
+                    "Public-key deployment was verified. Run the separate key-authentication test before relying on the key.",
+                    SshManagementScreenState.PublicKeyDeployed);
             }
         }
         finally
@@ -259,16 +301,38 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var snapshot = session.Snapshot;
+            var validation = await selector.ReadPublicKeyAsync(selectedKey, CorrelationIds.Create("key_auth_validate"), cancellation.Token).ConfigureAwait(false);
+            using (validation.Material)
+            {
+                if (validation.Material is null)
+                {
+                    InvalidateSelection();
+                    Complete(validation.Operation, KeyAuthenticationVerificationErrorCatalog.InvalidInput);
+                    Status += " Select the key again before testing authentication.";
+                    return;
+                }
+            }
             var request = new KeyAuthenticationVerificationRequest(
                 snapshot.Identity!,
                 new KnownHostIdentity(snapshot.Identity!.Host, snapshot.Identity.Port),
                 selectedKey,
                 RemoteOperationTimeout);
-            var verified = await keyAuthentication.VerifyAsync(request, cancellation.Token).ConfigureAwait(false);
-            Complete(verified.Result, verified.VerificationErrorCode, verified.Result.Succeeded
-                ? "The separate key-authenticated connection was verified. Password access remains unchanged."
-                : null,
-                verified.Result.Succeeded ? SshManagementScreenState.KeyAuthenticationVerified : null);
+            KeyAuthenticationVerificationResult? verified = null;
+            var result = await session.RunOperationForSessionAsync(
+                "ssh_key_auth_verify", RemoteOperationTimeout,
+                async (_, token) =>
+                {
+                    verified = await keyAuthentication.VerifyAsync(request, token).ConfigureAwait(false);
+                    return verified.Result;
+                }, snapshot.SessionId!, cancellation.Token).ConfigureAwait(false);
+            CompleteSessionResult(snapshot, result, verified?.Result, verified?.VerificationErrorCode,
+                "The separate key-authenticated connection was verified. Password access remains unchanged.",
+                SshManagementScreenState.KeyAuthenticationVerified);
+            if (verified?.VerificationErrorCode == KeyAuthenticationVerificationErrorCatalog.InvalidInput)
+            {
+                InvalidateSelection();
+                Status += " Select the key again; its identity could not be revalidated.";
+            }
         }
         catch (ArgumentException)
         {
@@ -300,8 +364,10 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            var request = new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selectedKey.Location.PrivateKeyPath);
+            IsConfigConfirmed = false;
             var result = await configEditor.AddAliasAsync(
-                new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selectedKey.Location.PrivateKeyPath),
+                request,
                 CorrelationIds.Create("edit_ssh_config"),
                 cancellation.Token).ConfigureAwait(false);
             Complete(result.Operation, result.ErrorCode, result.Succeeded
@@ -337,6 +403,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
     private async Task SelectCoreAsync(string privateKeyPath, CancellationToken cancellationToken)
     {
+        InvalidateSelection();
         var selection = await selector.SelectAsync(
             new ExistingSshKeySelectionRequest(privateKeyPath),
             CorrelationIds.Create("select_key"),
@@ -353,6 +420,17 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             ? "The local key was validated. Deploy its public companion only after explicit confirmation."
             : null,
             selection.Succeeded ? SshManagementScreenState.KeySelected : null);
+    }
+
+    private void InvalidateSelection()
+    {
+        selectedKey = null;
+        PublicKeyDisplay = null;
+        IsDeploymentConfirmed = false;
+        IsConfigConfirmed = false;
+        OnPropertyChanged(nameof(HasSelectedKey));
+        OnPropertyChanged(nameof(SelectedKeyMetadata));
+        OnEligibilityChanged();
     }
 
     private bool TryBegin(SshManagementScreenState busyState, bool requiresSession, out CancellationTokenSource cancellation, CancellationToken callerCancellation)
@@ -393,6 +471,25 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
         CompletePreconditionFailure(DeploymentEligibilityMessage);
         return false;
+    }
+
+    private void CompleteSessionResult(
+        ApplicationSessionSnapshot expected,
+        OperationResult result,
+        OperationResult? innerResult,
+        string? workflowErrorCode,
+        string succeededStatus,
+        SshManagementScreenState succeededState)
+    {
+        // The enclosing lifecycle may replace a late inner success. Its ID,
+        // code and completion remain authoritative; an obsolete session must
+        // not lend verification to its replacement even after the await ends.
+        if (result.Succeeded && !string.Equals(expected.SessionId, session.Snapshot.SessionId, StringComparison.Ordinal))
+        {
+            result = OperationResult.Failure(result.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+        }
+        Complete(result, ReferenceEquals(result, innerResult) ? workflowErrorCode : null,
+            result.Succeeded ? succeededStatus : null, result.Succeeded ? succeededState : null);
     }
 
     private void Complete(
@@ -466,11 +563,18 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
     private void OnSessionStateChanged(object? sender, EventArgs e)
     {
+        var snapshot = session.Snapshot;
+        var identityChanged = !string.Equals(observedSessionId, snapshot.SessionId, StringComparison.Ordinal);
+        observedSessionId = snapshot.SessionId;
         TrustedHostStatus = CreateTrustedHostStatus();
-        if (!session.Snapshot.IsConnected && !IsBusy)
+        if (identityChanged)
         {
-            State = SshManagementScreenState.Disconnected;
-            Status = "No verified server session is available. Local key selection and config editing remain local-only.";
+            IsDeploymentConfirmed = false;
+        }
+        if (identityChanged && !IsBusy)
+        {
+            State = snapshot.IsConnected ? SshManagementScreenState.Ready : SshManagementScreenState.Disconnected;
+            Status = "The server session changed. Previous deployment/login proof does not verify this session. Local key selection and config editing remain local-only.";
         }
 
         OnEligibilityChanged();
@@ -490,62 +594,10 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private void OnEligibilityChanged()
     {
         OnPropertyChanged(nameof(CanDeploy));
+        OnPropertyChanged(nameof(CanReadPublicKey));
         OnPropertyChanged(nameof(CanVerifyKeyAuthentication));
         OnPropertyChanged(nameof(DeploymentEligibilityMessage));
         OnPropertyChanged(nameof(KeyAuthenticationEligibilityMessage));
     }
 
-    private static async Task<PublicKeyMaterialLoadResult> TryLoadPublicMaterialAsync(ExistingSshKeyLocation key, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var publicPath = key.PrivateKeyPath + ".pub";
-            var bytes = await File.ReadAllBytesAsync(publicPath, cancellationToken).ConfigureAwait(false);
-            try
-            {
-                if (bytes.Length == 0 || bytes.Length > 16 * 1024)
-                {
-                    return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.Validation);
-                }
-
-                var characters = Encoding.UTF8.GetChars(bytes);
-                try
-                {
-                    return new PublicKeyMaterialLoadResult(
-                        new PublicKeyDeploymentMaterial(characters),
-                        OperationResult.Success(DiagnosticCorrelationFactory.NewOperationId(), OperationState.Unchanged));
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(System.Runtime.InteropServices.MemoryMarshal.AsBytes(characters.AsSpan()));
-                }
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(bytes);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.Cancelled);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.LocalIo);
-        }
-        catch (IOException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.LocalIo);
-        }
-        catch (ArgumentException)
-        {
-            return PublicKeyMaterialLoadResult.Failure(OperationErrorCode.Validation);
-        }
-    }
-
-    private sealed record PublicKeyMaterialLoadResult(PublicKeyDeploymentMaterial? Material, OperationResult Result)
-    {
-        public static PublicKeyMaterialLoadResult Failure(OperationErrorCode error) =>
-            new(null, OperationResult.Failure(DiagnosticCorrelationFactory.NewOperationId(), error, OperationState.Unchanged));
-    }
 }

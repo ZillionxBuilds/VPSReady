@@ -17,6 +17,7 @@ public static class DesktopComposition
     {
         var services = new ServiceCollection();
         services.AddSingleton<IApplicationSession, ApplicationSession>();
+        services.AddSingleton<IServerOverviewReader, ServerOverviewReader>();
         services.AddSingleton<AppViewModel>();
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IPlatformPaths, SystemPlatformPaths>();

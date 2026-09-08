@@ -55,7 +55,7 @@ public sealed class KeyAuthenticationVerificationRequest
 
         Endpoint = endpoint;
         TrustedHost = trustedHost;
-        PrivateKey = selectedKey.Location;
+        PrivateKey = new ExistingSshKeyLocation(selectedKey.Location.PrivateKeyPath, selectedKey.Metadata!.Fingerprint);
         Timeout = timeout;
     }
 
