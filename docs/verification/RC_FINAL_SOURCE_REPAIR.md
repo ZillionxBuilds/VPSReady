@@ -1,5 +1,7 @@
 # RC final source repair — #149
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 This is solo-engineer repair evidence, not independent QA or release approval.
 Baseline release: `7478be758b673ccdeeceef94d2f92aa82437d083`.
 The canonical [#149 Workpad](https://github.com/ZillionBuilds/VPSReady/issues/149#issuecomment-5556353152)

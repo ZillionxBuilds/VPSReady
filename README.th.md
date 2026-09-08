@@ -5,9 +5,9 @@
 [English](README.md) · [คู่มือใช้งาน](docs/user-guide/V0.1_USER_AND_TROUBLESHOOTING_GUIDE.md) · [ศูนย์รวมเอกสาร](docs/README.md) · [สถานะโปรเจกต์](docs/PROJECT_STATUS.md)
 
 > [!IMPORTANT]
-> **ยังเป็น pre-release ไม่ใช่เวอร์ชัน stable** การแก้ R10–R14 อยู่บน
-> `fix/149-pre-main-repair` และยังไม่ merge เข้า `release/0.1.0` หรือ main
-> การตรวจบน hosted CI ยังค้างอยู่ การมี release branch
+> **ยังเป็น pre-release ไม่ใช่เวอร์ชัน stable** `release/0.1.0` มีการแก้ R1–R19
+> รวม R19 ที่ `a4629b38` แล้ว ติดตาม migration ที่ issue #1 และ release ที่ issue #2
+> ใน repository ใหม่ `ZillionxBuilds/VPSReady` การมี release branch
 > ไม่ได้แปลว่าได้รับอนุมัติให้เริ่มทดสอบกับ VPS จริงแล้ว
 > ตรวจ [สถานะและหลักฐาน](docs/PROJECT_STATUS.md) ก่อนใช้งาน
 > **REAL VPS: NOT TESTED.**
@@ -43,7 +43,7 @@ cloud-provider API และ remote terminal อเนกประสงค์�
 ติดตั้ง Git และ .NET SDK ตาม [global.json](global.json) แล้วรัน:
 
 ```bash
-git clone --branch fix/149-pre-main-repair https://github.com/ZillionBuilds/VPSReady.git
+git clone --branch release/0.1.0 https://github.com/ZillionxBuilds/VPSReady.git
 cd VPSReady
 dotnet restore VpsReady.slnx --locked-mode
 dotnet build VpsReady.slnx --configuration Release --no-restore
