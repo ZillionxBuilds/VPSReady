@@ -110,7 +110,7 @@
     }
   ],
   "provenance_note": "Historical entries are prior Owner/reviewer conversation evidence plus preserved source, not a fresh export of inaccessible legacy discussions. Never infer approval or rewrite old comment authorship.",
-  "runtime_acceptance": "E0_E1_E2_LOCAL_PASS_E3_E4_PENDING",
+  "runtime_acceptance": "E0_E1_E2_LOCAL_PASS_E4_OSX_ARM64_PASS_HOSTED_OR_PLATFORM_VERIFICATION_PENDING",
   "owner_E5": "NOT_RUN",
   "main_promotion": "NOT_AUTHORIZED",
   "documentation_sha": "9a879fde3a715d4ca7221d57fd1ad83702a59077"
