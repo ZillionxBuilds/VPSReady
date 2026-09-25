@@ -6,9 +6,10 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 (2026-09-25). The newer [UI PR #14](https://github.com/ZillionxBuilds/VPSReady/pull/14),
 [key-naming PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17),
 [connection/Activity PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19),
-[Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21), and
-[key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23), and
-[startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25)
+[Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21),
+[key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23),
+[startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25), and
+[OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27)
 are separate, unmerged changes. No result below proves their combined tree.
 
 ## Verdicts and exact baseline
@@ -45,7 +46,7 @@ acceptance criterion is checked against an exact candidate.
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Recheck active SSH port and family-specific guardrails, stale selection, post-apply verification and recovery against current source; Owner Stage 3 NOT RUN. |
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming, collision/cancellation regressions and local OpenSSH interoperability are in unmerged PR #17; review and exact-candidate integration pending. Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
-| F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Focused [#26](https://github.com/ZillionxBuilds/VPSReady/issues/26) tracks fail-closed correction. Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
+| F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Recheck stale plan, privilege, apt locks, late cancellation, reboot reconnect and verified completion criterion by criterion; Owner Stage 5 NOT RUN. |
 | F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Native review found production journal writes rejected because bare `0.1.0.0` version resembled an IPv4 identifier to fail-closed redaction; safe version metadata and isolated production regression are in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19). Current release startup fallback UI and minimal journal use unrelated IDs; focused E1 correction is in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25) ([#24](https://github.com/ZillionxBuilds/VPSReady/issues/24)). Recheck disconnected Stage 0 report/bundle, privacy, retention and startup failure on exact candidate; Owner Stage 2/6 NOT RUN. |
 
@@ -85,7 +86,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21, #23 and #25 independently, then validate their integration on an
+- Review PR #14, #17, #19, #21, #23, #25 and #27 independently, then validate their integration on an
   exact candidate. Do not self-merge to release/main or infer visual acceptance.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
@@ -100,9 +101,10 @@ tracks the separate E5 gate.
   for F09 startup fallback ID, local-path and privacy behavior. Its isolated E1
   and macOS publish evidence does not establish a forced-fallback native UI or
   exact combined-candidate result.
-- Resolve the F07 additive `IdentityFile` no-change gap in
-  [issue #26](https://github.com/ZillionxBuilds/VPSReady/issues/26), then review
-  against local OpenSSH effective configuration without contacting a server.
+- Obtain independent review of [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27)
+  for F07 additive `IdentityFile` semantics. Local OpenSSH `ssh -G` confirms
+  the false no-change source gap, but exact combined-candidate and Owner proof
+  remain separate.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
