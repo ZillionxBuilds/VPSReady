@@ -71,8 +71,48 @@ and OpenSSH client passed Release `-warnaserror` build (zero warnings/errors),
 full E1 853 PASS/3 SKIP and E2 209 PASS/3 SKIP. This local branch was **not
 pushed, independently QA-reviewed or integrated**. Earlier contained E3 and
 macOS E4 evidence is tied to its preceding `594372a` head, not exact
-`0cf68d9`. Native Windows/Linux desktop, official candidate packaging,
-hosted checks and Owner Stage 0–6 remain unverified. **REAL VPS: NOT TESTED.**
+`0cf68d9` at this checkpoint; the same-head rerun below supersedes that gap.
+Native Windows/Linux desktop, official candidate packaging, hosted checks and
+Owner Stage 0–6 remain unverified. **REAL VPS: NOT TESTED.**
+
+### Same-head contained E3 and macOS/Linux E4 preflight — 2026-09-25 21:38 UTC
+
+The unchanged local-contained OpenSSH script passed on exact clean
+`0cf68d9a55115738ec8d7ca2a3c7f4ae54dd40c7` in a disposable Ubuntu Noble
+ARM64 SDK container: production SSH.NET E3 **3 PASS/0 FAIL/0 SKIP** plus
+unknown-host refusal, known-host match, wrong key/password, bounded command
+result and timeout checks. The retained sanitized E3 TRX has SHA-256
+`e62f1a0e66d1b85f31c8b7443dc43491748c1b3b902a135e0e47d71339233b49`;
+the protocol summary has SHA-256
+`94016c202f8e23510a8edf87fe5fb8722b272aad8849e7e5032b1c982d3b76e2`.
+Host and container artifact-safety scans passed. The summary's generic
+"CI runner" wording describes the script; this execution was **local Docker
+loopback**, not hosted CI or a VPS.
+
+On that same head, `./scripts/build/macos.sh` published an unsigned,
+self-contained `osx-arm64` Mach-O apphost. Its desktop DLL contains the exact
+SHA and has SHA-256
+`41b8ba9988de6896ff790b835f8bb198bea34d49213b6ccfe581d6004cc6a4d8`.
+Artifact-safety scan passed. The app remained alive through a bounded
+five-second local smoke and was intentionally stopped; interactive UI and
+clean exit were **NOT VERIFIED**.
+
+A disposable Ubuntu Noble ARM64 SDK container also published a self-contained
+`linux-arm64` ELF apphost from exact `0cf68d9`; its desktop DLL contains that
+SHA and has SHA-256
+`93e7768af6a6dd33f74dbbf63babafadd8d943aa7cd44bea105138ea7e67a362`.
+Artifact-safety scan passed. Under Xvfb, a nonroot child-PID probe confirmed
+the actual app process alive after five seconds, then terminated it and
+cleaned up. This is **contained Linux startup**, not an independent native
+Linux desktop/interactive review or official release archive. The SDK was
+still installed in the container; although the publish was self-contained
+and `DOTNET_ROOT` was invalidated, complete independence from a global
+runtime was not separately isolated.
+
+The local composite remains unpushed/unapproved. Hosted checks, official
+PowerShell package/manifest/notices, native Windows/Linux desktop, independent
+QA, approved exact-candidate E0–E4 and Owner Stage 0–6 remain **NOT RUN**.
+**REAL VPS: NOT TESTED.**
 
 ### Current all-pending product preflight — 2026-09-25 18:36 UTC
 
