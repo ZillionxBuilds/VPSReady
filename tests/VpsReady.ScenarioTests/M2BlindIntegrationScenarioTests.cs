@@ -159,6 +159,155 @@ public sealed class M2BlindIntegrationScenarioTests
     }
 
     [Fact]
+    public async Task EditingConnectionIdentityRejectsOldSessionOperationsUntilAFullVerifiedRetest()
+    {
+        await using var services = ScenarioComposition.Create("scenario.c204.identity-edit");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var session = services.GetRequiredService<IApplicationSession>();
+        await using var lifecycle = new ConnectionSessionLifecycle(
+            session,
+            services.GetRequiredService<IRemoteTransportFactory>(),
+            services.GetRequiredService<IDiagnosticSink>());
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session);
+        viewModel.SecretInput.Replace("synthetic-password".AsSpan());
+        await viewModel.TestAsync("identity-edit.invalid", "22", "scenario", TimeSpan.FromSeconds(1));
+        Assert.True(session.Snapshot.IsConnected);
+        var oldSessionId = Assert.IsType<string>(session.Snapshot.SessionId);
+
+        await viewModel.InvalidateForIdentityEditAsync();
+        Assert.False(session.Snapshot.IsConnected);
+        Assert.False(viewModel.CanRefresh);
+        Assert.Equal(ConnectionScreenState.Disconnected, viewModel.State);
+        var blocked = await session.RunOperationForSessionAsync(
+            "op_stale_identity",
+            TimeSpan.FromSeconds(1),
+            (_, _) => throw new Xunit.Sdk.XunitException("The old session must never execute after an identity edit."),
+            oldSessionId);
+        Assert.False(blocked.Succeeded);
+        Assert.Equal(1, state.Ssh.ConnectionAttempts);
+
+        viewModel.SecretInput.Replace("synthetic-password".AsSpan());
+        await viewModel.TestAsync("identity-edit.invalid", "22", "scenario", TimeSpan.FromSeconds(1));
+        Assert.True(session.Snapshot.IsConnected);
+        Assert.NotEqual(oldSessionId, session.Snapshot.SessionId);
+        Assert.Equal(2, state.Ssh.ConnectionAttempts);
+    }
+
+    [Theory]
+    [InlineData(ScenarioProfiles.SshUnknownTrust, ScenarioHostKeyState.Unknown, "edit")]
+    [InlineData(ScenarioProfiles.SshUnknownTrust, ScenarioHostKeyState.Unknown, "invalid")]
+    [InlineData(ScenarioProfiles.SshUnknownTrust, ScenarioHostKeyState.Unknown, "disconnect")]
+    [InlineData(ScenarioProfiles.SshChangedTrust, ScenarioHostKeyState.Changed, "edit")]
+    [InlineData(ScenarioProfiles.SshChangedTrust, ScenarioHostKeyState.Changed, "invalid")]
+    [InlineData(ScenarioProfiles.SshChangedTrust, ScenarioHostKeyState.Changed, "disconnect")]
+    public async Task NewIdentityInvalidInputOrDisconnectDiscardsHostReviewWithoutSavingTrust(
+        string profile,
+        ScenarioHostKeyState expectedHostKey,
+        string action)
+    {
+        const string host = "desktop-trust.private.invalid";
+        await using var services = ScenarioComposition.CreateProfile(profile);
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var session = services.GetRequiredService<IApplicationSession>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        await using var lifecycle = new ConnectionSessionLifecycle(
+            session,
+            services.GetRequiredService<IRemoteTransportFactory>(),
+            services.GetRequiredService<IDiagnosticSink>(),
+            services.GetRequiredService<IKnownHostTrustStore>());
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session);
+        viewModel.SecretInput.Replace("synthetic-password".AsSpan());
+        await viewModel.TestAsync(host, "2222", "scenario", TimeSpan.FromSeconds(1));
+        Assert.True(viewModel.HasHostTrustReview);
+        Assert.NotNull(lifecycle.PendingHostTrustReview);
+
+        switch (action)
+        {
+            case "edit":
+                await viewModel.InvalidateForIdentityEditAsync();
+                break;
+            case "invalid":
+                await viewModel.TestAsync("invalid host", "2222", "scenario", TimeSpan.FromSeconds(1));
+                break;
+            case "disconnect":
+                await viewModel.DisconnectAsync();
+                break;
+            default:
+                throw new InvalidOperationException("The test action is not registered.");
+        }
+        Assert.False(viewModel.HasHostTrustReview);
+        Assert.Null(lifecycle.PendingHostTrustReview);
+        await viewModel.AcceptUnknownHostKeyAsync();
+        await viewModel.ReplaceChangedHostKeyAsync();
+        Assert.Equal(expectedHostKey, state.Ssh.HostKey);
+        Assert.False(session.Snapshot.IsConnected);
+        Assert.DoesNotContain(host, recorder.ToJsonLines(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(ScenarioProfiles.SshUnknownTrust, false)]
+    [InlineData(ScenarioProfiles.SshChangedTrust, true)]
+    public async Task EditingIdentityCancelsAnInFlightTrustDecisionBeforePersistence(string profile, bool changed)
+    {
+        await using var services = ScenarioComposition.CreateProfile(profile);
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var originalHostKeyState = state.Ssh.HostKey;
+        var session = services.GetRequiredService<IApplicationSession>();
+        var blockingStore = new BlockingTrustStore(services.GetRequiredService<IKnownHostTrustStore>());
+        await using var lifecycle = new ConnectionSessionLifecycle(
+            session,
+            services.GetRequiredService<IRemoteTransportFactory>(),
+            services.GetRequiredService<IDiagnosticSink>(),
+            blockingStore);
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session);
+        viewModel.SecretInput.Replace("synthetic-password".AsSpan());
+        await viewModel.TestAsync("desktop-trust.private.invalid", "2222", "scenario", TimeSpan.FromSeconds(1));
+        Assert.True(viewModel.HasHostTrustReview);
+
+        var review = changed ? viewModel.ReplaceChangedHostKeyAsync() : viewModel.AcceptUnknownHostKeyAsync();
+        await blockingStore.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await viewModel.InvalidateForIdentityEditAsync();
+        await review;
+
+        Assert.False(viewModel.HasHostTrustReview);
+        Assert.Null(lifecycle.PendingHostTrustReview);
+        Assert.Equal(originalHostKeyState, state.Ssh.HostKey);
+        Assert.False(session.Snapshot.IsConnected);
+    }
+
+    [Theory]
+    [InlineData(ScenarioProfiles.SshUnknownTrust, false)]
+    [InlineData(ScenarioProfiles.SshChangedTrust, true)]
+    public async Task DirectLifecycleDisconnectCancelsAnInFlightTrustReview(string profile, bool changed)
+    {
+        await using var services = ScenarioComposition.CreateProfile(profile);
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var originalHostKeyState = state.Ssh.HostKey;
+        var session = services.GetRequiredService<IApplicationSession>();
+        var blockingStore = new BlockingTrustStore(services.GetRequiredService<IKnownHostTrustStore>());
+        await using var lifecycle = new ConnectionSessionLifecycle(
+            session,
+            services.GetRequiredService<IRemoteTransportFactory>(),
+            services.GetRequiredService<IDiagnosticSink>(),
+            blockingStore);
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session);
+        viewModel.SecretInput.Replace("synthetic-password".AsSpan());
+        await viewModel.TestAsync("desktop-trust.private.invalid", "2222", "scenario", TimeSpan.FromSeconds(1));
+        Assert.True(viewModel.HasHostTrustReview);
+
+        var review = changed
+            ? lifecycle.ReplacePendingChangedHostKeyAsync()
+            : lifecycle.AcceptPendingUnknownHostKeyAsync();
+        await blockingStore.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await lifecycle.DisconnectAsync();
+        var result = await review;
+
+        Assert.True(result.Cancelled);
+        Assert.Null(lifecycle.PendingHostTrustReview);
+        Assert.Equal(originalHostKeyState, state.Ssh.HostKey);
+    }
+
+    [Fact]
     public async Task DesktopTrustJourneyFailsClosedUntilReviewedThenRequiresVerifiedRetryAndReconnect()
     {
         var seededValue = string.Concat("desktop", "-trust", "-seeded", "-value");
@@ -329,6 +478,37 @@ public sealed class M2BlindIntegrationScenarioTests
             pair => new RemoteCommandResult(0, pair.Value, string.Empty, TimeSpan.Zero),
             StringComparer.Ordinal);
         return UbuntuServerFactAggregator.Aggregate(results, new RemoteEndpoint("m2-facts.invalid", 2222, "scenario"));
+    }
+
+    private sealed class BlockingTrustStore(IKnownHostTrustStore inner) : IKnownHostTrustStore
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<KnownHostTrustAssessment> AssessAsync(
+            KnownHostIdentity identity,
+            HostKeyFingerprint observedFingerprint,
+            CancellationToken cancellationToken) =>
+            inner.AssessAsync(identity, observedFingerprint, cancellationToken);
+
+        public Task<KnownHostTrustAssessment> AcceptUnknownAsync(
+            KnownHostTrustChallenge challenge,
+            CancellationToken cancellationToken) => BlockBeforePersistAsync(challenge, replace: false, cancellationToken);
+
+        public Task<KnownHostTrustAssessment> ReplaceChangedAsync(
+            KnownHostTrustChallenge challenge,
+            CancellationToken cancellationToken) => BlockBeforePersistAsync(challenge, replace: true, cancellationToken);
+
+        private async Task<KnownHostTrustAssessment> BlockBeforePersistAsync(
+            KnownHostTrustChallenge challenge,
+            bool replace,
+            CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return replace
+                ? await inner.ReplaceChangedAsync(challenge, cancellationToken)
+                : await inner.AcceptUnknownAsync(challenge, cancellationToken);
+        }
     }
 
     private sealed class FixedTransportFactory(IPasswordSshTransport transport) : IRemoteTransportFactory

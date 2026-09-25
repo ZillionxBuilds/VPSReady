@@ -85,6 +85,14 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void ConnectionIdentityTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            await connection.InvalidateForIdentityEditAsync();
+        }
+    }
+
     private async void ViewPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (viewModel?.SshManagement is { } ssh) { await ssh.ViewPublicKeyAsync(); }
