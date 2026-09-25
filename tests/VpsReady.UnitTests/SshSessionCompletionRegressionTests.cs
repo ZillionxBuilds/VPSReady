@@ -131,15 +131,73 @@ public sealed class SshSessionCompletionRegressionTests
         await action.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.NotNull(session.Returned);
         Assert.True(session.Returned.Cancelled);
-        Assert.Equal(session.Returned.OperationId, barrier.DeploymentSuccessOperationId);
+        Assert.Contains(barrier.Events, entry =>
+            entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled
+            && entry.Correlation.OperationId == session.Returned.OperationId);
+    }
+
+    [Fact]
+    public async Task CancelledKeyAuthenticationDoesNotLeaveATerminalSuccessDiagnostic()
+    {
+        var (result, barrier) = await RunCancelledKeyAuthenticationAsync();
+
+        Assert.True(result.Cancelled);
+        Assert.False(barrier.KeyAuthenticationSuccessObserved);
+    }
+
+    [Fact]
+    public async Task CancelledKeyAuthenticationOperationIdCanLocateItsDiagnosticRecord()
+    {
+        var (result, barrier) = await RunCancelledKeyAuthenticationAsync();
+
+        Assert.True(result.Cancelled);
+        Assert.Contains(barrier.Events, entry =>
+            entry.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled
+            && entry.Correlation.OperationId == result.OperationId);
+    }
+
+    private static async Task<(OperationResult Result, CompletionBarrier Barrier)> RunCancelledKeyAuthenticationAsync()
+    {
+        var barrier = new CompletionBarrier();
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new DeploymentTransport());
+        var selectedKey = ExistingSshKeySelectionResult.Success(
+            OperationResult.Success("selected-fixture", OperationState.Unchanged),
+            new ExistingSshKeyLocation("/fixture/key"),
+            new ExistingSshKeyMetadata("ed25519", "SHA256:fixture"));
+        var request = new KeyAuthenticationVerificationRequest(
+            new RemoteEndpoint("fixture.invalid", 22, "fixture"),
+            new KnownHostIdentity("fixture.invalid", 22),
+            selectedKey,
+            TimeSpan.FromMinutes(1));
+        var workflow = new KeyAuthenticationVerificationWorkflow(new SeparateKeyAuthFactory(), barrier);
+        using var cancellation = new CancellationTokenSource();
+        var action = session.RunOperationForSessionAsync(
+            "ssh_key_auth_verify",
+            TimeSpan.FromMinutes(1),
+            async (_, token) => (await workflow.VerifyAsync(request, token)).Result,
+            session.Snapshot.SessionId!,
+            cancellation.Token);
+        try
+        {
+            await barrier.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+        }
+
+        return (await action.WaitAsync(TimeSpan.FromSeconds(5)), barrier);
     }
 
     private sealed class CompletionBarrier : IDiagnosticSink
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
         public bool DeploymentSuccessObserved { get; private set; }
-        public string? DeploymentSuccessOperationId { get; private set; }
+        public bool KeyAuthenticationSuccessObserved { get; private set; }
         public async Task PauseAsync()
         {
             Entered.TrySetResult();
@@ -147,10 +205,16 @@ public sealed class SshSessionCompletionRegressionTests
         }
         public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
         {
+            Events.Add(entry);
             if (entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded)
             {
                 DeploymentSuccessObserved = true;
-                DeploymentSuccessOperationId = entry.Correlation.OperationId;
+                return PauseAsync();
+            }
+
+            if (entry.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded)
+            {
+                KeyAuthenticationSuccessObserved = true;
                 return PauseAsync();
             }
 
@@ -185,6 +249,32 @@ public sealed class SshSessionCompletionRegressionTests
             return Task.FromResult(new RemoteCommandResult(0, text, string.Empty, TimeSpan.Zero, command.OutputCapturePolicy));
         }
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) => throw new InvalidOperationException("Unexpected generic command.");
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class SeparateKeyAuthFactory : IRemoteTransportFactory
+    {
+        public IRemoteTransport Create() => new SeparateKeyAuthTransport();
+    }
+
+    private sealed class SeparateKeyAuthTransport : IKeyAuthenticationSshTransport
+    {
+        public KnownHostTrustAssessment? LastHostTrustAssessment { get; } =
+            new(KnownHostTrustState.Matching, challenge: null, recoveredCorruptStore: false);
+
+        public Task ConnectWithPrivateKeyAsync(RemoteEndpoint endpoint, KnownHostIdentity trustedHost, ExistingSshKeyLocation privateKey, TimeSpan timeout, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            if (command.Id.Value != RemoteCommandCatalog.SshConnectionTest)
+            {
+                throw new InvalidOperationException("Unknown fixture command.");
+            }
+
+            return Task.FromResult(new RemoteCommandResult(0, string.Empty, string.Empty, TimeSpan.Zero, command.OutputCapturePolicy));
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
