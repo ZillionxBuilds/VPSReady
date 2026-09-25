@@ -79,7 +79,9 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
     private readonly SemaphoreSlim testGate = new(1, 1);
     private readonly object cancellationLock = new();
     private CancellationTokenSource? activeTestCancellation;
+    private CancellationTokenSource? activeTrustReviewCancellation;
     private KnownHostTrustChallenge? pendingTrustChallenge;
+    private long trustReviewRevision;
     private bool disposed;
 
     public ConnectionSessionLifecycle(
@@ -96,14 +98,23 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
 
     public event EventHandler<ConnectionTestProgress>? ProgressChanged;
 
-    public HostTrustReview? PendingHostTrustReview => pendingTrustChallenge is { } challenge
-        ? new HostTrustReview(
-            challenge.Identity.Host,
-            challenge.Identity.Port,
-            challenge.ObservedFingerprint.Algorithm,
-            challenge.ObservedFingerprint.Value,
-            challenge.State == KnownHostTrustState.Changed)
-        : null;
+    public HostTrustReview? PendingHostTrustReview
+    {
+        get
+        {
+            lock (cancellationLock)
+            {
+                return pendingTrustChallenge is { } challenge
+                    ? new HostTrustReview(
+                        challenge.Identity.Host,
+                        challenge.Identity.Port,
+                        challenge.ObservedFingerprint.Algorithm,
+                        challenge.ObservedFingerprint.Value,
+                        challenge.State == KnownHostTrustState.Changed)
+                    : null;
+            }
+        }
+    }
 
     public async Task<ConnectionTestResult> TestConnectionAsync(
         ValidatedConnectionInput input,
@@ -123,7 +134,12 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
 
         IRemoteTransport? candidate = null;
         var sensitiveReferenceTransferred = false;
-        pendingTrustChallenge = null;
+        long reviewRevision;
+        lock (cancellationLock)
+        {
+            pendingTrustChallenge = null;
+            reviewRevision = ++trustReviewRevision;
+        }
         using var timeoutCancellation = new CancellationTokenSource(input.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -214,7 +230,16 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         }
         catch (RemoteTransportException exception)
         {
-            CapturePendingTrustChallenge(candidate, exception.Kind);
+            if (linkedCancellation.IsCancellationRequested)
+            {
+                var interrupted = timeoutCancellation.IsCancellationRequested
+                    ? OperationResult.Failure(correlation.OperationId, OperationErrorCode.Timeout, OperationState.Unknown)
+                    : OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown);
+                await ReportTerminalAsync(correlation, interrupted, CancellationToken.None).ConfigureAwait(false);
+                return new ConnectionTestResult(correlation.OperationId, interrupted, false);
+            }
+
+            CapturePendingTrustChallenge(candidate, exception.Kind, reviewRevision, linkedCancellation.Token);
             var failed = OperationResult.Failure(correlation.OperationId, ToOperationError(exception.Kind), OperationState.Unknown);
             await ReportTerminalAsync(correlation, failed, CancellationToken.None).ConfigureAwait(false);
             return new ConnectionTestResult(correlation.OperationId, failed, false);
@@ -246,13 +271,39 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
     {
         ThrowIfDisposed();
         CancellationTokenSource? active;
+        CancellationTokenSource? review;
         lock (cancellationLock)
         {
             active = activeTestCancellation;
+            review = activeTrustReviewCancellation;
+            pendingTrustChallenge = null;
+            trustReviewRevision++;
         }
 
-        active?.Cancel();
-        await session.DisconnectAsync().ConfigureAwait(false);
+        try
+        {
+            active?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The test completed between taking its cancellation reference and cancelling it.
+        }
+        finally
+        {
+            try
+            {
+                review?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The review completed between taking its cancellation reference and cancelling it.
+            }
+            finally
+            {
+                // Removing the shared snapshot must not depend on either cancellation path.
+                await session.DisconnectAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     public Task<OperationResult> AcceptPendingUnknownHostKeyAsync(CancellationToken cancellationToken = default) =>
@@ -274,9 +325,17 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
             return busy;
         }
 
+        using var reviewCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
-            var challenge = pendingTrustChallenge;
+            KnownHostTrustChallenge? challenge;
+            long reviewRevision;
+            lock (cancellationLock)
+            {
+                challenge = pendingTrustChallenge;
+                reviewRevision = trustReviewRevision;
+                activeTrustReviewCancellation = reviewCancellation;
+            }
             if (challenge is null || challenge.State != requiredState || trustStore is null)
             {
                 var unavailable = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unchanged);
@@ -294,8 +353,8 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                 action: "ReviewHostTrust").ConfigureAwait(false);
 
             var assessment = requiredState == KnownHostTrustState.Unknown
-                ? await trustStore.AcceptUnknownAsync(challenge, cancellationToken).ConfigureAwait(false)
-                : await trustStore.ReplaceChangedAsync(challenge, cancellationToken).ConfigureAwait(false);
+                ? await trustStore.AcceptUnknownAsync(challenge, reviewCancellation.Token).ConfigureAwait(false)
+                : await trustStore.ReplaceChangedAsync(challenge, reviewCancellation.Token).ConfigureAwait(false);
             if (!assessment.IsTrusted)
             {
                 var rejected = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unchanged);
@@ -303,7 +362,25 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                 return rejected;
             }
 
-            pendingTrustChallenge = null;
+            bool stillCurrent;
+            lock (cancellationLock)
+            {
+                stillCurrent = !reviewCancellation.IsCancellationRequested
+                    && reviewRevision == trustReviewRevision
+                    && ReferenceEquals(challenge, pendingTrustChallenge);
+                if (stillCurrent)
+                {
+                    pendingTrustChallenge = null;
+                    trustReviewRevision++;
+                }
+            }
+
+            if (!stillCurrent)
+            {
+                var stale = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unknown);
+                await ReportTerminalAsync(correlation, stale, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
+                return stale;
+            }
             var accepted = OperationResult.Success(correlation.OperationId, OperationState.Applied);
             await ReportTerminalAsync(correlation, accepted, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
             return accepted;
@@ -316,7 +393,11 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         }
         catch (InvalidOperationException)
         {
-            pendingTrustChallenge = null;
+            lock (cancellationLock)
+            {
+                pendingTrustChallenge = null;
+                trustReviewRevision++;
+            }
             var stale = OperationResult.Failure(correlation.OperationId, OperationErrorCode.HostTrust, OperationState.Unchanged);
             await ReportTerminalAsync(correlation, stale, CancellationToken.None, "ReviewHostTrust").ConfigureAwait(false);
             return stale;
@@ -329,6 +410,13 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         }
         finally
         {
+            lock (cancellationLock)
+            {
+                if (ReferenceEquals(activeTrustReviewCancellation, reviewCancellation))
+                {
+                    activeTrustReviewCancellation = null;
+                }
+            }
             testGate.Release();
         }
     }
@@ -470,13 +558,23 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
     private void Publish(string operationId, ConnectionTestProgressState state, OperationErrorCode? errorCode = null) =>
         ProgressChanged?.Invoke(this, new ConnectionTestProgress(operationId, state, errorCode?.ToStableCode()));
 
-    private void CapturePendingTrustChallenge(IRemoteTransport? candidate, RemoteTransportFailureKind failure)
+    private void CapturePendingTrustChallenge(
+        IRemoteTransport? candidate,
+        RemoteTransportFailureKind failure,
+        long reviewRevision,
+        CancellationToken cancellationToken)
     {
         if (failure == RemoteTransportFailureKind.HostTrust
             && candidate is IPasswordSshTransport { LastHostTrustAssessment.Challenge: { } challenge }
             && challenge.State is KnownHostTrustState.Unknown or KnownHostTrustState.Changed)
         {
-            pendingTrustChallenge = challenge;
+            lock (cancellationLock)
+            {
+                if (reviewRevision == trustReviewRevision && !cancellationToken.IsCancellationRequested)
+                {
+                    pendingTrustChallenge = challenge;
+                }
+            }
         }
     }
 
@@ -521,14 +619,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
             return;
         }
 
-        CancellationTokenSource? active;
-        lock (cancellationLock)
-        {
-            active = activeTestCancellation;
-        }
-
-        active?.Cancel();
-        await session.DisconnectAsync().ConfigureAwait(false);
+        await DisconnectAsync().ConfigureAwait(false);
         disposed = true;
         testGate.Dispose();
     }

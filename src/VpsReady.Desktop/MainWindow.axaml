@@ -221,15 +221,15 @@
               <TextBlock Classes="section-title" Text="Connection &amp; overview" />
               <TextBlock Classes="muted" Text="Start with a verified SSH session. Unknown host keys always need your review." />
               <TextBlock FontWeight="SemiBold" Text="Host or IP address" />
-              <TextBox x:Name="ConnectionHost" Watermark="example.com or 203.0.113.10" AutomationProperties.Name="Host or IP address" />
+              <TextBox x:Name="ConnectionHost" Watermark="example.com or 203.0.113.10" AutomationProperties.Name="Host or IP address" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
               <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                 <StackPanel Spacing="6">
                   <TextBlock FontWeight="SemiBold" Text="SSH port" />
-                  <TextBox x:Name="ConnectionPort" Watermark="22" AutomationProperties.Name="SSH port" />
+                  <TextBox x:Name="ConnectionPort" Watermark="22" AutomationProperties.Name="SSH port" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Spacing="6">
                   <TextBlock FontWeight="SemiBold" Text="Username" />
-                  <TextBox x:Name="ConnectionUser" Watermark="Your SSH user" AutomationProperties.Name="Username" />
+                  <TextBox x:Name="ConnectionUser" Watermark="Your SSH user" AutomationProperties.Name="Username" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                 </StackPanel>
               </Grid>
               <TextBlock FontWeight="SemiBold" Text="Password" />
@@ -277,7 +277,7 @@
               <WrapPanel ItemSpacing="8" LineSpacing="8">
                 <Button Command="{Binding ConnectionOverview.RefreshCommand}" IsEnabled="{Binding ConnectionOverview.CanRefresh}" Content="Refresh server facts" />
                 <Button Command="{Binding ConnectionOverview.CancelRefreshCommand}" IsEnabled="{Binding ConnectionOverview.IsRefreshing}" Content="Cancel refresh" />
-                <Button Command="{Binding ConnectionOverview.DisconnectCommand}" Content="Disconnect" />
+                <Button Command="{Binding ConnectionOverview.DisconnectCommand}" IsEnabled="{Binding ConnectionOverview.HasConnectedSession}" Content="Disconnect" />
               </WrapPanel>
               <TextBlock Text="Use Activity &amp; Diagnostics to Copy Safe Issue Report; credentials, raw host data and raw command output are never shown there." TextWrapping="Wrap" />
             </StackPanel>
