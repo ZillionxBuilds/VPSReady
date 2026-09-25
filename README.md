@@ -88,6 +88,35 @@ Building and opening the disconnected application need no VPS credentials.
 The production UI is not a simulated-server sandbox: connecting to a real
 server is a separate, gated activity.
 
+### Build a local executable for your OS
+
+The Bash scripts publish a **self-contained, unsigned local build** for the
+machine's architecture (`x64` or `arm64`). They require the SDK from
+`global.json`; Windows also requires Git Bash (run the commands in Git Bash,
+not Command Prompt). Run the script on its named OS:
+
+| Host | Command | Executable in the printed output directory |
+| --- | --- | --- |
+| Windows (Git Bash) | `./eng/build-windows.sh` | `VpsReady.Desktop.exe` |
+| macOS | `./eng/build-macos.sh` | `VpsReady.Desktop` |
+| Linux | `./eng/build-linux.sh` | `VpsReady.Desktop` |
+
+To choose the other architecture of the **same OS**, append `--arch x64` or
+`--arch arm64`, for example `./eng/build-macos.sh --arch x64`. Each invocation
+creates a new ignored `artifacts/local-build/<rid>.*` directory, so an old
+publish cannot be mistaken for the new output. Launch the executable from that
+directory (`./VpsReady.Desktop` on macOS/Linux, or
+`./VpsReady.Desktop.exe` in Windows Git Bash). Copy the **whole directory**
+when moving the app; the executable is not a single-file bundle. A Windows
+build is not runnable on macOS/Linux or vice versa.
+
+These scripts do not sign, notarize, checksum, package, or certify a candidate.
+macOS Gatekeeper and Windows SmartScreen may warn about unsigned software;
+Linux may require desktop-system libraries. Building an architecture other
+than the host's does not prove it starts there. Follow the separate candidate
+packaging/evidence process for release review, and do not interpret a local
+build as real-VPS validation.
+
 ### Run local checks
 
 After the Release build:
