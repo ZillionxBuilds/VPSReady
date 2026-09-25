@@ -4,9 +4,10 @@ This is the living audit for [issue #15](https://github.com/ZillionxBuilds/VPSRe
 It is **not** release approval or an Owner VPS test result. Product baseline:
 `origin/release/0.1.0` at `9965c5bcdb445947d6bd593344fbade62d9c55a4`
 (2026-09-25). The newer [UI PR #14](https://github.com/ZillionxBuilds/VPSReady/pull/14),
-[key-naming PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17), and
-[connection/Activity PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19), and
-[Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21)
+[key-naming PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17),
+[connection/Activity PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19),
+[Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21), and
+[key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23)
 are separate, unmerged changes. No result below proves their combined tree.
 
 ## Verdicts and exact baseline
@@ -42,7 +43,7 @@ acceptance criterion is checked against an exact candidate.
 | F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Recheck active SSH port and family-specific guardrails, stale selection, post-apply verification and recovery against current source; Owner Stage 3 NOT RUN. |
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming, collision/cancellation regressions and local OpenSSH interoperability are in unmerged PR #17; review and exact-candidate integration pending. Owner Stage 4 NOT RUN. |
-| F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found the separate-login verifier can emit Succeeded then Cancelled for one operation ID if cancellation lands during the terminal journal write ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)); focused correction pending. Contained protocol and Owner Stage 4 NOT RUN here. |
+| F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Recheck stale plan, privilege, apt locks, late cancellation, reboot reconnect and verified completion criterion by criterion; Owner Stage 5 NOT RUN. |
 | F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Native review found production journal writes rejected because bare `0.1.0.0` version resembled an IPv4 identifier to fail-closed redaction; safe version metadata and isolated production regression are in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19). Recheck disconnected Stage 0 report/bundle, privacy, retention and startup failure on exact candidate; Owner Stage 2/6 NOT RUN. |
@@ -83,7 +84,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19 and #21 independently, then validate their integration on an
+- Review PR #14, #17, #19, #21 and #23 independently, then validate their integration on an
   exact candidate. Do not self-merge to release/main or infer visual acceptance.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
@@ -91,6 +92,9 @@ tracks the separate E5 gate.
 - Obtain independent review of [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21)
   for F03 terminal-event consistency. Its local cancellation race proof is not
   an exact combined-candidate or Owner result.
+- Obtain independent review of [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23)
+  for F06 separate key-auth terminal consistency. Its local synthetic-key
+  evidence is not contained SSH protocol or Owner E5 proof.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
