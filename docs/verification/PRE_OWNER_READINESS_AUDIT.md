@@ -33,11 +33,32 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [authorized-key fixture PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76),
 [UFW malformed-CIDR PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78),
 [stored SSH-port PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80),
-[typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82), and
-[reboot-required cancellation PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84)
+[typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82),
+[reboot-required cancellation PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84), and
+[root-disk byte-evidence PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
+
+### F03 contradictory root-disk bytes — 2026-09-25 22:47 UTC
+
+Exact release E1 was RED: the root-disk parser treated synthetic
+`SIZE=10, USED=6, AVAIL=5` as Known, despite the contradictory byte
+total, and accepted a signed-long overflow edge. Focused
+[issue #85](https://github.com/ZillionxBuilds/VPSReady/issues/85) and
+draft [PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86) at
+`32408ad2d64b4f4fed27c79c203d2badf5b6fa3e` reject
+`used > size - available` after existing bounds checks, leaving only the
+disk field Unknown. Parser E1, application-facing Overview E1 and
+`c206-disk-overcommit` stateful E2 regressions are GREEN. On the isolated
+head, E0 locked restore/Release `-warnaserror` build/format/policy guards
+passed; E1 was **611 PASS/2 SKIP** and E2 **174 PASS/3 SKIP**. E3 was
+**NOT RUN** for this offline parser change. Local unsigned osx-arm64 E4
+publish, embedded SHA, artifact-safety and bounded process startup passed;
+interactive UI, native Windows/Linux, hosted checks and independent QA are
+**NOT VERIFIED**. A local merge-tree check against the unapproved pending
+composite showed no textual conflict but did not test that merged tree.
+The correction is not in release. **REAL VPS: NOT TESTED.**
 
 ### Owner navigation-hover report — 2026-09-25 22:27 UTC
 
@@ -1113,7 +1134,7 @@ or absence of leaks on the Owner's machine.
 | F02 AC7–10 secret/session identity boundaries | `ConnectionSecretInput`, `ConnectionSessionLifecycleTests`, `KnownHostTrustStoreTests` and scenario tests cover clear-on-use, non-persistence, session reuse/invalidation and explicit trust decisions. | Release does not invalidate the previously verified session or stale trust decision on identity edit/invalid resubmission; unmerged PR #44 adds focused E1/E2 correction. Owner credential handling and connection reuse on an actual server NOT RUN. |
 | F02 AC11 evidence boundary | E1/E2 are represented above; baseline E3 remains declared SKIP. | Owner Stage 1 E5 NOT TESTED. |
 | F03 AC1–3 actual fields/Ubuntu parsing | `ServerOverviewReader`, Ubuntu fact catalog/parsers and `OverviewJourneyRegressionTests`, `UbuntuServerFactParserTests`, fact catalog/parser scenarios cover 12 visible facts, read-only command IDs, approved fixtures and units. | Real Ubuntu variation and local-host UI field walkthrough NOT RUN on exact candidate. |
-| F03 AC4–6 partial/untrusted/bounded inspection | `UbuntuServerFactAggregator` and parser scenario fault injection retain good fields while bad ones become Unknown; catalog capture policy bounds remote output. Exact-release contradictory/prefixed UFW status, duplicate CPU/memory data, mixed/unsafe CPU-model and malformed uptime evidence were RED E1; unmerged PR #68/#70/#72/#74 add parser and production Overview regressions. | These PRs are not integrated; #70/#72/#74 require reviewed conflict resolution. Actual partial remote output and unsupported distro behavior remain Owner Stage 1 work. |
+| F03 AC4–6 partial/untrusted/bounded inspection | `UbuntuServerFactAggregator` and parser scenario fault injection retain good fields while bad ones become Unknown; catalog capture policy bounds remote output. Exact-release contradictory/prefixed UFW status, duplicate CPU/memory data, mixed/unsafe CPU-model, malformed uptime and contradictory root-disk bytes were RED E1; unmerged PR #68/#70/#72/#74/#86 add parser and application-facing Overview regressions. | These PRs are not integrated; #70/#72/#74 require reviewed conflict resolution. Actual partial remote output and unsupported distro behavior remain Owner Stage 1 work. |
 | F03 AC7 correlated refresh | `ConnectionOverviewViewModel` and `ServerOverviewReader` use operation IDs and diagnostic events; `OverviewJourneyRegressionTests` cover late cancellation/session replacement. | Current release has a terminal success/cancel race; unmerged PR #21 corrects it. Combined Activity/journal and Owner E5 NOT RUN. |
 
 ### F04 criterion walk on the release source
@@ -1273,6 +1294,11 @@ tracks the separate E5 gate.
   correlated single-terminal E2 case alongside package-plan PR #42; local
   composite 879/214 E1/E2 is compatibility evidence, not release or real
   reboot approval.
+- Obtain independent review of [PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86)
+  for contradictory root-disk exact-byte evidence, overflow-safe rejection
+  and preservation of the other Overview fields. The isolated E0/E1/E2/E4 local
+  checks and conflict-free merge-tree probe are not an approved integrated
+  candidate or Owner Stage 1 proof.
 - Obtain independent same-class review of [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44)
   for identity-edit session invalidation, stale/in-flight host-trust refusal
   and interaction with #14/#19. Its isolated and local-composite passes are
