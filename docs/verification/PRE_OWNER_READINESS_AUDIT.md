@@ -18,8 +18,9 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [environment metadata PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40),
 [package-plan cancellation PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42),
 [connection-identity PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44),
-[key-transaction PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46), and
-[public-key deployment PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48)
+[key-transaction PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46),
+[public-key deployment PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48), and
+[selected-identity path PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -55,11 +56,47 @@ The artifact safety scan passed. The local process remained running during a
 bounded startup observation and was intentionally stopped with Ctrl-C; this
 is **startup smoke only**, not interactive visual/resize proof or a clean-exit
 claim. The ignored temporary publish is not an approved or retained Owner
-package. Docker daemon was unavailable on this Mac, so E3 was **NOT RUN on
-this head**. Windows/Linux native and hosted E0–E4, independent review/QA,
+package. Docker daemon was unavailable at this checkpoint; E3 was run later
+on this exact head as recorded below. Windows/Linux native and hosted E0–E4,
+independent review/QA,
 official exact-candidate packaging, and Owner Stage 0–6 remain **NOT RUN or
 UNVERIFIED** as applicable. Self-review is not independent QA. **REAL VPS:
 NOT TESTED.**
+
+### Later exact-head E3 and F07 correction preflight — 2026-09-26 UTC
+
+Docker Desktop became available and the unchanged local-contained E3 script
+passed on the earlier exact `0bd4223` composite: 2/2 production SSH.NET and
+generated-key interoperability tests, plus loopback host-key refusal/match,
+wrong-password, command-result and timeout checks. The retained sanitized TRX
+SHA-256 is `e47e8d6e362ecf6e1585430b31984e797823c436daf9e3cf598478eb1bd8b876`.
+This is local protocol evidence, not a hosted check or real VPS test.
+
+Exact release source also reproduced a distinct F07 AC5 false-success defect:
+on POSIX, a selected filename containing a literal backslash was silently
+rewritten to a different path; OpenSSH token/environment syntax in a selected
+literal filename could also retarget it. Focused [issue #55](https://github.com/ZillionxBuilds/VPSReady/issues/55)
+and draft [PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56) at
+`67a32513c1462b85311f27dd2940acf400fc5fb5` reject unsupported syntax
+before a config write while preserving ordinary paths and Windows separator
+handling. Exact-release E1 reproductions were RED 0/3; source-head E0 passed,
+E1 614 PASS/2 SKIP (editor 26/26, accepted local `ssh -G` 3/3), E2 175
+PASS/3 SKIP and unsigned macOS arm64 E4 publish/startup smoke passed. E3 on
+the isolated #56 head was **NOT RUN**.
+
+A separate, unpushed developer-only composite `9af5c313ea4705469caa2a848325cc01d1999eb7`
+adds #56 over `0bd4223`, including its interaction with #27, without a
+cherry-pick conflict. Exact composite E0 locked restore, Release
+`-warnaserror` build (0 warnings/errors), format, packaging/CI policy,
+ignore/tracked-secret and diff checks PASS; E1 807 PASS/2 SKIP; E2 209
+PASS/3 SKIP. Disposable Ubuntu ARM64 Docker loopback E3 2 PASS/0 FAIL/0
+SKIP plus negative protocol checks passed; sanitized retained TRX SHA-256 is
+`f045696f090bea77db1d1e18d59a5158a0839f7f71785c729bd2c33eac10772f`.
+Unsigned macOS arm64 E4 self-contained publish/Mach-O/embedded exact SHA and
+artifact scan passed; the process stayed live during bounded smoke and was
+intentionally stopped. Interactive UI, clean exit, hosted checks, native
+Windows/Linux, independent QA and an approved integrated candidate remain
+**NOT VERIFIED**. No release/main merge. **REAL VPS: NOT TESTED.**
 
 ## Verdicts and exact baseline
 
@@ -585,7 +622,7 @@ and post-terminal consistency need review on the exact combined source.
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Exact release drops a numbered port-range listing; focused E1/E2 correction is in unmerged [PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34) ([#33](https://github.com/ZillionxBuilds/VPSReady/issues/33)). Exact release also allows pre-terminal cancellation to return success in five F04 paths; RED-to-GREEN E1 correction is in unmerged [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52) ([#51](https://github.com/ZillionxBuilds/VPSReady/issues/51)). The local-only #34/#52 composite passed E0/E1/E2, not external QA. Separate outer-session mismatch was RED on release; unmerged stacked [PR #54](https://github.com/ZillionxBuilds/VPSReady/pull/54) ([#53](https://github.com/ZillionxBuilds/VPSReady/issues/53)) has isolated E0/E1/E2/E4 and local #50/#54/#52 interaction evidence, not independent approval. Recheck active SSH protection, stale selection, verification and recovery on an approved integrated candidate; Owner Stage 3 NOT RUN. |
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. A valid interrupted transaction for another name blocks generation on release; unmerged [PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46) ([#45](https://github.com/ZillionxBuilds/VPSReady/issues/45)) corrects this with RED-to-GREEN E2. Developer-composite smoke is not approved-candidate proof; Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Release can report deployment success after Verify-diagnostic cancellation; focused E1/E2 correction is in unmerged [PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48) ([#47](https://github.com/ZillionxBuilds/VPSReady/issues/47)). Separate post-terminal outcome and displayed-ID/diagnostic-ID mismatches are RED on release; unmerged [PR #50](https://github.com/ZillionxBuilds/VPSReady/pull/50) ([#49](https://github.com/ZillionxBuilds/VPSReady/issues/49)) carries a local-only correction. Separate-login terminal inconsistency is corrected in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 on an approved candidate remain NOT RUN. |
-| F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
+| F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Exact release can also silently retarget a selected literal path containing a POSIX backslash or OpenSSH expansion syntax; unmerged [PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56) ([#55](https://github.com/ZillionxBuilds/VPSReady/issues/55)) adds fail-closed E1/E2 and local `ssh -G` regressions. Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). It also produces contradictory package-plan Succeeded/Cancelled terminal records on late cancellation; focused E1 correction is in unmerged [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42) ([#41](https://github.com/ZillionxBuilds/VPSReady/issues/41)). Recheck privilege, apt locks, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
 | F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). Dictionary-reversible and repeatedly rehashed host/user pseudonyms are corrected in unmerged [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38); raw replacement-only environment metadata in unmerged [PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40). Developer-only #19/#38/#40 F09 interaction checks passed locally, but independent review and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
@@ -629,7 +666,7 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | F06 AC6–9 separate key login and unchanged password access | `KeyAuthenticationVerificationWorkflowTests` and scenarios require a separate trusted candidate and minimum command; failed verification does not authorize password-access changes. | Current release has a terminal success/cancel race; unmerged PR #23 corrects it. Contained OpenSSH and Owner separate-login proof NOT RUN here. |
 | F06 AC10 evidence boundary | Stateful deployment/verification faults run in E2; production transport has no successful contained `sshd` run in this baseline audit. | Owner Stage 4 E5 NOT TESTED. |
 | F07 AC1–3/8 create, preserve and collision/no-change | `OpenSshConfigEditorTests` and scenarios cover absent file, unrelated text/line endings, explicit collision, idempotence and no write on invalid config. | Current release can falsely report Unchanged with an extra effective key; unmerged PR #27 corrects it. |
-| F07 AC4–5 wildcard semantics and selected key path | Editor parses exact/wildcard/negated Host blocks and validates an absolute selected identity path; local `ssh -G` confirmed `IdentityFile` is additive. | Include/Match are intentionally refused. External/system-wide OpenSSH config, platform behavior and Owner alias login NOT RUN. |
+| F07 AC4–5 wildcard semantics and selected key path | Editor parses exact/wildcard/negated Host blocks and validates an absolute selected identity path; local `ssh -G` confirmed `IdentityFile` is additive. Exact-release E1 proved literal POSIX backslash and OpenSSH expansion syntax can silently retarget the selected path; draft PR #56 refuses unsupported syntax before write and verifies ordinary accepted names with local `ssh -G`. | #27 and #56 remain unmerged. Include/Match are intentionally refused. External/system-wide OpenSSH config, native Windows/Linux behavior and Owner alias login NOT RUN. |
 | F07 AC6–7/9 backup, permissions, safe summary | `OpenSshConfigEditorTests` and scenarios cover atomic backup, post-commit recovery, restricted modes and fixed safe diagnostic messages without local path/config text. | Native Windows/Linux file semantics and Owner Stage 4 review NOT RUN. |
 
 ### F08 criterion walk on the release source
@@ -703,6 +740,10 @@ tracks the separate E5 gate.
   for F07 additive `IdentityFile` semantics. Local OpenSSH `ssh -G` confirms
   the false no-change source gap, but exact combined-candidate and Owner proof
   remain separate.
+- Obtain independent same-class review of [PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56)
+  for F07 selected literal path preservation, refusal of unsupported OpenSSH
+  expansion syntax and Windows/macOS/Linux path semantics. Local composite
+  compatibility with #27 is not an approved integration or Owner alias test.
 - Obtain independent privacy review of [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38)
   for keyed host/user pseudonyms and authenticated nested-redaction tokens.
   Its isolated local E1 and macOS publish do not establish a reviewed or
