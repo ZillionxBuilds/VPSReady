@@ -11,6 +11,146 @@ namespace VpsReady.ScenarioTests;
 public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
 {
     [Fact]
+    public async Task RangeRemovalIsFamilyBoundAndVerifiedAgainstFreshState()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.range-family-bound");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-v4", ScenarioRuleProtocol.Udp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-v6", ScenarioRuleProtocol.Udp, 1000, "Anywhere", ScenarioIpFamily.Ipv6, EndPort: 2000));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 1000, ScenarioIpFamily.Ipv4);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.DoesNotContain(state.Ufw.Rules, rule => rule.RuleId == "range-v4");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "range-v6");
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded && item.Phase != DiagnosticPhase.Verify);
+    }
+
+    [Fact]
+    public async Task ConcurrentRangeReorderDeletesOnlyExactIntervalNotDisplayNumber()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.range-apply-reorder");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-target", ScenarioRuleProtocol.Tcp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-other", ScenarioRuleProtocol.Tcp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2001));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 1000, ScenarioIpFamily.Ipv4);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(new MutatingBeforeApplyTransport(host, () => state.Ufw.Rules.Reverse()), new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.True(result.Result.Succeeded);
+        Assert.DoesNotContain(state.Ufw.Rules, rule => rule.RuleId == "range-target");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "range-other");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v4");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v6");
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded && item.Phase != DiagnosticPhase.Verify);
+    }
+
+    [Fact]
+    public async Task ChangedRangeEndpointMakesSelectionStaleWithoutDeletingEitherRule()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.range-stale-endpoint");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-target", ScenarioRuleProtocol.Tcp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 1000, ScenarioIpFamily.Ipv4);
+        state.Ufw.Rules[^1] = state.Ufw.Rules[^1] with { EndPort = 2001 };
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.True(result.IsStale);
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "range-target" && rule.EndPort == 2001);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task DuplicateSemanticRangesFailClosedBeforeMutation()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.range-duplicate");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-first", ScenarioRuleProtocol.Tcp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-second", ScenarioRuleProtocol.Tcp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 1000, ScenarioIpFamily.Ipv4);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(2, state.Ufw.Rules.Count(rule => rule.Port == 1000 && rule.EndPort == 2000));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Theory]
+    [InlineData(ScenarioIpFamily.Ipv4)]
+    [InlineData(ScenarioIpFamily.Ipv6)]
+    public async Task TcpRangeContainingActiveSshPortIsNeverRemoved(ScenarioIpFamily family)
+    {
+        var state = ScenarioHostState.CreateDefault($"scenario.f04.range-ssh-{family.ToString().ToLowerInvariant()}");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-ssh", ScenarioRuleProtocol.Tcp, 21, "Anywhere", family, EndPort: 23));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 21, family);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.True(result.IsActiveSshProtected);
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "range-ssh");
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task RangeVerifyFaultReportsRecoveryButNeverFalseSuccess()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.range-verify-fault");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-target", ScenarioRuleProtocol.Udp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        var faults = new ScenarioFaultPlan();
+        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.MalformedOutput, "f04-range-verify-malformed", RemoteCommandCatalog.UbuntuUfwRuleListRead);
+        var host = new DeterministicScenarioHost(state, faults);
+        var selected = await SelectionAsync(host, 1000, ScenarioIpFamily.Ipv4);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.DoesNotContain(state.Ufw.Rules, rule => rule.RuleId == "range-target");
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancelledRangeRemovalDoesNotReachMutation()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.range-cancel");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("range-target", ScenarioRuleProtocol.Udp, 1000, "Anywhere", ScenarioIpFamily.Ipv4, EndPort: 2000));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 1000, ScenarioIpFamily.Ipv4);
+        var before = state.Ufw.Rules.ToArray();
+        var (workflow, diagnostics) = CreateWorkflow();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var result = await workflow.RemoveAsync(new PhasedScenarioTransport(host), new UfwRuleRemovalIntent(selected, Confirmed: true), cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(before, state.Ufw.Rules);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task MutableHostRemovesOnlyFreshConfirmedNonSshRuleThenVerifies()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c304.remove-verified");

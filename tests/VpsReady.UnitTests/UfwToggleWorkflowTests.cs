@@ -131,6 +131,20 @@ public sealed class UfwToggleWorkflowTests
     }
 
     [Fact]
+    public async Task RangeStartingAtSshPortDoesNotCountAsExactReachabilityRule()
+    {
+        var rangeInsteadOfExact = ActiveWithSshAllows.Replace("[ 1] 22/tcp", "[ 1] 22:23/tcp", StringComparison.Ordinal);
+        var transport = new RecordingTransport(Result("22"), Result(rangeInsteadOfExact), Result(StoredSshAllows));
+
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+    }
+
+    [Fact]
     public async Task AlreadyActiveSafeFirewallVerifiesAuthenticatedContinuityBeforeIdempotentSuccess()
     {
         var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(StoredSshAllows), Result(string.Empty));

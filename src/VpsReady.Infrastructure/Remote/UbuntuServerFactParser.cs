@@ -22,7 +22,7 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
-    private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})(?::(?<endPort>[1-9][0-9]{0,4}))?/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwPartialRule = new("^\\[\\s*[0-9]+(?:\\]|$)", RegexOptions.CultureInvariant);
     private const int MaximumUfwRuleRows = 512;
 
@@ -319,11 +319,22 @@ public static partial class UbuntuServerFactParser
             return (null, UfwPartialRule.IsMatch(line) ? UfwRuleListReadStatus.Partial : UfwRuleListReadStatus.Malformed);
         }
 
+        var hasEndPort = match.Groups["endPort"].Success;
         if (!int.TryParse(match.Groups["number"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
             || !int.TryParse(match.Groups["port"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
             || port is < 1 or > 65535)
         {
             return (null, UfwRuleListReadStatus.Unsupported);
+        }
+        int? endPort = null;
+        if (hasEndPort)
+        {
+            if (!int.TryParse(match.Groups["endPort"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
+                || end <= port || end > 65535)
+            {
+                return (null, UfwRuleListReadStatus.Unsupported);
+            }
+            endPort = end;
         }
 
         var protocol = match.Groups["protocol"].Value switch
@@ -364,8 +375,8 @@ public static partial class UbuntuServerFactParser
             return (null, UfwRuleListReadStatus.Unsupported);
         }
 
-        var identity = UfwRuleIdentity.Create(number, protocol.Value, port, normalizedSource, action.Value, family);
-        return (new UfwRule(identity, number, protocol.Value, port, normalizedSource, action.Value, family), UfwRuleListReadStatus.Complete);
+        var identity = UfwRuleIdentity.Create(number, protocol.Value, port, normalizedSource, action.Value, family, endPort);
+        return (new UfwRule(identity, number, protocol.Value, port, normalizedSource, action.Value, family, endPort), UfwRuleListReadStatus.Complete);
     }
 
     private static bool TryParseUfwSource(string source, UfwIpFamily family, out string normalizedSource)

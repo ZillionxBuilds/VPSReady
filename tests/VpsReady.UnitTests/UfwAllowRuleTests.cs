@@ -9,6 +9,16 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class UfwAllowRuleTests
 {
+    [Fact]
+    public void ExactAllowRequestDoesNotTreatRangeStartingAtSamePortAsExactAllow()
+    {
+        Assert.True(UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 22, "Anywhere", UfwIpFamily.Ipv4), out var request, out _));
+        var range = new UfwRule(UfwRuleIdentity.Create(1, UfwRuleProtocol.Tcp, 22, "Anywhere", UfwRuleAction.Allow, UfwIpFamily.Ipv4, 23),
+            1, UfwRuleProtocol.Tcp, 22, "Anywhere", UfwRuleAction.Allow, UfwIpFamily.Ipv4, 23);
+
+        Assert.False(request!.Matches(range));
+    }
+
     private const string ActiveWithoutTarget = """
         Status: active
 

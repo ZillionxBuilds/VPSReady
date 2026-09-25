@@ -76,7 +76,7 @@ public sealed class UfwSelectedRuleRemovalWorkflow
             // This deliberately blocks every TCP rule on the current SSH port,
             // including IPv4 and IPv6 variants and restrictive actions. A safe
             // migration flow is separate future scope; C304 never infers one.
-            if (selectedRule.Protocol == UfwRuleProtocol.Tcp && selectedRule.Port == activeSshPort)
+            if (selectedRule.Protocol == UfwRuleProtocol.Tcp && selectedRule.ContainsPort(activeSshPort))
             {
                 var protectedResult = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
                 await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, "The selected rule affects the active SSH port and cannot be removed by the normal flow.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Validation).ConfigureAwait(false);

@@ -543,8 +543,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         }
 
         var rules = State.Ufw.Rules.Select(rule => rule.Source == "Anywhere"
-            ? $"ufw {rule.Action.ToLowerInvariant()} {rule.Port.ToString(CultureInfo.InvariantCulture)}/{rule.Protocol.ToString().ToLowerInvariant()}"
-            : $"ufw {rule.Action.ToLowerInvariant()} from {rule.Source} to any port {rule.Port.ToString(CultureInfo.InvariantCulture)} proto {rule.Protocol.ToString().ToLowerInvariant()}").Distinct(StringComparer.Ordinal);
+            ? $"ufw {rule.Action.ToLowerInvariant()} {rule.PortDisplay}/{rule.Protocol.ToString().ToLowerInvariant()}"
+            : $"ufw {rule.Action.ToLowerInvariant()} from {rule.Source} to any port {rule.PortDisplay} proto {rule.Protocol.ToString().ToLowerInvariant()}").Distinct(StringComparer.Ordinal);
         return Result(string.Join(Environment.NewLine, ["Added user rules (see 'ufw status' for running firewall):", .. rules]));
     }
 
@@ -552,7 +552,8 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
     {
         if (!State.Ufw.StoredProfileSupported) { return Failure(2, "Unsupported stored policy fixture."); }
         string Rules(ScenarioIpFamily family) => string.Concat(State.Ufw.Rules.Where(rule => rule.IpFamily == family).Select(rule =>
-            $"-A {(family == ScenarioIpFamily.Ipv6 ? "ufw6" : "ufw")}-user-input -p {rule.Protocol.ToString().ToLowerInvariant()} --dport {rule.Port}"
+            $"-A {(family == ScenarioIpFamily.Ipv6 ? "ufw6" : "ufw")}-user-input -p {rule.Protocol.ToString().ToLowerInvariant()}"
+            + (rule.EndPort is null ? $" --dport {rule.Port}" : $" -m multiport --dports {rule.PortDisplay}")
             + (rule.Source == "Anywhere" ? "" : $" -s {rule.Source}") + $" -j {(rule.Action == "ALLOW" ? "ACCEPT" : "DROP")}\n"));
         return Result(VpsReady.Tests.StoredUfwFixture.Create(State.Ssh.ActiveSshPort, ipv6: State.Ufw.Ipv6Enabled,
             session6: State.Ufw.SessionIsIpv6, rules4: Rules(ScenarioIpFamily.Ipv4), rules6: Rules(ScenarioIpFamily.Ipv6)));
@@ -580,7 +581,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             .Select((rule, index) => string.Join(
                 ' ',
                 $"[{index + 1,2}]",
-                $"{rule.Port.ToString(CultureInfo.InvariantCulture)}/{rule.Protocol.ToString().ToLowerInvariant()}" + (rule.IpFamily == ScenarioIpFamily.Ipv6 ? " (v6)" : string.Empty),
+                $"{rule.PortDisplay}/{rule.Protocol.ToString().ToLowerInvariant()}" + (rule.IpFamily == ScenarioIpFamily.Ipv6 ? " (v6)" : string.Empty),
                 $"{rule.Action} IN",
                 rule.Source + (rule.IpFamily == ScenarioIpFamily.Ipv6 ? " (v6)" : string.Empty)));
         return string.Join(Environment.NewLine,
@@ -652,7 +653,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
             return Failure(4, "The selected firewall rule is stale or missing.");
         }
 
-        if (rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == State.Ssh.ActiveSshPort)
+        if (rule.Protocol == ScenarioRuleProtocol.Tcp && rule.ContainsPort(State.Ssh.ActiveSshPort))
         {
             return Failure(13, "The active SSH rule cannot be removed through the normal scenario flow.");
         }
@@ -682,8 +683,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
 
         if (!Enum.TryParse<ScenarioRuleProtocol>(GetArgument(command, "protocol"), true, out var protocol)
             || !Enum.TryParse<ScenarioIpFamily>(GetArgument(command, "family"), true, out var family)
-            || !int.TryParse(GetArgument(command, "port"), NumberStyles.None, CultureInfo.InvariantCulture, out var port)
-            || port is < 1 or > 65535
+            || !TryParsePortInterval(GetArgument(command, "port"), out var port, out var endPort)
             || !Enum.TryParse<UfwRuleAction>(GetArgument(command, "action"), true, out var action))
         {
             return Failure(2, "Firewall rule removal arguments are invalid.");
@@ -699,6 +699,7 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
         var rule = State.Ufw.Rules.FirstOrDefault(candidate =>
             candidate.Protocol == protocol
             && candidate.Port == port
+            && candidate.EndPort == endPort
             && string.Equals(candidate.Source, source, StringComparison.Ordinal)
             && candidate.IpFamily == family
             && string.Equals(candidate.Action, expectedAction, StringComparison.Ordinal));
@@ -709,6 +710,29 @@ public sealed partial class DeterministicScenarioHost : IPublicKeyDeploymentTran
 
         State.Ufw.Rules.Remove(rule);
         return Result("changed=true");
+    }
+
+    private static bool TryParsePortInterval(string? text, out int port, out int? endPort)
+    {
+        port = 0;
+        endPort = null;
+        if (string.IsNullOrEmpty(text)) { return false; }
+        var separator = text.IndexOf(':');
+        if (separator < 0)
+        {
+            return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out port) && port is >= 1 and <= 65535;
+        }
+
+        if (text.LastIndexOf(':') != separator
+            || !int.TryParse(text.AsSpan(0, separator), NumberStyles.None, CultureInfo.InvariantCulture, out port)
+            || !int.TryParse(text.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var end)
+            || port is < 1 or > 65535 || end <= port || end > 65535)
+        {
+            return false;
+        }
+
+        endPort = end;
+        return true;
     }
 
     private RemoteCommandResult EnableUfw()
