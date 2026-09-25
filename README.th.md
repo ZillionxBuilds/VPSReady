@@ -61,13 +61,13 @@ dotnet run --project src/VpsReady.Desktop/VpsReady.Desktop.csproj --configuratio
 
 | ระบบที่ใช้ build | คำสั่ง | ไฟล์สำหรับเปิดแอปในโฟลเดอร์ผลลัพธ์ |
 | --- | --- | --- |
-| Windows / Git Bash | `./eng/build-windows.sh` | `VpsReady.Desktop.exe` |
-| macOS | `./eng/build-macos.sh` | `VpsReady.Desktop` |
-| Linux | `./eng/build-linux.sh` | `VpsReady.Desktop` |
+| Windows / Git Bash | `./scripts/build/windows.sh` | `VpsReady.Desktop.exe` |
+| macOS | `./scripts/build/macos.sh` | `VpsReady.Desktop` |
+| Linux | `./scripts/build/linux.sh` | `VpsReady.Desktop` |
 
 สคริปต์เลือก `x64` หรือ `arm64` ตามเครื่องโดยอัตโนมัติ หากต้องการสถาปัตยกรรมอีกแบบ
 **ภายในระบบปฏิบัติการเดียวกัน** ให้เพิ่ม `--arch x64` หรือ `--arch arm64` เช่น
-`./eng/build-linux.sh --arch arm64` ผลลัพธ์อยู่ใน `artifacts/local-build/<rid>.*`
+`./scripts/build/linux.sh --arch arm64` ผลลัพธ์อยู่ใน `artifacts/local-build/<rid>.*`
 ซึ่งสคริปต์จะพิมพ์ path จริงออกมาและสร้างโฟลเดอร์ใหม่ทุกครั้ง เปิด
 `./VpsReady.Desktop` บน macOS/Linux หรือ `./VpsReady.Desktop.exe` ใน Git Bash
 บน Windows จากโฟลเดอร์นั้น เมื่อต้องย้ายแอปให้คัดลอก **ทั้งโฟลเดอร์**

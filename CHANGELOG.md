@@ -12,9 +12,10 @@ stable-release announcement; exact verification belongs to the linked records.
 - Refreshed the Avalonia workspace with clearer navigation, session status,
   workflow sections, form labels and differentiated high-risk actions while
   retaining existing confirmation and diagnostic behavior.
-- Added Bash local-build entrypoints for Windows, macOS and Linux (`x64` and
-  `arm64`) plus English and Thai build instructions. Local publishes are
-  self-contained and unsigned; they are not candidate packages or real-VPS proof.
+- Added Bash local-build entrypoints under `scripts/build/` for Windows,
+  macOS and Linux (`x64` and `arm64`), plus English and Thai build instructions.
+  Local publishes are self-contained and unsigned; they are not candidate
+  packages or real-VPS proof.
 
 See [issue #11](https://github.com/ZillionxBuilds/VPSReady/issues/11).
 **REAL VPS: NOT TESTED.**

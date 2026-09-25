@@ -97,12 +97,12 @@ not Command Prompt). Run the script on its named OS:
 
 | Host | Command | Executable in the printed output directory |
 | --- | --- | --- |
-| Windows (Git Bash) | `./eng/build-windows.sh` | `VpsReady.Desktop.exe` |
-| macOS | `./eng/build-macos.sh` | `VpsReady.Desktop` |
-| Linux | `./eng/build-linux.sh` | `VpsReady.Desktop` |
+| Windows (Git Bash) | `./scripts/build/windows.sh` | `VpsReady.Desktop.exe` |
+| macOS | `./scripts/build/macos.sh` | `VpsReady.Desktop` |
+| Linux | `./scripts/build/linux.sh` | `VpsReady.Desktop` |
 
 To choose the other architecture of the **same OS**, append `--arch x64` or
-`--arch arm64`, for example `./eng/build-macos.sh --arch x64`. Each invocation
+`--arch arm64`, for example `./scripts/build/macos.sh --arch x64`. Each invocation
 creates a new ignored `artifacts/local-build/<rid>.*` directory, so an old
 publish cannot be mistaken for the new output. Launch the executable from that
 directory (`./VpsReady.Desktop` on macOS/Linux, or
@@ -152,6 +152,7 @@ Read the [blind-development contract](docs/verification/BLIND_DEVELOPMENT.md).
 src/       Desktop UI, application workflows, domain and infrastructure
 tests/     Unit, simulation and protocol-boundary tests
 eng/       Verification and packaging scripts
+scripts/   Developer-friendly platform build entrypoints
 docs/      Guides, architecture, safety contracts and evidence
 .github/   Issue templates and CI workflows
 ```

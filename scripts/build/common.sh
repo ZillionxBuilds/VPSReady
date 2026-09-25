@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Local, unsigned developer publish. Official candidate packaging remains in package-artifact.ps1.
+# Local, unsigned developer publish. Official candidate packaging remains in eng/package-artifact.ps1.
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s <windows|macos|linux> [--arch x64|arm64]\n' "${0##*/}"
+  if [[ -n "${target_os:-}" ]]; then
+    printf 'Usage: ./scripts/build/%s.sh [--arch x64|arm64]\n' "$target_os"
+  else
+    printf 'Usage: %s <windows|macos|linux> [--arch x64|arm64]\n' "${0##*/}"
+  fi
   printf 'Run on the named operating system with Bash and the SDK pinned by global.json.\n'
 }
 
@@ -50,7 +54,7 @@ if ! command -v dotnet >/dev/null 2>&1; then
   exit 1
 fi
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 project="$repo_root/src/VpsReady.Desktop/VpsReady.Desktop.csproj"
 rid="$rid_os-$arch"
 source_revision="$(git -C "$repo_root" rev-parse --verify HEAD)"
