@@ -23,9 +23,10 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [selected-identity path PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56),
 [key-generation terminal PR #58](https://github.com/ZillionxBuilds/VPSReady/pull/58),
 [existing-key selection PR #60](https://github.com/ZillionxBuilds/VPSReady/pull/60),
-[malformed-key target PR #62](https://github.com/ZillionxBuilds/VPSReady/pull/62), and
-[existing-key invalid-target PR #64](https://github.com/ZillionxBuilds/VPSReady/pull/64), and
-[Linux ARM64 key-selection PR #66](https://github.com/ZillionxBuilds/VPSReady/pull/66)
+[malformed-key target PR #62](https://github.com/ZillionxBuilds/VPSReady/pull/62),
+[existing-key invalid-target PR #64](https://github.com/ZillionxBuilds/VPSReady/pull/64),
+[Linux ARM64 key-selection PR #66](https://github.com/ZillionxBuilds/VPSReady/pull/66), and
+[UFW status transcript PR #68](https://github.com/ZillionxBuilds/VPSReady/pull/68)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -433,6 +434,32 @@ official packaging, an exact reviewed candidate, or Owner VPS operation.
 Docker used bridge rather than host networking, exposed no port, and contacted
 no real VPS or public SSH target. E5 **REAL VPS: NOT TESTED**.
 
+### F03 ambiguous UFW status transcript — 2026-09-25
+
+The exact release Overview parser treated a later or contradictory `Status:`
+line as a known firewall state. Synthetic exact-release E1 for conflicting
+active/inactive lines and an unrelated prefixed line was RED 0 PASS/3 FAIL.
+[Issue #67](https://github.com/ZillionxBuilds/VPSReady/issues/67) and draft
+[PR #68](https://github.com/ZillionxBuilds/VPSReady/pull/68) at
+`3132732d504258a170cac0acd1fea95a3775ec8f` require one unambiguous
+first-line status header while preserving normal multi-line UFW output. The
+production Overview regression leaves 11 other facts known and marks only
+Firewall Unknown; its diagnostic message omits raw transcript text. The same
+shared check also covers `ParseUfwDetection`, which is not called by the
+current production firewall workflow. No UFW mutation or SSH-access guard was
+changed.
+
+The isolated #68 branch passed E0 locked restore, Release `-warnaserror`
+build (zero warnings/errors), format and diff checks; E1 Unit 616 PASS/2 SKIP,
+E2 Scenario 174 PASS/3 SKIP and E4 exact-head unsigned macOS arm64 publish
+with bounded startup smoke. A separate **unpushed local** #34 + #68
+compatibility preflight at `a4b982df175d24829a08515ea72169e4daa09cc9`
+cherry-picked #68 onto exact #34 head `1ef0f61` without conflict. Its E0
+restore/build/format/diff checks passed,
+E1 Unit 651 PASS/2 SKIP and E2 Scenario 182 PASS/3 SKIP. Composite E3/E4,
+hosted checks, independent QA, native Windows/Linux and exact approved
+integration remain **NOT RUN/NOT VERIFIED**. E5 **REAL VPS: NOT TESTED**.
+
 ### F04 numbered port-range gap and focused correction — 2026-09-25
 
 F04 AC2 calls for existing port/range rules to be visible. On the exact
@@ -786,7 +813,7 @@ and post-terminal consistency need review on the exact combined source.
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
 | --- | --- | --- | --- |
 | F02 Connection, host trust, Test Connection | `MainWindow.axaml.cs` → `ConnectionOverviewViewModel` → `ConnectionSessionLifecycle` → `SshNetRemoteTransport`; `ConnectionInputValidation`, `KnownHostTrustStore` | `ConnectionInputValidationTests`, `ConnectionSessionLifecycleTests`, `ConnectionSessionLifecycleScenarioTests` | PARTIAL. Invalid-form guidance is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19) ([#18](https://github.com/ZillionxBuilds/VPSReady/issues/18)); stale verified-session and host-trust state after identity edits is corrected in unmerged [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44) ([#43](https://github.com/ZillionxBuilds/VPSReady/issues/43)). Neither is release evidence. Recheck changed-host-key UI and interaction on an approved integrated candidate; Owner Stage 1 NOT RUN. |
-| F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
+| F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Contradictory/prefixed UFW status also becomes a falsely known Firewall fact on release; unmerged [PR #68](https://github.com/ZillionxBuilds/VPSReady/pull/68) ([#67](https://github.com/ZillionxBuilds/VPSReady/issues/67)) returns Unknown. Verify all 12 fields, partial failures, bounded output and current-session refresh on an approved candidate; Owner Stage 1 NOT RUN. |
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Exact release drops a numbered port-range listing; focused E1/E2 correction is in unmerged [PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34) ([#33](https://github.com/ZillionxBuilds/VPSReady/issues/33)). Exact release also allows pre-terminal cancellation to return success in five F04 paths; RED-to-GREEN E1 correction is in unmerged [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52) ([#51](https://github.com/ZillionxBuilds/VPSReady/issues/51)). The local-only #34/#52 composite passed E0/E1/E2, not external QA. Separate outer-session mismatch was RED on release; unmerged stacked [PR #54](https://github.com/ZillionxBuilds/VPSReady/pull/54) ([#53](https://github.com/ZillionxBuilds/VPSReady/issues/53)) has isolated E0/E1/E2/E4 and local #50/#54/#52 interaction evidence, not independent approval. Recheck active SSH protection, stale selection, verification and recovery on an approved integrated candidate; Owner Stage 3 NOT RUN. |
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. A valid interrupted transaction for another name blocks generation on release; unmerged [PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46) ([#45](https://github.com/ZillionxBuilds/VPSReady/issues/45)) corrects this with RED-to-GREEN E2. Existing-key malformed-path misclassification has a separate unmerged [PR #64](https://github.com/ZillionxBuilds/VPSReady/pull/64). On Linux ARM64 the selector cannot open valid keys; unmerged [PR #66](https://github.com/ZillionxBuilds/VPSReady/pull/66) corrects the ABI flags and adds contained named-key authentication evidence. Developer checks are not approved-candidate proof; Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Release can report deployment success after Verify-diagnostic cancellation; focused E1/E2 correction is in unmerged [PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48) ([#47](https://github.com/ZillionxBuilds/VPSReady/issues/47)). Separate post-terminal outcome and displayed-ID/diagnostic-ID mismatches are RED on release; unmerged [PR #50](https://github.com/ZillionxBuilds/VPSReady/pull/50) ([#49](https://github.com/ZillionxBuilds/VPSReady/issues/49)) carries a local-only correction. Separate-login terminal inconsistency is corrected in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 on an approved candidate remain NOT RUN. |
@@ -808,7 +835,7 @@ or absence of leaks on the Owner's machine.
 | F02 AC7–10 secret/session identity boundaries | `ConnectionSecretInput`, `ConnectionSessionLifecycleTests`, `KnownHostTrustStoreTests` and scenario tests cover clear-on-use, non-persistence, session reuse/invalidation and explicit trust decisions. | Release does not invalidate the previously verified session or stale trust decision on identity edit/invalid resubmission; unmerged PR #44 adds focused E1/E2 correction. Owner credential handling and connection reuse on an actual server NOT RUN. |
 | F02 AC11 evidence boundary | E1/E2 are represented above; baseline E3 remains declared SKIP. | Owner Stage 1 E5 NOT TESTED. |
 | F03 AC1–3 actual fields/Ubuntu parsing | `ServerOverviewReader`, Ubuntu fact catalog/parsers and `OverviewJourneyRegressionTests`, `UbuntuServerFactParserTests`, fact catalog/parser scenarios cover 12 visible facts, read-only command IDs, approved fixtures and units. | Real Ubuntu variation and local-host UI field walkthrough NOT RUN on exact candidate. |
-| F03 AC4–6 partial/untrusted/bounded inspection | `UbuntuServerFactAggregator` and parser scenario fault injection retain good fields while bad ones become Unknown; catalog capture policy bounds remote output. | Actual partial remote output and unsupported distro behavior remain Owner Stage 1 work. |
+| F03 AC4–6 partial/untrusted/bounded inspection | `UbuntuServerFactAggregator` and parser scenario fault injection retain good fields while bad ones become Unknown; catalog capture policy bounds remote output. Exact-release contradictory/prefixed UFW status RED E1; unmerged PR #68 adds parser and production Overview Unknown-state regressions. | #68 is not integrated. Actual partial remote output and unsupported distro behavior remain Owner Stage 1 work. |
 | F03 AC7 correlated refresh | `ConnectionOverviewViewModel` and `ServerOverviewReader` use operation IDs and diagnostic events; `OverviewJourneyRegressionTests` cover late cancellation/session replacement. | Current release has a terminal success/cancel race; unmerged PR #21 corrects it. Combined Activity/journal and Owner E5 NOT RUN. |
 
 ### F04 criterion walk on the release source
@@ -897,6 +924,10 @@ tracks the separate E5 gate.
 - Obtain independent review of [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21)
   for F03 terminal-event consistency. Its local cancellation race proof is not
   an exact combined-candidate or Owner result.
+- Obtain independent review of [PR #68](https://github.com/ZillionxBuilds/VPSReady/pull/68)
+  for F03 unambiguous UFW status parsing and preserve its 11-other-facts
+  regression when integrating with #34. Local #34/#68 E0/E1/E2 compatibility
+  is not an approved candidate, production firewall mutation proof or E5.
 - Obtain independent review of [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23)
   for F06 separate key-auth terminal consistency. Its local synthetic-key
   evidence is not contained SSH protocol or Owner E5 proof.
