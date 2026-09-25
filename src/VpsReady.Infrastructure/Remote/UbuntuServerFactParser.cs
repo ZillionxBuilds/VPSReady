@@ -222,7 +222,8 @@ public static partial class UbuntuServerFactParser
             || !TryParseBytes(match.Groups["used"].Value, out var used)
             || !TryParseBytes(match.Groups["available"].Value, out var available)
             || !int.TryParse(match.Groups["percent"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var percent)
-            || size <= 0 || used < 0 || available < 0 || used > size || available > size || percent is < 0 or > 100)
+            || size <= 0 || used < 0 || available < 0 || used > size || available > size
+            || used > size - available || percent is < 0 or > 100)
         {
             return ServerFact.Unknown<RootDiskFacts>();
         }
