@@ -10,9 +10,10 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23),
 [startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25),
 [OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27),
-[local Activity guidance PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30), and
-[local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32), and
-[UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34)
+[local Activity guidance PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30),
+[local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32),
+[UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34), and
+[system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -210,6 +211,55 @@ on this branch were **NOT RUN**. PR #34 has no hosted checks or independent QA.
 Release remains `9965c5b`; the correction is **not integrated**. E5 **REAL
 VPS: NOT TESTED**.
 
+### F08 stale system-plan gap and focused correction — 2026-09-25
+
+Two stateful E2 regressions on the exact release source failed before any
+production edit: an independently changed hostname or timezone was overwritten
+by an earlier confirmed plan, and the workflow reported success. Focused
+[issue #35](https://github.com/ZillionxBuilds/VPSReady/issues/35) and unmerged
+draft [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) at
+`0e534e7dc67d4a407d485602344097b022d5df62` bind each reviewed plan
+to the planning transport and re-read current state before mutation. Timezone
+availability is also refreshed, and the final current-timezone read is ordered
+immediately before apply. Stale, malformed or unavailable evidence fails
+without sending apply, with fixed safe diagnostic codes and new-plan guidance.
+
+On the **isolated PR #36 branch**, locked restore, Release `-warnaserror`
+build with 0 warnings/errors, format and diff checks passed (E0); full E1 was
+**621 PASS/2 SKIP** and E2 **177 PASS/3 SKIP**. A clean-head unsigned macOS
+arm64 self-contained publish and artifact-safety scan passed (E4). E3 local
+protocol, native interactive startup, Windows/Linux hosts and hosted checks
+were **NOT RUN** on that branch. These are developer results, not independent
+QA, atomic protection against all external read/apply races, or real Ubuntu
+mutation proof. Release remains unchanged. E5 **REAL VPS: NOT TESTED**.
+
+### Expanded local integration preflight — #34 and #36 added
+
+A second clean, **local-only** composite `codex/15-full-preflight-r35` at
+`90abe1b0d2ec11275bdb7345a17c672d49a1ac66` adds exact PR #34
+(`1ef0f61`) and PR #36 (`0e534e7`) to `cac37c2` above. Both cherry-picks
+conflicted only in `CHANGELOG.md`; every prior and new entry was retained.
+C#/XAML/tests auto-merged. This branch was not pushed, independently reviewed,
+or merged into release/main. In particular, the release baseline table above
+does **not** inherit these results.
+
+| Evidence | Exact local composite result | Remaining limit |
+| --- | --- | --- |
+| E0 | Locked restore, Release `-warnaserror` build (0 warnings/errors), format and diff checks PASS. | No hosted CI/protection checks. |
+| E1 | Full unit suite 731 PASS / 2 SKIP. | Developer-run aggregate, not independent QA. |
+| E2 | Full stateful scenario suite 191 PASS / 3 SKIP. | Deterministic host is not a real VPS. |
+| E3 | Disposable Ubuntu 24.04 ARM64/.NET 10.0.400 Docker loopback OpenSSH: production SSH.NET and generated-key interoperability 2 PASS / 0 FAIL / 0 SKIP; script host-key, wrong-password, stdout/stderr/exit and timeout checks PASS. | Local bridge network, no published port; no hosted or real-host protocol evidence. Results were not retained as host artifacts. |
+| E4 | Unsigned macOS arm64 self-contained publish, Mach-O check and artifact-safety scan PASS. In disposable Ubuntu ARM64 Docker, self-contained Linux publish produced an aarch64 ELF; Xvfb startup stayed alive 8 seconds until expected timeout, with no error output. | Linux publish used direct `dotnet publish`, not the Bash wrapper; no interactive UI proof, physical Windows/Linux host, signing or official candidate package. |
+| E5 | REAL VPS: NOT TESTED. | Owner-only after candidate approval. |
+
+The first Linux container attempt published successfully but stopped at the
+missing `file` utility before startup; a fresh disposable container with that
+utility installed completed the publish/ELF/Xvfb checks. The apphost's SHA-256
+was `ac6ee7d21b7c4b4f3feaa20855e179df3b5f0d5c48b880c7a322d39523ec43d9`;
+an apphost hash alone is **not** proof of the entire source/package identity.
+Both Docker containers auto-removed. No real VPS, public SSH target, Owner
+credential, host firewall/SSH mutation or stable publication was used.
+
 ### Hosted CI discovery — 2026-09-25
 
 The canonical repository (`ZillionxBuilds/VPSReady`, ID `1361332816`) reports
@@ -239,7 +289,7 @@ developer result, not hosted or approved-candidate evidence.
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. Developer-composite native key generation/collision and corrupt-key guidance passed on named local heads, not an approved candidate. Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
-| F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Recheck stale plan, privilege, apt locks, late cancellation, reboot reconnect and verified completion criterion by criterion; Owner Stage 5 NOT RUN. |
+| F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). Recheck privilege, apt locks, late cancellation, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
 | F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). A developer-only #19/#30/#32 macOS flow showed both surfaces consistent, but isolated native flow and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
@@ -292,10 +342,10 @@ not a real package manager, reboot, hostname or timezone PASS:
 
 | F08 criteria | Source and named regression evidence | Remaining boundary |
 | --- | --- | --- |
-| AC1 read current state and review plan before write | `SystemActionsViewModel` exposes separate package/reboot inspection and hostname/timezone plan actions; `SystemActionsViewModelScenarioTests`, `PackageUpgradeWorkflowTests`, `HostnameChangeWorkflowTests` and `TimezoneChangeWorkflowTests` cover reviewed state before apply. | Owner Stage 5 observed read-only/current-state presentation NOT RUN. |
+| AC1 read current state and review plan before write | `SystemActionsViewModel` exposes separate package/reboot inspection and hostname/timezone plan actions; `SystemActionsViewModelScenarioTests`, `PackageUpgradeWorkflowTests`, `HostnameChangeWorkflowTests` and `TimezoneChangeWorkflowTests` cover reviewed state before apply. | Exact release does not re-read hostname/timezone before apply; red stateful E2 tests and unmerged PR #36 add transport binding and fresh pre-apply validation. Owner Stage 5 observed presentation NOT RUN. |
 | AC2–4 explicit bounded package action, typed blockers and no release upgrade | `PackageIndexUpdateWorkflowTests`, `PackageUpgradeWorkflowTests`, `PackageNoninteractiveContractTests`, matching scenario suites and `SystemActionsViewModelScenarioTests` cover confirmation, finite timeout, apt lock, privilege/nonzero/interactive failures and normal-upgrade-only command catalog. | Real apt lock/conffile behavior and native Windows/Linux UI NOT RUN; candidate packaging is separate. |
 | AC5–7 explicit reboot, expected disconnect and bounded trusted reconnect | `RebootWorkflowTests` and `RebootWorkflowScenarioTests` cover confirmation, old/new boot identity, expected disconnect, retry deadline, cancellation, trust refusal and recovery verification. | Real reboot/access continuity and host-key revalidation remain Owner Stage 5 E5 NOT RUN. |
-| AC8 validated hostname/timezone and fresh verification | `HostnameChangeWorkflowTests`, `TimezoneChangeWorkflowTests` and matching scenario suites cover invalid input, fresh read, apply, verify mismatch and repeat. | Real Ubuntu hostname/timezone mutation NOT RUN. |
+| AC8 validated hostname/timezone and fresh verification | Baseline `HostnameChangeWorkflowTests`, `TimezoneChangeWorkflowTests` and matching scenarios cover invalid input and post-apply verification; PR #36 adds stale-state, removed-selection, failed-read, cross-transport, cancellation and safe-diagnostic regressions. | Release remains vulnerable to stale plans until reviewed correction integrates. Separate SSH commands retain a residual read/apply race; real Ubuntu mutation NOT RUN. |
 | AC9–10 cancellation state and safe correlated diagnostics | `SystemActionsViewModelTests`, `PackageIndexUpdateWorkflowScenarioTests`, `RebootWorkflowTests` and system-action scenario tests exercise cancellation/stale-plan clearing and diagnostic operation IDs; remote workflows use command catalog IDs and fixed safe summaries. | Exact combined candidate Activity/journal, privacy/export and Owner Stage 2/5/6 remain NOT RUN. |
 
 ### F09 criterion walk on the release source
