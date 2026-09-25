@@ -41,6 +41,9 @@ public sealed class AppViewModelTests
         Assert.False(viewModel.SelectedPage.IsActionAvailable);
         Assert.Equal(1, viewModel.NavigationItems.Count(item => item.IsSelected));
         Assert.True(item.IsSelected);
+        Assert.Equal($"Current page: {item.Label}", item.Hint);
+        Assert.All(viewModel.NavigationItems.Where(other => other != item), other =>
+            Assert.Equal($"Open {other.Label}", other.Hint));
     }
 
     [Fact]
@@ -65,6 +68,18 @@ public sealed class AppViewModelTests
         Assert.False(page.IsPlaceholderPage);
         Assert.Contains("plan", page.Description, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("revalidates host identity", page.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(ShellPage.Connection, true, false)]
+    [InlineData(ShellPage.Overview, false, true)]
+    [InlineData(ShellPage.Firewall, false, false)]
+    public void ConnectionAndOverviewHaveDistinctSurfaces(ShellPage page, bool connection, bool overview)
+    {
+        var selected = ShellPageViewModel.Create(page);
+
+        Assert.Equal(connection, selected.IsConnectionPage);
+        Assert.Equal(overview, selected.IsOverviewPage);
     }
 
     [Fact]

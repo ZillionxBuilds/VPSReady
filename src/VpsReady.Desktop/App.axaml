@@ -22,7 +22,7 @@
       <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
       <Setter Property="BorderThickness" Value="1" />
       <Setter Property="CornerRadius" Value="18" />
-      <Setter Property="Padding" Value="24" />
+      <Setter Property="Padding" Value="26" />
     </Style>
     <Style Selector="TextBlock.eyebrow">
       <Setter Property="FontSize" Value="11" />
@@ -54,14 +54,32 @@
     </Style>
     <Style Selector="Button.nav">
       <Setter Property="Background" Value="Transparent" />
-      <Setter Property="Foreground" Value="#C8D5EE" />
+      <Setter Property="Foreground" Value="#E8F0FC" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="Padding" Value="12" />
+      <Setter Property="Padding" Value="14,12" />
       <Setter Property="FontSize" Value="14" />
+      <Setter Property="MinHeight" Value="46" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+    <Style Selector="Button.nav TextBlock">
+      <Setter Property="Foreground" Value="#E8F0FC" />
     </Style>
     <Style Selector="Button.nav:pointerover">
       <Setter Property="Background" Value="#263C60" />
-      <Setter Property="Foreground" Value="White" />
+    </Style>
+    <Style Selector="Button.nav.selected">
+      <Setter Property="Background" Value="#EAF2FF" />
+      <Setter Property="Foreground" Value="#14243D" />
+    </Style>
+    <Style Selector="Button.nav.selected TextBlock">
+      <Setter Property="Foreground" Value="#14243D" />
+    </Style>
+    <Style Selector="Button.nav.selected:pointerover">
+      <Setter Property="Background" Value="#FFFFFF" />
+    </Style>
+    <Style Selector="Button.nav:focus">
+      <Setter Property="BorderBrush" Value="#E5B64B" />
+      <Setter Property="BorderThickness" Value="2" />
     </Style>
     <Style Selector="TextBox">
       <Setter Property="CornerRadius" Value="9" />
