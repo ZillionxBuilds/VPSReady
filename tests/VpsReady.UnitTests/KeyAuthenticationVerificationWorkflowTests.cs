@@ -11,6 +11,52 @@ namespace VpsReady.UnitTests;
 public sealed class KeyAuthenticationVerificationWorkflowTests
 {
     [Fact]
+    public async Task CancellationDuringTerminalKeyAuthJournalCannotRecordSuccessThenReturnCancelled()
+    {
+        var transport = new RecordingKeyAuthenticationTransport();
+        var diagnostics = new BlockingKeyAuthSuccessSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        using var cancellation = new CancellationTokenSource();
+        var verification = workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+        await diagnostics.SuccessEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        diagnostics.Release.TrySetResult();
+        var result = await verification;
+
+        var terminal = diagnostics.Events.Where(item => item.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed).ToArray();
+        Assert.Single(terminal);
+        Assert.Equal(result.Result.Succeeded, terminal[0].EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded);
+        Assert.Equal(result.Result.OperationId, terminal[0].Correlation.OperationId);
+        Assert.True(transport.Disposed);
+    }
+
+    [Fact]
+    public async Task CancellationBeforeSeparateKeyVerificationFinishesNeverReportsSuccess()
+    {
+        var transport = new RecordingKeyAuthenticationTransport { BlockVerification = true };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        using var cancellation = new CancellationTokenSource();
+        var verification = workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+        await transport.VerificationEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        var result = await verification;
+
+        Assert.True(result.Result.Cancelled);
+        Assert.True(transport.Disposed);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded);
+        var terminal = Assert.Single(diagnostics.Events, item => item.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled, terminal.EventId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+    }
+
+    [Fact]
     public async Task SeparateTrustedKeyConnectionMustCompleteTheCataloguedVerificationBeforeSuccess()
     {
         var transport = new RecordingKeyAuthenticationTransport();
@@ -179,6 +225,10 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
 
         public bool BlockConnect { get; init; }
 
+        public bool BlockVerification { get; init; }
+
+        public TaskCompletionSource VerificationEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public int VerificationExitCode { get; init; }
 
         public Exception? ConnectFailure { get; init; }
@@ -203,10 +253,15 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
             }
         }
 
-        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
             Commands.Add(command);
-            return Task.FromResult(new RemoteCommandResult(VerificationExitCode, string.Empty, string.Empty, TimeSpan.Zero, command.OutputCapturePolicy));
+            if (BlockVerification)
+            {
+                VerificationEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            return new RemoteCommandResult(VerificationExitCode, string.Empty, string.Empty, TimeSpan.Zero, command.OutputCapturePolicy);
         }
 
         public ValueTask DisposeAsync()
@@ -224,6 +279,23 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
         {
             Events.Add(diagnosticEvent);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class BlockingKeyAuthSuccessSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+        public TaskCompletionSource SuccessEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            if (diagnosticEvent.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded)
+            {
+                SuccessEntered.TrySetResult();
+                await Release.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
+            }
+            Events.Add(diagnosticEvent);
         }
     }
 

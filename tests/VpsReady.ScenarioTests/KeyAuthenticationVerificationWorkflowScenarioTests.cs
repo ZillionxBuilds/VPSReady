@@ -11,6 +11,38 @@ namespace VpsReady.ScenarioTests;
 public sealed class KeyAuthenticationVerificationWorkflowScenarioTests
 {
     [Fact]
+    public async Task CompletedSeparateKeyVerificationKeepsOneTerminalOutcomeDuringLateCancellation()
+    {
+        await using var services = ScenarioComposition.Create("scenario.r22.key-auth-terminal", state =>
+        {
+            state.Ssh.AuthorizedKeyFingerprints.Add("SHA256:scenario-c405-key");
+        });
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var sink = new BlockingTerminalSink(services.GetRequiredService<IDiagnosticSink>());
+        var workflow = new KeyAuthenticationVerificationWorkflow(
+            services.GetRequiredService<IRemoteTransportFactory>(), sink);
+        using var cancellation = new CancellationTokenSource();
+        var verification = workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+
+        await sink.SuccessEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        sink.Release.TrySetResult();
+        var result = await verification;
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal("key", state.Ssh.LastAuthenticationMethod);
+        var terminal = Assert.Single(recorder.Events, item => item.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded, terminal.EventId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.DoesNotContain("scenario-private-host", recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain("scenario-c405-key", recorder.ToJsonLines(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SeparateKeyAuthenticatedCandidateVerifiesOnlyAfterTrustedConnectionAndMinimumCommand()
     {
         await using var services = ScenarioComposition.Create("scenario.c405.key-auth-success", state =>
@@ -94,4 +126,20 @@ public sealed class KeyAuthenticationVerificationWorkflowScenarioTests
         OperationResult.Success("selected-key-opaque", OperationState.Unchanged),
         new ExistingSshKeyLocation("/scenario/private/id_ed25519"),
         new ExistingSshKeyMetadata("ed25519", "SHA256:opaque"));
+
+    private sealed class BlockingTerminalSink(IDiagnosticSink inner) : IDiagnosticSink
+    {
+        public TaskCompletionSource SuccessEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            if (entry.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded)
+            {
+                SuccessEntered.TrySetResult();
+                await Release.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
+            }
+            await inner.WriteAsync(entry, cancellationToken);
+        }
+    }
 }

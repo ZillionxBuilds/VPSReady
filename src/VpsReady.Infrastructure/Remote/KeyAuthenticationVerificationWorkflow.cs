@@ -70,9 +70,12 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
                 return await FailAsync(correlation, OperationErrorCode.Verification, KeyAuthenticationVerificationErrorCatalog.Verification, DiagnosticPhase.Verify, verification.Id.Value).ConfigureAwait(false);
             }
 
+            // Verification and cancellation are decided before the terminal
+            // success event. A later cancel cannot make one operation both
+            // successful and cancelled in Activity or the returned result.
+            linkedCancellation.Token.ThrowIfCancellationRequested();
             var succeeded = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
             await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "Separate key-authentication verification completed.", verification.Id.Value, null).ConfigureAwait(false);
-            linkedCancellation.Token.ThrowIfCancellationRequested();
             return new KeyAuthenticationVerificationResult(succeeded, null);
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
