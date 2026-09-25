@@ -62,7 +62,8 @@ Pause after the inner workflow returns but before `ApplicationSession` chooses t
 - [x] E0/E1/E2 and unsigned macOS arm64 E4 at earlier local head `54f65c2`; contained E3, Windows/Linux native and hosted checks NOT RUN.
 - [x] Local composite with exact open PR #21, #23 and #48 heads passed E0/E1/E2 and unsigned macOS arm64 publish; #21 reader conflict resolved in composite only.
 - [x] Reran E0/E1/E2 and unsigned macOS arm64 E4 after bundle-scan hardening on source head `317f5cd`; composite `483c787` also passed.
-- [ ] Draft PR and external independent review; no integration or Owner E5.
+- [x] Draft review PR #50 opened from the isolated release-based branch; no integration or Owner E5.
+- [ ] External independent review and applicable hosted/platform checks.
 
 ## 11. Decision log
 
@@ -87,4 +88,4 @@ Diagnostic persistence is asynchronous; a session can change after an accepted r
 
 ## 14. Outcomes and follow-up
 
-Local correction is not integrated. At source head `317f5cd`, locked restore, Release -warnaserror build, format and diff checks passed; E1 630 PASS/2 SKIP, E2 176 PASS/3 SKIP. Unsigned self-contained macOS arm64 publish passed; a prior same-source head `54f65c2` remained alive in a disconnected-process startup smoke, then was intentionally interrupted (clean UI exit not verified). Local composite `483c787` with exact open #21/#23/#48 heads passed E1 636 PASS/2 SKIP and E2 179 PASS/3 SKIP; Release -warnaserror build, format/diff checks and unsigned macOS arm64 publish also passed. E3 Docker-based local protocol, Windows/Linux native and hosted checks were NOT RUN. External independent review remains required. Track final commit/PR and evidence in the #49 Workpad. No real VPS or Owner E5 claim. Once reviewed, reconcile related drafts before any release gate; main promotion remains separate.
+Draft PR #50 targets release/0.1.0; source is not integrated. At source head `317f5cd`, locked restore, Release -warnaserror build, format and diff checks passed; E1 630 PASS/2 SKIP, E2 176 PASS/3 SKIP. Unsigned self-contained macOS arm64 publish passed; a prior same-source head `54f65c2` remained alive in a disconnected-process startup smoke, then was intentionally interrupted (clean UI exit not verified). Local composite `483c787` with exact open #21/#23/#48 heads passed E1 636 PASS/2 SKIP and E2 179 PASS/3 SKIP; Release -warnaserror build, format/diff checks and unsigned macOS arm64 publish also passed. E3 Docker-based local protocol and Windows/Linux native checks were NOT RUN. Hosted checks remain unavailable: GitHub reports zero registered workflows while default main has no workflow files; dispatching blind-ci.yml on the branch returned HTTP 404. The existing canonical Project/Kanban is unavailable (organization Projects count zero), so no board transition was fabricated. External independent review remains required. Track final commit/PR and evidence in the #49 Workpad. No real VPS or Owner E5 claim. Once reviewed, reconcile related drafts before any release gate; main promotion remains separate.
