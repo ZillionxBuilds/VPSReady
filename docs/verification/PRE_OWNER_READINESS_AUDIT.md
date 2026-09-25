@@ -28,11 +28,51 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [Linux ARM64 key-selection PR #66](https://github.com/ZillionxBuilds/VPSReady/pull/66),
 [UFW status transcript PR #68](https://github.com/ZillionxBuilds/VPSReady/pull/68),
 [CPU/memory fact PR #70](https://github.com/ZillionxBuilds/VPSReady/pull/70),
-[CPU-model evidence PR #72](https://github.com/ZillionxBuilds/VPSReady/pull/72), and
-[uptime evidence PR #74](https://github.com/ZillionxBuilds/VPSReady/pull/74)
+[CPU-model evidence PR #72](https://github.com/ZillionxBuilds/VPSReady/pull/72),
+[uptime evidence PR #74](https://github.com/ZillionxBuilds/VPSReady/pull/74), and
+[authorized-key fixture PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
+
+### F06 shell-fixture and full-pending Linux checkpoint — 2026-09-25 21:30 UTC
+
+The production `authorized_keys` install shell, identical in unchanged
+release, pre-F03 developer composite and later F03 composite, returned exit
+77 against group-writable test fixtures in the two tested composites. The
+nonroot Ubuntu Noble ARM64 test user inherited
+`umask 0002`, so the test had created a `.ssh` directory at mode 775 and an
+`authorized_keys` file at mode 664 while expecting installation success. This
+was an E1 fixture defect, **not** evidence to loosen the production permission
+policy or a regression introduced by the F03 parser changes. Focused
+[issue #75](https://github.com/ZillionxBuilds/VPSReady/issues/75) and draft
+[PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76) at
+`3acc623cca22cecdca324d1d5bf6945c1e080f1e` explicitly establish safe
+0700/0600 fixture modes and add two group-writable refusal cases that assert
+exit 77 and preservation of existing records. Production code is unchanged.
+The targeted shell suite passed 30/30 on macOS arm64 and 30/30 on disposable
+Ubuntu Noble ARM64 under each `umask 0002` and `0022`. On isolated PR #76,
+macOS E0 locked restore, Release `-warnaserror` build (zero warnings/errors),
+format and diff checks passed; E1 was 610 PASS/2 SKIP and E2 was 174 PASS/3
+SKIP. Full Linux E1 on that release-based branch still failed 29 pre-existing
+existing-key/session cases (581 PASS/29 FAIL/2 SKIP) with OpenSSH client
+installed under either umask. The Linux ARM64 source correction in PR #66 is
+separate and unmerged; full Linux E2 on isolated #76 was **NOT RUN** after E1
+failed.
+
+For a developer-only compatibility check, the local clean
+`codex/15-full-preflight-f03` head
+`0cf68d9` combines the earlier all-pending product repairs through #74 and
+the #75 test-only correction. On **that exact local head**, macOS arm64 locked
+restore, Release `-warnaserror` build (zero warnings/errors), format and diff
+checks passed; E1 Unit was 853 PASS/3 SKIP and E2 Scenario was 209 PASS/3
+SKIP. A disposable Ubuntu Noble ARM64 SDK container with nonroot `umask 0002`
+and OpenSSH client passed Release `-warnaserror` build (zero warnings/errors),
+full E1 853 PASS/3 SKIP and E2 209 PASS/3 SKIP. This local branch was **not
+pushed, independently QA-reviewed or integrated**. Earlier contained E3 and
+macOS E4 evidence is tied to its preceding `594372a` head, not exact
+`0cf68d9`. Native Windows/Linux desktop, official candidate packaging,
+hosted checks and Owner Stage 0–6 remain unverified. **REAL VPS: NOT TESTED.**
 
 ### Current all-pending product preflight — 2026-09-25 18:36 UTC
 
@@ -946,7 +986,7 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | F05 AC1/9 Ed25519 format and maintained approach | `Ed25519OpenSshKeyPairGeneratorTests` cover OpenSSH v1 output and key-generation scenario tests cover stateful faults; third-party notices and the key-generation decision record explain the approach. Isolated PR #66 adds disposable Ubuntu ARM64 OpenSSH E3 for an arbitrarily named generated pair, matching-key login and wrong-key refusal. | Explicit desktop name/path UX is unmerged PR #17; PR #66 is also unmerged. Neither isolated check is approved integrated-candidate or Owner Stage 4 proof. |
 | F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. Exact-release RED terminal-cancellation cases and draft PR #58 cover the committed-pair/result/diagnostic boundary. Exact-release RED malformed-absolute-path case and draft PR #62 cover a typed safe validation result without file creation; local composite tests the named-folder interaction with #17. | Release attempts other-name transaction recovery and blocks unrelated generation; unmerged PR #46 adds focused E2 correction. #58 and #62 are also unmerged and need independent approval. Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
 | F05 AC5–7 intentional public view/copy and private omission | `SshManagementViewModel` and key-management presentation tests cover public-only view/copy; generator/diagnostic leakage tests check private material omission. Exact-release RED existing-key selection terminal cancellation and draft PR #60 cover a single authoritative selected-key result, public-material reread and cancellation before parsed private material is passed to SSH. Draft PR #64 corrects malformed selected-key path classification; draft PR #66 corrects Linux ARM64 safe-open flags with a post-validation symlink regression. | #60/#64/#66 remain unmerged and need independent review plus exact-candidate integration. Native Owner clipboard/screenshot and reviewed bundle privacy checks NOT RUN. |
-| F06 AC1–5 safe authorized-key deployment | `PublicKeyDeploymentWorkflowTests` and scenarios cover missing directory/file, ownership/modes, existing-entry preservation, idempotence, malformed material and no full key in diagnostics. | Release can journal success despite cancellation while the verified command diagnostic completes; unmerged PR #48 adds RED-to-GREEN E1/E2 and correct Verify-phase cancellation for that window. The post-success-event session mismatch in #49 remains RED. Real account ownership/permissions and `authorized_keys` mutation remain Owner Stage 4 E5. |
+| F06 AC1–5 safe authorized-key deployment | `PublicKeyDeploymentWorkflowTests` and scenarios cover missing directory/file, ownership/modes, existing-entry preservation, idempotence, malformed material and no full key in diagnostics. Draft PR #76 makes the production shell contract fixture independent of umask and retains group-writable fail-closed regressions; no production shell behavior changes. | Release can journal success despite cancellation while the verified command diagnostic completes; unmerged PR #48 adds RED-to-GREEN E1/E2 and correct Verify-phase cancellation for that window. The post-success-event session mismatch in #49 remains RED. PR #76 is also unmerged; its isolated Linux full E1 is blocked by the separate unmerged ARM64 source correction #66. Real account ownership/permissions and `authorized_keys` mutation remain Owner Stage 4 E5. |
 | F06 AC6–9 separate key login and unchanged password access | `KeyAuthenticationVerificationWorkflowTests` and scenarios require a separate trusted candidate and minimum command; failed verification does not authorize password-access changes. | Current release has a terminal success/cancel race; unmerged PR #23 corrects it. Contained OpenSSH and Owner separate-login proof NOT RUN here. |
 | F06 AC10 evidence boundary | Stateful deployment/verification faults run in E2; production transport has no successful contained `sshd` run in this baseline audit. | Owner Stage 4 E5 NOT TESTED. |
 | F07 AC1–3/8 create, preserve and collision/no-change | `OpenSshConfigEditorTests` and scenarios cover absent file, unrelated text/line endings, explicit collision, idempotence and no write on invalid config. | Current release can falsely report Unchanged with an extra effective key; unmerged PR #27 corrects it. |
@@ -1093,6 +1133,11 @@ tracks the separate E5 gate.
   generated named-key E3 with #17. Exact-release ARM64 E1 is RED; isolated
   #66 ARM64/x64 selector and contained loopback E3 are GREEN, but an approved
   integrated candidate, hosted checks and Owner Stage 4 remain separate.
+- Obtain independent review of [PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76)
+  for umask-independent authorized-key shell fixtures and explicit unsafe-mode
+  refusal. Its targeted Linux E1 is GREEN, but isolated full Linux E1 remains
+  RED until the independent #66 source correction is approved and integrated.
+  The local full-composite Linux pass is not an approved candidate or E5.
 - Obtain independent same-class review of [PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48)
   for C404 deployment cancellation, Verify-phase diagnostics, interaction with
   #23 and the enclosing session outcome. The demonstrated fix covers only the
