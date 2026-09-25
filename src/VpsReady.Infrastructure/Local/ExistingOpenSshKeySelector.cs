@@ -416,18 +416,32 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
 
     private static int TranslateUnixFlags(UnixOpenFlags flags)
     {
+        // Linux ARM64 overrides O_DIRECTORY and O_NOFOLLOW in its UAPI;
+        // the x64 values mean O_DIRECT and O_LARGEFILE there. Unknown ABIs
+        // must fail closed rather than opening a key without no-follow.
+        (int noFollow, int directory, int nonBlocking) = OperatingSystem.IsMacOS()
+            ? (0x100, 0, 0x4)
+            : OperatingSystem.IsLinux()
+                ? RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => (0x20000, 0x10000, 0x800),
+                    Architecture.Arm64 => (0x8000, 0x4000, 0x800),
+                    _ => throw new UnsafeKeySelectionPathException(),
+                }
+                : throw new UnsafeKeySelectionPathException();
+
         var translated = 0;
         if ((flags & UnixOpenFlags.NoFollow) != 0)
         {
-            translated |= OperatingSystem.IsMacOS() ? 0x100 : 0x20000;
+            translated |= noFollow;
         }
-        if ((flags & UnixOpenFlags.Directory) != 0 && !OperatingSystem.IsMacOS())
+        if ((flags & UnixOpenFlags.Directory) != 0)
         {
-            translated |= 0x10000;
+            translated |= directory;
         }
         if ((flags & UnixOpenFlags.NonBlocking) != 0)
         {
-            translated |= OperatingSystem.IsMacOS() ? 0x4 : 0x800;
+            translated |= nonBlocking;
         }
         return translated;
     }

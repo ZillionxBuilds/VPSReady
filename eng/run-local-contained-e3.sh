@@ -9,6 +9,12 @@ if [[ "$(uname -s)" != 'Linux' ]] || ! command -v apt-get >/dev/null; then
 fi
 
 runtime_root="$(mktemp -d)"
+# The disposable sshd reads only this test-owned public-key file through an
+# unprivileged command. Other fixture material retains its restrictive mode.
+chmod 711 "$runtime_root"
+authorized_dir="$runtime_root/authorized"
+mkdir -m 755 "$authorized_dir"
+authorized_file="$authorized_dir/vpsready-e3-current.pub"
 service_user="vpsreadye3$RANDOM$RANDOM"
 service_group="$service_user"
 daemon_pid=''
@@ -44,6 +50,9 @@ ListenAddress 127.0.0.1
 HostKey $runtime_root/host_ed25519
 PidFile $runtime_root/sshd.pid
 AuthorizedKeysFile none
+AuthorizedKeysCommand /usr/bin/cat $authorized_file
+AuthorizedKeysCommandUser nobody
+PubkeyAuthentication yes
 PasswordAuthentication yes
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
@@ -104,6 +113,7 @@ chmod 600 "$runtime_root/known_hosts"
 # disposable loopback daemon. The fixture values remain process environment
 # only and are never written to test output or artifacts.
 VPSREADY_E3_DOTNET_PASSWORD="$login_value" VPSREADY_E3_DOTNET_USER="$service_user" VPSREADY_E3_DOTNET_PORT="$port" \
+  VPSREADY_E3_AUTHORIZED_KEY_FILE="$authorized_file" \
   dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --filter "Category=E3" --logger "trx;LogFileName=e3-production-sshnet.trx" --results-directory TestResults
 
 set +e
@@ -144,6 +154,8 @@ cat > TestResults/e3/local-contained-protocol.txt <<'RESULT'
 evidence_class=E3 local-contained protocol
 environment=disposable loopback OpenSSH on the CI runner
 password_auth=PASS
+generated_named_key_auth=PASS
+wrong_key_rejected=PASS
 host_key_unknown_fail_closed=PASS
 host_key_known_match=PASS
 minimum_command_stdout_stderr_exit=PASS

@@ -125,6 +125,32 @@ public sealed class ExistingOpenSshKeySelectorTests
     }
 
     [Fact]
+    public async Task UnixSafeOpenRejectsPrivateKeySymlinkInsertedAfterValidation()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var selected = new KeyWorkspace();
+        await using var other = new KeyWorkspace();
+        var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
+        Assert.True((await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(selected.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None)).Succeeded);
+        Assert.True((await generator.GenerateAsync(new LocalEd25519KeyGenerationRequest(other.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None)).Succeeded);
+        var otherBytes = await File.ReadAllBytesAsync(other.PrivateKeyPath);
+        var diagnostics = new CollectingDiagnosticSink();
+
+        var result = await new ExistingOpenSshKeySelector(diagnostics, new PrivateSymlinkAfterValidationSelectionObserver(other.PrivateKeyPath)).SelectAsync(
+            new ExistingSshKeySelectionRequest(selected.PrivateKeyPath), DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.Equal(otherBytes, await File.ReadAllBytesAsync(other.PrivateKeyPath));
+        Assert.All(diagnostics.Events, item => Assert.DoesNotContain(other.Root, item.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task UnixRegularFileParentIsAnInvalidTargetNotAnOrdinaryMissingPath()
     {
         if (OperatingSystem.IsWindows())
@@ -162,5 +188,14 @@ internal sealed class DirectoryReplacementSelectionObserver : IExistingSshKeySel
     {
         File.Delete(path);
         Directory.CreateDirectory(path);
+    }
+}
+
+internal sealed class PrivateSymlinkAfterValidationSelectionObserver(string target) : IExistingSshKeySelectionObserver
+{
+    public void BeforeRead(string path)
+    {
+        File.Delete(path);
+        File.CreateSymbolicLink(path, target);
     }
 }
