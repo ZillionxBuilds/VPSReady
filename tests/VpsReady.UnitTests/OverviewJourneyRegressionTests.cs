@@ -117,6 +117,43 @@ public sealed class OverviewJourneyRegressionTests
         Assert.False(vm.IsRefreshing);
     }
 
+    [Fact]
+    public async Task CancelAfterOverviewReaderReturnsCannotLeaveATerminalSuccessDiagnostic()
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport();
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        var correlation = CorrelationIds.Create("overview") with { SessionId = session.Snapshot.SessionId! };
+        using var cancellation = new CancellationTokenSource();
+        var readerReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var operation = session.RunOperationForSessionAsync(correlation.OperationId, TimeSpan.FromSeconds(5),
+            async (activeTransport, token) =>
+            {
+                var read = await new ServerOverviewReader(sink).ReadAsync(activeTransport, session.Snapshot.Identity!, correlation, token);
+                readerReturned.TrySetResult();
+                await release.Task;
+                return read.Result;
+            }, correlation.SessionId!, cancellation.Token);
+        try
+        {
+            await readerReturned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        var result = await operation.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(result.Cancelled);
+        Assert.Equal(correlation.OperationId, result.OperationId);
+        Assert.DoesNotContain(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && entry.Correlation.OperationId == result.OperationId);
+    }
+
     private sealed class NoFactory : IRemoteTransportFactory
     {
         public IRemoteTransport Create() => throw new InvalidOperationException("No connection was requested.");
