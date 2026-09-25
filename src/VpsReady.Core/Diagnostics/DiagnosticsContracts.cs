@@ -185,6 +185,20 @@ public static class DiagnosticEventCatalog
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
+
+    /// <summary>
+    /// These events cannot mutate a managed server. Use stable IDs rather
+    /// than category or action text when choosing local-only UI guidance.
+    /// Unknown events deliberately retain conservative remote guidance.
+    /// </summary>
+    public static bool IsLocalOnly(string eventId) => eventId is
+        StartupFailed or
+        LocalKeyGenerationStarted or LocalKeyGenerationSucceeded or LocalKeyGenerationFailed or
+        LocalKeyGenerationCancelled or LocalKeyGenerationRecoveryRequired or
+        ExistingKeySelectionStarted or ExistingKeySelectionSucceeded or
+        ExistingKeySelectionFailed or ExistingKeySelectionCancelled or
+        OpenSshConfigEditStarted or OpenSshConfigEditSucceeded or
+        OpenSshConfigEditFailed or OpenSshConfigEditCancelled;
 }
 
 /// <summary>
@@ -359,7 +373,7 @@ public sealed record StructuredDiagnosticEvent(
         Message,
         Correlation.OperationId,
         Duration,
-        NextSafeAction: Status.ToNextSafeAction(),
+        NextSafeAction: Status.ToNextSafeAction(EventId),
         RunId: Correlation.RunId);
 }
 
@@ -391,6 +405,23 @@ public static class DiagnosticStatusExtensions
         DiagnosticStatus.RecoveryRequired => "Review the recovery guidance and verify the remote state before retrying.",
         _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown diagnostic status."),
     };
+
+    public static string? ToNextSafeAction(this DiagnosticStatus status, string eventId)
+    {
+        if (!DiagnosticEventCatalog.IsLocalOnly(eventId)
+            || status is DiagnosticStatus.Started or DiagnosticStatus.Running or DiagnosticStatus.Succeeded or DiagnosticStatus.Warning)
+        {
+            return status.ToNextSafeAction();
+        }
+
+        return status switch
+        {
+            DiagnosticStatus.Failed => "Review the error and verify the local state before retrying.",
+            DiagnosticStatus.Cancelled => "Verify the local state before retrying the cancelled action.",
+            DiagnosticStatus.RecoveryRequired => "Review the recovery guidance and verify the local state before retrying.",
+            _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unknown diagnostic status."),
+        };
+    }
 }
 
 public sealed record RedactionResult(string SafeText, bool WasOmitted);
