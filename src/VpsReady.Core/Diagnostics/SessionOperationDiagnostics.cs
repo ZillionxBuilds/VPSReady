@@ -74,6 +74,24 @@ public sealed class SessionOperationDiagnostics
         DiagnosticEventCatalog.OperationFailed,
         "Read-only overview did not complete for the current session. Refresh facts again; no server changes were made.");
 
+    public static SessionOperationDiagnostics ForFirewall(CorrelationIds correlation, IDiagnosticSink? fallbackSink, string action) => new(
+        correlation,
+        fallbackSink,
+        "Firewall",
+        action switch
+        {
+            "refresh" => "RefreshFirewallRules",
+            "add" => "AddFirewallAllowRule",
+            "remove" => "RemoveSelectedFirewallRule",
+            "enable" => "EnableFirewall",
+            "disable" => "DisableFirewall",
+            _ => throw new ArgumentOutOfRangeException(nameof(action)),
+        },
+        DiagnosticEventCatalog.OperationSucceeded,
+        DiagnosticEventCatalog.OperationFailed,
+        DiagnosticEventCatalog.OperationCancelled,
+        "Firewall operation was not accepted as complete by the current session. Remote state may have changed; refresh before retrying.");
+
     public Task RecordAsync(IDiagnosticSink sink, StructuredDiagnosticEvent entry)
     {
         ArgumentNullException.ThrowIfNull(sink);

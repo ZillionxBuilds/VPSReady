@@ -8,6 +8,8 @@ using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Diagnostics;
+using VpsReady.Infrastructure.Remote;
+using VpsReady.Tests;
 
 namespace VpsReady.UnitTests;
 
@@ -40,6 +42,72 @@ public sealed class OperationJournalWorkspaceTests
     {
         Assert.ThrowsAny<JsonException>(() => OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(
             "{\"commandId\": \"ubuntu.ssh.authorized-keys.verify\"} {"));
+    }
+
+    [Fact]
+    public async Task CancelledFirewallSessionExportsOnlyItsAuthoritativeTerminalResult()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root), redactor, new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "firewall-test", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            var correlation = CorrelationIds.Create("firewall_add");
+            var scope = SessionOperationDiagnostics.ForFirewall(correlation, sink, "add");
+            var before = """
+                Status: active
+
+                     To                         Action      From
+                     --                         ------      ----
+                [ 1] 22/tcp                     ALLOW IN    Anywhere
+                """;
+            var after = """
+                Status: active
+
+                     To                         Action      From
+                     --                         ------      ----
+                [ 1] 22/tcp                     ALLOW IN    Anywhere
+                [ 2] 443/tcp                    ALLOW IN    Anywhere
+                """;
+            var transport = new FirewallFixtureTransport(before, string.Empty, after, after, "22");
+            var lower = await new FirewallManagement(sink).AddAsync(
+                transport, new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 443, "Anywhere", UfwIpFamily.Ipv4), scope);
+
+            Assert.True(lower.Result.Succeeded);
+            Assert.DoesNotContain(journal.GetActivity(correlation.OperationId), entry => entry.Message == "Firewall allow rule is present in a fresh verified listing.");
+            await scope.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+            var activity = journal.GetActivity(correlation.OperationId);
+            Assert.Contains(activity, entry => entry.OperationId == correlation.OperationId && entry.State == ActivityState.Cancelled);
+            Assert.DoesNotContain(activity, entry => entry.Message == "Firewall allow rule is present in a fresh verified listing.");
+            var persisted = await File.ReadAllTextAsync(Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl"));
+            Assert.Contains(DiagnosticEventCatalog.OperationCancelled, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.OperationSucceeded, persisted, StringComparison.Ordinal);
+            var report = journal.CreateSafeIssueReport(correlation.RunId);
+            Assert.Contains(correlation.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains($"Cancelled / {OperationErrorCode.Cancelled.ToStableCode()}", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("fixture.invalid", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) { Directory.Delete(root, recursive: true); }
+        }
+    }
+
+    private sealed class FirewallFixtureTransport(params string[] outputs) : IRemoteTransport
+    {
+        private readonly Queue<string> outputs = new(outputs);
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) =>
+            ProductionOutput.CaptureAsync(command,
+                new RemoteCommandResult(0, outputs.Count > 0 ? outputs.Dequeue() : throw new InvalidOperationException("Unexpected fixture command."), string.Empty, TimeSpan.FromMilliseconds(5)),
+                cancellationToken);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     [Fact]

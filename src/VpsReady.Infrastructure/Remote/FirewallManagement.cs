@@ -29,55 +29,135 @@ public sealed class FirewallManagement : IFirewallManagement
         toggle = new UfwToggleWorkflow(diagnostics);
     }
 
-    public async Task<FirewallRefreshOperationResult> RefreshAsync(
+    public Task<FirewallRefreshOperationResult> RefreshAsync(
         IRemoteTransport transport,
         UfwSnapshot previous,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RefreshCoreAsync(transport, previous, null, cancellationToken);
+
+    public Task<FirewallRefreshOperationResult> RefreshAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        RefreshCoreAsync(transport, previous, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<FirewallRefreshOperationResult> RefreshCoreAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
-        var outcome = await refresher.RefreshOperationAsync(transport, previous, cancellationToken).ConfigureAwait(false);
+        var outcome = sessionDiagnostics is null
+            ? await refresher.RefreshOperationAsync(transport, previous, cancellationToken).ConfigureAwait(false)
+            : await refresher.RefreshOperationAsync(transport, previous, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
         return new FirewallRefreshOperationResult(outcome.Result, outcome.Refresh)
         {
-            SessionSshPort = await ReadSessionPortAsync(transport, outcome.Result.OperationId, cancellationToken).ConfigureAwait(false),
+            SessionSshPort = await ReadSessionPortAsync(transport, outcome.Result.OperationId, sessionDiagnostics, cancellationToken).ConfigureAwait(false),
         };
     }
 
-    public async Task<FirewallOperationResult> AddAsync(
+    public Task<FirewallOperationResult> AddAsync(
         IRemoteTransport transport,
         UfwAllowRuleInput input,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        AddCoreAsync(transport, input, null, cancellationToken);
+
+    public Task<FirewallOperationResult> AddAsync(
+        IRemoteTransport transport,
+        UfwAllowRuleInput input,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        AddCoreAsync(transport, input, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<FirewallOperationResult> AddCoreAsync(
+        IRemoteTransport transport,
+        UfwAllowRuleInput input,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
-        var result = await allow.AddAsync(transport, input, cancellationToken).ConfigureAwait(false);
-        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot, result.AlreadyPresent), cancellationToken).ConfigureAwait(false);
+        var result = sessionDiagnostics is null
+            ? await allow.AddAsync(transport, input, cancellationToken).ConfigureAwait(false)
+            : await allow.AddAsync(transport, input, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
+        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot, result.AlreadyPresent), sessionDiagnostics, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<FirewallOperationResult> RemoveAsync(
+    public Task<FirewallOperationResult> RemoveAsync(
         IRemoteTransport transport,
         UfwRuleRemovalIntent intent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RemoveCoreAsync(transport, intent, null, cancellationToken);
+
+    public Task<FirewallOperationResult> RemoveAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent intent,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        RemoveCoreAsync(transport, intent, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<FirewallOperationResult> RemoveCoreAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent intent,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
-        var result = await remove.RemoveAsync(transport, intent, cancellationToken).ConfigureAwait(false);
-        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot, IsStale: result.IsStale, IsActiveSshProtected: result.IsActiveSshProtected), cancellationToken).ConfigureAwait(false);
+        var result = sessionDiagnostics is null
+            ? await remove.RemoveAsync(transport, intent, cancellationToken).ConfigureAwait(false)
+            : await remove.RemoveAsync(transport, intent, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
+        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot, IsStale: result.IsStale, IsActiveSshProtected: result.IsActiveSshProtected), sessionDiagnostics, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<FirewallOperationResult> EnableAsync(
+    public Task<FirewallOperationResult> EnableAsync(
         IRemoteTransport transport,
         bool confirmed,
-        CancellationToken cancellationToken = default)
-    {
-        var result = await toggle.EnableAsync(transport, confirmed, cancellationToken).ConfigureAwait(false);
-        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot), cancellationToken).ConfigureAwait(false);
-    }
+        CancellationToken cancellationToken = default) =>
+        EnableCoreAsync(transport, confirmed, null, cancellationToken);
 
-    public async Task<FirewallOperationResult> DisableAsync(
+    public Task<FirewallOperationResult> EnableAsync(
         IRemoteTransport transport,
         bool confirmed,
-        CancellationToken cancellationToken = default)
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        EnableCoreAsync(transport, confirmed, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<FirewallOperationResult> EnableCoreAsync(
+        IRemoteTransport transport,
+        bool confirmed,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
-        var result = await toggle.DisableAsync(transport, confirmed, cancellationToken).ConfigureAwait(false);
-        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot), cancellationToken).ConfigureAwait(false);
+        var result = sessionDiagnostics is null
+            ? await toggle.EnableAsync(transport, confirmed, cancellationToken).ConfigureAwait(false)
+            : await toggle.EnableAsync(transport, confirmed, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
+        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot), sessionDiagnostics, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<FirewallOperationResult> WithCurrentEvidenceAsync(IRemoteTransport transport, FirewallOperationResult result, CancellationToken cancellationToken)
+    public Task<FirewallOperationResult> DisableAsync(
+        IRemoteTransport transport,
+        bool confirmed,
+        CancellationToken cancellationToken = default) =>
+        DisableCoreAsync(transport, confirmed, null, cancellationToken);
+
+    public Task<FirewallOperationResult> DisableAsync(
+        IRemoteTransport transport,
+        bool confirmed,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        DisableCoreAsync(transport, confirmed, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<FirewallOperationResult> DisableCoreAsync(
+        IRemoteTransport transport,
+        bool confirmed,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
+    {
+        var result = sessionDiagnostics is null
+            ? await toggle.DisableAsync(transport, confirmed, cancellationToken).ConfigureAwait(false)
+            : await toggle.DisableAsync(transport, confirmed, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
+        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot), sessionDiagnostics, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<FirewallOperationResult> WithCurrentEvidenceAsync(IRemoteTransport transport, FirewallOperationResult result, SessionOperationDiagnostics? sessionDiagnostics, CancellationToken cancellationToken)
     {
         if (result.Snapshot is null) { return result; }
         // A failure can have useful fresh facts, but lower workflows also return
@@ -88,13 +168,14 @@ public sealed class FirewallManagement : IFirewallManagement
         {
             Snapshot = fresh.Refresh.Snapshot,
             SnapshotIsCurrent = fresh.Result.Succeeded && fresh.Refresh.Replaced && fresh.Refresh.ReadStatus == UfwRuleListReadStatus.Complete,
-            SessionSshPort = await ReadSessionPortAsync(transport, result.Result.OperationId, cancellationToken).ConfigureAwait(false),
+            SessionSshPort = await ReadSessionPortAsync(transport, result.Result.OperationId, sessionDiagnostics, cancellationToken).ConfigureAwait(false),
         };
     }
 
-    private async Task<int?> ReadSessionPortAsync(IRemoteTransport transport, string operationId, CancellationToken cancellationToken)
+    private async Task<int?> ReadSessionPortAsync(IRemoteTransport transport, string operationId, SessionOperationDiagnostics? sessionDiagnostics, CancellationToken cancellationToken)
     {
-        var correlation = CorrelationIds.Create("firewall_session_port") with { OperationId = operationId };
+        var correlation = sessionDiagnostics?.Correlation.ForStep("verify")
+            ?? CorrelationIds.Create("firewall_session_port") with { OperationId = operationId };
         var elapsed = Stopwatch.StartNew();
         int? port = null;
         var error = OperationErrorCode.Parse;
