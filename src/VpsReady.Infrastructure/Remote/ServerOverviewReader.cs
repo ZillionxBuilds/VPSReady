@@ -59,8 +59,11 @@ public sealed class ServerOverviewReader(IDiagnosticSink diagnostics) : IServerO
                 }
             }
             var facts = UbuntuServerFactAggregator.Aggregate(results, endpoint);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticStatus.Succeeded, duration: Stopwatch.GetElapsedTime(started)).ConfigureAwait(false);
+            // All remote reads and parsing must be complete before deciding the
+            // terminal outcome. Once success is journaled, later cancellation
+            // cannot turn the same operation into a contradictory failure.
             linked.Token.ThrowIfCancellationRequested();
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticStatus.Succeeded, duration: Stopwatch.GetElapsedTime(started)).ConfigureAwait(false);
             return new(OperationResult.Success(correlation.OperationId, OperationState.Unchanged), facts);
         }
         catch (OperationCanceledException)
