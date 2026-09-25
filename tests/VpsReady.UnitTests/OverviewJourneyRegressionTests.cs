@@ -10,6 +10,31 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OverviewJourneyRegressionTests
 {
+    [Fact]
+    public async Task MixedCpuModelsRenderKnownCountButUnknownModelWithoutChangingOtherFacts()
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport { CpuOutput = "processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : Model B" };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink));
+
+        await vm.RefreshAsync();
+
+        Assert.Equal(12, transport.Calls);
+        Assert.Equal("2 logical CPUs; model Unknown", Assert.Single(vm.Facts, row => row.Label == "CPU").Value);
+        Assert.All(vm.Facts, row => Assert.True(row.IsKnown));
+        Assert.NotEmpty(sink.Events);
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+            Assert.DoesNotContain("Model A", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Model B", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
     [Theory]
     // Synthetic byte evidence, not reconstructed from rounded human units.
     [InlineData("/dev/fixture 33822867456 5558272 31997505536 0% /", true)]
@@ -172,6 +197,7 @@ public sealed class OverviewJourneyRegressionTests
     {
         public int Calls { get; private set; }
         public string Mode { get; init; } = "valid";
+        public string CpuOutput { get; init; } = "processor : 0\nmodel name : Fixture CPU";
         public string DiskOutput { get; init; } = "/dev/vda1 10000 1000 9000 10% /";
         public bool Block { get; init; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -191,7 +217,7 @@ public sealed class OverviewJourneyRegressionTests
                 RemoteCommandCatalog.UbuntuUptimeRead => "3600.00 2000.00",
                 RemoteCommandCatalog.UbuntuCurrentUserRead => "fixture",
                 RemoteCommandCatalog.UbuntuPrivilegeRead => "root=false\nsudo=available",
-                RemoteCommandCatalog.UbuntuCpuRead => "processor : 0\nmodel name : Fixture CPU",
+                RemoteCommandCatalog.UbuntuCpuRead => CpuOutput,
                 RemoteCommandCatalog.UbuntuMemoryRead => "MemTotal: 1024 kB\nMemAvailable: 512 kB",
                 RemoteCommandCatalog.UbuntuRootDiskRead => DiskOutput,
                 RemoteCommandCatalog.SshSessionPortRead => "22",
