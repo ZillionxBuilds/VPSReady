@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -13,6 +14,34 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OperationJournalWorkspaceTests
 {
+    private static readonly JsonSerializerOptions RelaxedJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    [Fact]
+    public void BundleSafetyScanMasksOnlyTopLevelCommandIdNotNestedContextOrFreeText()
+    {
+        var commandId = RemoteCommandCatalog.UbuntuAuthorizedKeysVerify;
+        var message = $"Escaped free text says \"commandId\": \"{commandId}\".";
+        var json = JsonSerializer.Serialize(new { commandId, context = new { commandId }, message }, RelaxedJsonOptions);
+
+        var scanCopy = OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(json);
+
+        using var parsed = JsonDocument.Parse(scanCopy);
+        Assert.Equal("[CATALOGUED_COMMAND_ID]", parsed.RootElement.GetProperty("commandId").GetString());
+        Assert.Equal(commandId, parsed.RootElement.GetProperty("context").GetProperty("commandId").GetString());
+        Assert.Equal(message, parsed.RootElement.GetProperty("message").GetString());
+        Assert.Contains(commandId, scanCopy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BundleSafetyScanFailsClosedOnMalformedJournal()
+    {
+        Assert.ThrowsAny<JsonException>(() => OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(
+            "{\"commandId\": \"ubuntu.ssh.authorized-keys.verify\"} {"));
+    }
+
     [Fact]
     public async Task CancelledSessionFinalizationNeverExportsTheWorkflowSuccessCandidate()
     {

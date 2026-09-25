@@ -582,11 +582,50 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         }
     }
 
-    private static string MaskCataloguedCommandIdsForSafetyScan(string jsonl) => CataloguedCommandIdFieldRegex().Replace(
-        jsonl,
-        match => DiagnosticCommandCatalog.IsKnown(match.Groups["id"].Value)
-            ? "\"commandId\": \"[CATALOGUED_COMMAND_ID]\""
-            : match.Value);
+    internal static string MaskCataloguedCommandIdsForSafetyScan(string jsonl)
+    {
+        // Parse the JSONL stream rather than matching text. A nested context
+        // key or escaped free-text lookalike must never receive this exemption.
+        var bytes = Encoding.UTF8.GetBytes(jsonl);
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { AllowMultipleValues = true });
+        var valueRanges = new List<(int Start, int End)>();
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1
+                || !reader.ValueTextEquals("commandId"))
+            {
+                continue;
+            }
+
+            if (!reader.Read())
+            {
+                throw new JsonException("A diagnostic command ID value was missing.");
+            }
+
+            var commandId = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            if (commandId is not null && DiagnosticCommandCatalog.IsKnown(commandId))
+            {
+                valueRanges.Add((checked((int)reader.TokenStartIndex), checked((int)reader.BytesConsumed)));
+            }
+        }
+
+        if (valueRanges.Count == 0)
+        {
+            return jsonl;
+        }
+
+        var scanCopy = new StringBuilder(jsonl.Length);
+        var offset = 0;
+        foreach (var (start, end) in valueRanges)
+        {
+            scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset, start - offset)));
+            scanCopy.Append("\"[CATALOGUED_COMMAND_ID]\"");
+            offset = end;
+        }
+
+        scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset)));
+        return scanCopy.ToString();
+    }
 
     private void AssertSafeEventForExport(StructuredDiagnosticEvent diagnosticEvent)
     {
@@ -656,9 +695,6 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     [System.Text.RegularExpressions.GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----|known[_ -]?hosts|authorized[_ -]?keys|(?:authorization|proxy-authorization)\\s*:\\s*\\S+|\\b(password|passphrase|token|secret|credential|private[_ -]?key)\\s*[=:]", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex UnsafeBundleContentRegex();
-
-    [System.Text.RegularExpressions.GeneratedRegex("\"commandId\"\\s*:\\s*\"(?<id>[A-Za-z0-9_.-]+)\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
-    private static partial System.Text.RegularExpressions.Regex CataloguedCommandIdFieldRegex();
 
     private static void ApplyDirectoryPermissions(string directory)
     {
