@@ -59,7 +59,9 @@ Pause after the inner workflow returns but before `ApplicationSession` chooses t
 - [x] Overview success/cancel/timeout/replacement/stale-dispatch E1 and read-only stateful E2 are locally GREEN; exact-head full regression remains pending.
 - [x] Missing expected-session ID is rejected before dispatch.
 - [x] Known catalogued command IDs no longer falsely block sanitized ZIP export; free-text redaction remains tested.
-- [ ] Exact-head full E0–E4, PR #21/#48 composite, independent review and draft PR handoff.
+- [x] Exact-head E0/E1/E2 and unsigned macOS arm64 E4 at local source head `54f65c2`; contained E3, Windows/Linux native and hosted checks NOT RUN.
+- [x] Local composite with exact open PR #21, #23 and #48 heads passed E0/E1/E2 and unsigned macOS arm64 publish; #21 reader conflict resolved in composite only.
+- [ ] Draft PR and external independent review; no integration or Owner E5.
 
 ## 11. Decision log
 
@@ -67,6 +69,7 @@ Pause after the inner workflow returns but before `ApplicationSession` chooses t
 - 2026-09-25: A session replacement after the outer result was already accepted is a new lifecycle event. Preserve its historical terminal result, but demote the ViewModel's current proof state so the replacement cannot inherit it.
 - 2026-09-25: Exempt only an allowlisted `commandId` JSON field during the secondary ZIP text scan. Do not exempt free text or unknown IDs.
 - 2026-09-26: PR #21 protects direct Overview reader cancellation while its terminal event is being written, but cannot control the later ApplicationSession verdict. Reuse the explicit #49 session scope for Overview; do not alter direct reader behavior. Overview uses the same `operation.failed` ID for Failed and Cancelled, so candidate reuse also checks status.
+- 2026-09-26: Keep #21/#23/#48 as separate review proposals. Composite `92f26ca` is a local test of the merged logic, not a release branch mutation; its Overview conflict resolution preserves #21's pre-terminal check and #49's per-session terminal buffering.
 
 ## 12. Surprises and discoveries
 
@@ -81,4 +84,4 @@ Diagnostic persistence is asynchronous; a session can change after an accepted r
 
 ## 14. Outcomes and follow-up
 
-Local correction is under review, not integrated. Track exact test counts, commit, PR and remaining E3/E4/hosted evidence in the #49 Workpad. No real VPS or Owner E5 claim. Once reviewed, reconcile #47/#48 and #49 before any release gate; main promotion remains separate.
+Local correction is not integrated. At `54f65c2`, locked restore, Release -warnaserror build, format and diff checks passed; E1 628 PASS/2 SKIP, E2 176 PASS/3 SKIP. Unsigned self-contained macOS arm64 publish and disconnected-process startup smoke passed; the process was intentionally interrupted, so clean UI exit was not verified. Local composite `92f26ca` with #21/#23/#48 passed E1 634 PASS/2 SKIP and E2 179 PASS/3 SKIP; E0 and macOS arm64 publish also passed. E3 Docker-based local protocol, Windows/Linux native and hosted checks were NOT RUN. External independent review remains required. Track final commit/PR and evidence in the #49 Workpad. No real VPS or Owner E5 claim. Once reviewed, reconcile related drafts before any release gate; main promotion remains separate.
