@@ -17,7 +17,7 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex SafeAtom = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$", RegexOptions.CultureInvariant);
     private static readonly Regex KeyValue = new("^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$", RegexOptions.CultureInvariant);
     private static readonly Regex MemInfo = new("^(?<key>MemTotal|MemAvailable):\\s*(?<value>[0-9]+)\\s*kB$", RegexOptions.CultureInvariant);
-    private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*[0-9]+$", RegexOptions.CultureInvariant);
+    private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*(?<index>[0-9]+)$", RegexOptions.CultureInvariant);
     private static readonly Regex CpuModel = new("^(?:model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
@@ -177,14 +177,26 @@ public static partial class UbuntuServerFactParser
     public static ServerFact<CpuFacts> ParseCpu(string output)
     {
         var lines = Lines(output);
-        var count = lines.Count(line => CpuProcessor.IsMatch(line));
+        var processorIndices = new HashSet<int>();
+        foreach (var line in lines.Where(line => line.StartsWith("processor", StringComparison.Ordinal)
+            && (line.Length == "processor".Length || line["processor".Length] is ':' or ' ' or '\t')))
+        {
+            var match = CpuProcessor.Match(line);
+            if (!match.Success
+                || !int.TryParse(match.Groups["index"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+                || !processorIndices.Add(index))
+            {
+                return ServerFact.Unknown<CpuFacts>();
+            }
+        }
+
         var model = lines.Select(line => CpuModel.Match(line)).FirstOrDefault(match => match.Success)?.Groups["value"].Value.Trim();
-        if (count <= 0 || !string.IsNullOrEmpty(model) && !IsSafeDisplayValue(model))
+        if (processorIndices.Count == 0 || !string.IsNullOrEmpty(model) && !IsSafeDisplayValue(model))
         {
             return ServerFact.Unknown<CpuFacts>();
         }
 
-        return ServerFact.Known(new CpuFacts(count, string.IsNullOrWhiteSpace(model) ? null : model));
+        return ServerFact.Known(new CpuFacts(processorIndices.Count, string.IsNullOrWhiteSpace(model) ? null : model));
     }
 
     public static ServerFact<MemoryFacts> ParseMemory(string output)
@@ -192,14 +204,19 @@ public static partial class UbuntuServerFactParser
         var values = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (var line in Lines(output))
         {
-            var match = MemInfo.Match(line);
-            if (!match.Success || !long.TryParse(match.Groups["value"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes)
-                || kibibytes > long.MaxValue / BytesPerKiB)
+            if (!line.StartsWith("MemTotal:", StringComparison.Ordinal)
+                && !line.StartsWith("MemAvailable:", StringComparison.Ordinal))
             {
                 continue;
             }
 
-            values[match.Groups["key"].Value] = kibibytes * BytesPerKiB;
+            var match = MemInfo.Match(line);
+            if (!match.Success || !long.TryParse(match.Groups["value"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes)
+                || kibibytes > long.MaxValue / BytesPerKiB
+                || !values.TryAdd(match.Groups["key"].Value, kibibytes * BytesPerKiB))
+            {
+                return ServerFact.Unknown<MemoryFacts>();
+            }
         }
 
         return values.TryGetValue("MemTotal", out var total) && values.TryGetValue("MemAvailable", out var available)
