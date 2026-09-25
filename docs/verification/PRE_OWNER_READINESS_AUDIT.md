@@ -482,11 +482,12 @@ E2 Scenario 174 PASS/3 SKIP. Exact clean-head unsigned macOS arm64 E4
 self-contained publish, embedded source SHA and bounded startup smoke passed;
 interactive UI and native Windows/Linux were **NOT RUN**. An unpushed local
 #68 + #70 composite at `255f8e3e9c9acc00df6da8f986fbc4b3081e413b`
-auto-merged the shared parser and test files;
-E0 restore/build/format/diff passed, E1 Unit 625 PASS/2 SKIP and E2 Scenario
-174 PASS/3 SKIP. Composite E3/E4, hosted checks, independent QA and approved
-exact-candidate integration remain **NOT RUN/NOT VERIFIED**. E5 **REAL VPS:
-NOT TESTED**.
+auto-merged the shared parser and test files. E0 restore/build/format/diff
+passed, E1 Unit 625 PASS/2 SKIP and E2 Scenario 174 PASS/3 SKIP. Composite
+E4 exact-head unsigned macOS arm64 self-contained publish/Mach-O/embedded SHA
+and bounded startup smoke also passed. E3, interactive UI, native
+Windows/Linux, hosted checks, independent QA and approved exact-candidate
+integration remain **NOT RUN/NOT VERIFIED**. E5 **REAL VPS: NOT TESTED**.
 
 ### F04 numbered port-range gap and focused correction — 2026-09-25
 
