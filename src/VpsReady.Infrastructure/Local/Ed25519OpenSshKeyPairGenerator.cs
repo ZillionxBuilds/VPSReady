@@ -300,12 +300,29 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
     private static bool TryCreatePaths(LocalEd25519KeyGenerationRequest request, out KeyPairPaths paths)
     {
         paths = default;
-        if (string.IsNullOrWhiteSpace(request.PrivateKeyPath) || !Path.IsPathFullyQualified(request.PrivateKeyPath))
+        string privatePath;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.PrivateKeyPath) || !Path.IsPathFullyQualified(request.PrivateKeyPath))
+            {
+                return false;
+            }
+
+            privatePath = Path.GetFullPath(request.PrivateKeyPath);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (IOException)
         {
             return false;
         }
 
-        var privatePath = Path.GetFullPath(request.PrivateKeyPath);
         if (!string.Equals(privatePath, request.PrivateKeyPath, StringComparison.Ordinal)
             || string.Equals(Path.GetExtension(privatePath), ".pub", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(Path.GetFileName(privatePath))
