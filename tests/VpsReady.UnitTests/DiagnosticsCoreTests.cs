@@ -78,6 +78,36 @@ public sealed class DiagnosticsCoreTests
         }
     }
 
+    [Theory]
+    [InlineData(DiagnosticEventCatalog.LocalKeyGenerationFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.LocalKeyGenerationCancelled, DiagnosticStatus.Cancelled, "Verify the local state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.LocalKeyGenerationRecoveryRequired, DiagnosticStatus.RecoveryRequired, "Review the recovery guidance and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.ExistingKeySelectionFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.ExistingKeySelectionCancelled, DiagnosticStatus.Cancelled, "Verify the local state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.OpenSshConfigEditFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.OpenSshConfigEditCancelled, DiagnosticStatus.Cancelled, "Verify the local state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.StartupFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.PublicKeyDeploymentFailed, DiagnosticStatus.Failed, "Review the error and verify the remote state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, DiagnosticStatus.Cancelled, "Verify the remote state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticStatus.RecoveryRequired, "Review the recovery guidance and verify the remote state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.OperationFailed, DiagnosticStatus.Failed, "Review the error and verify the remote state before retrying.")]
+    public void ActivityGuidanceDistinguishesLocalOnlyEventsFromRemoteOrGenericEvents(
+        string eventId,
+        DiagnosticStatus status,
+        string expectedGuidance)
+    {
+        var diagnosticEvent = new StructuredDiagnosticEvent(
+            eventId,
+            "Safe category",
+            DiagnosticLevel.Error,
+            CorrelationIds.Create("review"),
+            DiagnosticPhase.Verify,
+            status,
+            "Fixed safe message");
+
+        Assert.Equal(expectedGuidance, diagnosticEvent.ToActivityEntry().NextSafeAction);
+    }
+
     [Fact]
     public async Task RedactionPipelineSanitizesEveryStructuredFieldBeforeItsSink()
     {

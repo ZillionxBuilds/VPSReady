@@ -7,6 +7,15 @@ stable-release announcement; exact verification belongs to the linked records.
 
 ## Unreleased — v0.1 Core Basic
 
+### Local Activity recovery guidance (review branch)
+
+- Failed or cancelled local key and OpenSSH-config operations now point users
+  to local state, while remote actions keep their remote-state safety warning.
+  Activity guidance remains fixed and does not include key paths or secrets.
+
+See [issue #29](https://github.com/ZillionxBuilds/VPSReady/issues/29).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,
