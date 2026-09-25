@@ -263,6 +263,33 @@ public sealed class OverviewJourneyRegressionTests
         Assert.Equal(correlation.OperationId, terminal.Correlation.OperationId);
     }
 
+    [Fact]
+    public async Task SessionReplacementDuringOverviewTerminalPersistenceCannotShowOldFacts()
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), new FactTransport());
+        var sink = new Sink { BlockOverviewSuccess = true };
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink), sink);
+
+        var refresh = vm.RefreshAsync();
+        try
+        {
+            await sink.TerminalEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await session.StartAsync(new RemoteEndpoint("replacement.invalid", 22, "fixture"), new FactTransport());
+        }
+        finally
+        {
+            sink.TerminalRelease.TrySetResult();
+        }
+
+        await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(ConnectionScreenState.Unknown, vm.OverviewState);
+        Assert.All(vm.Facts, row => Assert.False(row.IsKnown));
+        Assert.Equal(DiagnosticEventCatalog.OperationSucceeded,
+            Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.OperationSucceeded).EventId);
+    }
+
     private sealed class NoFactory : IRemoteTransportFactory
     {
         public IRemoteTransport Create() => throw new InvalidOperationException("No connection was requested.");
@@ -311,7 +338,19 @@ public sealed class OverviewJourneyRegressionTests
     private sealed class Sink : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+        public bool BlockOverviewSuccess { get; init; }
+        public TaskCompletionSource TerminalEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TerminalRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            if (BlockOverviewSuccess && entry.EventId == DiagnosticEventCatalog.OperationSucceeded)
+            {
+                TerminalEntered.TrySetResult();
+                await TerminalRelease.Task;
+            }
+
+            Events.Add(entry);
+        }
     }
 
     private sealed class FactTransport : IRemoteTransport
