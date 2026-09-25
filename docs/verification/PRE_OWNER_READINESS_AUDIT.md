@@ -246,6 +246,26 @@ an approved integrated candidate, native Windows/Linux packaging or Owner
 Stage 4. PR #17's desktop name-entry journey remains separately unmerged.
 Hosted checks and Owner E5 are **NOT RUN**. **REAL VPS: NOT TESTED.**
 
+Local-only interaction preflight `b407b0bf25d53c9406ad3a0aeea4d3d3ee3ecae0`
+cherry-picks #66 onto the prior
+all-pending composite `f809182` that includes #17, #60 and #64. The product
+and test changes auto-merged without conflict. Ubuntu ARM64 full E1 is 821
+PASS/3 SKIP with OpenSSH client installed in the disposable SDK container;
+six initial `ssh -G` tests failed only in the bare image without that client.
+Ubuntu ARM64 E2 is 209 PASS/3 SKIP as a non-root container user; a root-run
+permission-denial fixture had failed because root can read mode-000 files.
+Contained loopback E3 is 3 PASS with the named-key match/wrong-key checks and
+existing protocol negatives. macOS E0 locked restore, Release `-warnaserror`
+build (zero warnings/errors) and format pass; E4 unsigned `osx-arm64` publish
+and bounded startup smoke pass. The ignored local E3 TRX checksum is
+`2fe13b429c4f0598af93119fbfdb61717944fe939194b28d1089d45d34a50d5c`;
+the protocol-summary checksum is
+`94016c202f8e23510a8edf87fe5fb8722b272aad8849e7e5032b1c982d3b76e2`.
+A private-key/public-key-pattern scan found no match. This composite was
+neither pushed nor merged, is developer self-check only, and does not satisfy
+independent review, hosted checks, native Windows/Linux packaging, approved
+exact-candidate evidence or Owner E5. **REAL VPS: NOT TESTED.**
+
 ## Verdicts and exact baseline
 
 `PARTIAL` means the production path and some blind evidence exist, but not every
