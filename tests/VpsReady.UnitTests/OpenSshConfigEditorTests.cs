@@ -122,6 +122,39 @@ public sealed class OpenSshConfigEditorTests
         Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExtraEffectiveIdentityRefusesFalseNoChangeWithoutEditingConfig(bool extraInWildcard)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "other-key");
+        var original = extraInWildcard
+            ? workspace.RenderAlias("work-vps") + $"Host *\n    IdentityFile \"{extraIdentity}\"\n"
+            : workspace.RenderAlias("work-vps").Replace(
+                "    IdentitiesOnly yes\n",
+                $"    IdentityFile \"{extraIdentity}\"\n    IdentitiesOnly yes\n",
+                StringComparison.Ordinal);
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var diagnostics = new CollectingDiagnosticSink();
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("config_alias");
+
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics)
+            .AddAliasAsync(workspace.Request("work-vps"), correlation, CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.AliasExists, result.ErrorCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.All(diagnostics.Events, item =>
+        {
+            Assert.Equal(correlation.OperationId, item.Correlation.OperationId);
+            Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(extraIdentity, item.Message, StringComparison.Ordinal);
+        });
+    }
+
     [Fact]
     public async Task HandlesQuotedIdentityPathsAndInlineCommentsWithoutLeakingThePath()
     {
