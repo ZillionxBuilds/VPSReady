@@ -60,7 +60,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             var result = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
             await ReportAsync(correlation, DiagnosticEventCatalog.TimezoneChangePlanned, DiagnosticPhase.Plan, DiagnosticStatus.Succeeded, activeCommand, null).ConfigureAwait(false);
-            return new TimezoneChangePlan(result, currentTimezone, requestedTimezone);
+            return new TimezoneChangePlan(result, currentTimezone, requestedTimezone, transport);
         }
         catch (OperationCanceledException)
         {
@@ -95,6 +95,13 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
                 return await FailureAsync(correlation, OperationErrorCode.Validation, TimezoneChangeErrorCatalog.Confirmation, DiagnosticPhase.Validate, null, OperationState.Unchanged).ConfigureAwait(false);
             }
 
+            if (!plan.IsForTransport(transport)
+                || !UbuntuTimezoneCommandCatalog.IsIanaIdentifier(plan.CurrentTimezone!)
+                || !UbuntuTimezoneCommandCatalog.IsIanaIdentifier(plan.SelectedTimezone!))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Validation, TimezoneChangeErrorCatalog.StalePlan, DiagnosticPhase.Validate, null, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
             activePhase = DiagnosticPhase.Preflight;
             var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
             if (!privilege.Result.Succeeded)
@@ -110,6 +117,46 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
                     : TimezoneChangeErrorCatalog.Command;
                 return await FailureAsync(correlation, error, code, DiagnosticPhase.Preflight, null, OperationState.Unchanged).ConfigureAwait(false);
             }
+
+            activeCommand = RemoteCommandCatalog.UbuntuTimezoneAvailableList;
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Preflight, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
+            var available = await transport.ExecuteAsync(UbuntuTimezoneCommandCatalog.CreateAvailableListRequest(), cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Preflight, available, activeCommand).ConfigureAwait(false);
+            if (!available.Succeeded)
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Command, TimezoneChangeErrorCatalog.Command, DiagnosticPhase.Preflight, activeCommand, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            if (!TryParseAvailableTimezones(available.StandardOutput, out var timezones))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Parse, TimezoneChangeErrorCatalog.Parse, DiagnosticPhase.Preflight, activeCommand, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            if (!timezones.Contains(plan.CurrentTimezone!) || !timezones.Contains(plan.SelectedTimezone!))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Validation, TimezoneChangeErrorCatalog.StalePlan, DiagnosticPhase.Preflight, activeCommand, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            activeCommand = RemoteCommandCatalog.UbuntuTimezoneCurrentRead;
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Preflight, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
+            var current = await transport.ExecuteAsync(UbuntuTimezoneCommandCatalog.CreateCurrentReadRequest(), cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Preflight, current, activeCommand).ConfigureAwait(false);
+            if (!current.Succeeded)
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Command, TimezoneChangeErrorCatalog.Command, DiagnosticPhase.Preflight, activeCommand, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            if (!TryParseSingleTimezone(current.StandardOutput, out var observedCurrent))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Parse, TimezoneChangeErrorCatalog.Parse, DiagnosticPhase.Preflight, activeCommand, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            if (!string.Equals(observedCurrent, plan.CurrentTimezone, StringComparison.Ordinal))
+            {
+                return await FailureAsync(correlation, OperationErrorCode.Validation, TimezoneChangeErrorCatalog.StalePlan, DiagnosticPhase.Preflight, activeCommand, OperationState.Unchanged).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             activePhase = DiagnosticPhase.Apply;
             var apply = UbuntuTimezoneCommandCatalog.CreateApplyRequest(plan.SelectedTimezone!);
