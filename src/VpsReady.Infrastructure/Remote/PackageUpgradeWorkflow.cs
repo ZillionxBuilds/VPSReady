@@ -31,8 +31,8 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             }
 
             var result = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradePlanned, DiagnosticPhase.Plan, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradePlanned, DiagnosticPhase.Plan, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
             return new PackageUpgradePlan(result, count, fingerprint, transport);
         }
         catch (OperationCanceledException)
