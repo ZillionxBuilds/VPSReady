@@ -13,7 +13,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [local Activity guidance PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30),
 [local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32),
 [UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34), and
-[system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36)
+[system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36), and
+[diagnostic pseudonym PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -279,6 +280,30 @@ made. Hosted E0–E4 and native Windows/full Linux host validation remain
 **NOT RUN**; the contained Linux startup smoke above is a separate local
 developer result, not hosted or approved-candidate evidence.
 
+### F09 pseudonym privacy correction — isolated, not in composite
+
+Exact release `9965c5b` used a fixed truncated SHA-256 of host/IP and username
+values as its public pseudonym. Focused E1 regressions reproduced an offline
+dictionary match for two synthetic identities (2/2 RED) and a separate
+double-redaction mismatch between the token minted by the shared redactor and
+the journal token (1/1 RED). Focused [issue #37](https://github.com/ZillionxBuilds/VPSReady/issues/37)
+and draft [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38) at
+`2365cb2477655d0ac3ee0c563ae839decd084997` add a volatile per-instance
+HMAC key and authenticated tokens that remain stable through repeated
+journal/bundle redaction but reject token-shaped input not minted by that
+instance. No key is persisted or exported; pseudonyms may change after restart,
+while operation IDs remain the correlation authority.
+
+On the **isolated PR #38 branch**, focused E1 is 3 PASS; locked E0 restore,
+Release `-warnaserror` build (0 warnings/errors), format and diff checks PASS;
+full E1 is 611 PASS/2 SKIP and E2 is 174 PASS/3 SKIP. E3 is NOT RUN for this
+local redactor correction. E4 unsigned macOS arm64 self-contained publish and
+Mach-O check PASS; the process stayed alive 8 seconds without error output
+before manual interruption, not an interactive or clean-exit review. Native
+Windows/Linux, hosted checks, independent QA, exact combined-candidate privacy
+export, and Owner E5 are NOT RUN. The earlier local composite at `90abe1b` does
+**not** contain PR #38. **REAL VPS: NOT TESTED.**
+
 ## F02–F09 source and evidence map
 
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
@@ -290,7 +315,7 @@ developer result, not hosted or approved-candidate evidence.
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). Recheck privilege, apt locks, late cancellation, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
-| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). A developer-only #19/#30/#32 macOS flow showed both surfaces consistent, but isolated native flow and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
+| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). Dictionary-reversible and repeatedly rehashed host/user pseudonyms are corrected in unmerged [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38). A developer-only #19/#30/#32 macOS flow showed both surfaces consistent, but isolated native flow and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
@@ -357,7 +382,7 @@ unmerged PRs:
 | F09 criteria | Source and named regression evidence | Remaining boundary |
 | --- | --- | --- |
 | AC1–4 Activity, correlation, stable IDs and journal fields | `DiagnosticsCoreTests`, `StructuredDiagnosticsScenarioTests`, `ActivityDiagnosticsScenarioTests` and `OperationJournalWorkspaceTests` exercise phase/command IDs, bounded Activity entries and JSONL projection. | Native release review found journal metadata rejected by fail-closed redaction; unmerged PR #19 repairs it. Recheck on exact integrated candidate. |
-| AC5–8 and AC16 bounded capture, redaction and seeded-secret exclusions | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests` and structured-diagnostics scenarios cover secrets, untyped output, omission policy, public-key lines and journal/report/bundle surfaces. | Windows/Linux host and Owner-reviewed bundle/screenshot leak checks NOT RUN; no raw Owner material was collected. |
+| AC5–8 and AC16 bounded capture, redaction and seeded-secret exclusions | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests` and structured-diagnostics scenarios cover secrets, untyped output, omission policy, public-key lines and journal/report/bundle surfaces. PR #38 adds RED-to-GREEN host/user dictionary-resistance and stable-token journal/bundle tests using synthetic identities. | PR #38 remains unmerged; Windows/Linux host and Owner-reviewed bundle/screenshot leak checks NOT RUN; no raw Owner material was collected. |
 | AC9–10 per-user storage, retention, open/clear | `OperationJournalWorkspaceTests` cover path rejection, size/newest-run retention and log-folder action; `ActivityDiagnosticsScenarioTests` cover clear and filtering. | Actual retention and folder action on each supported native host NOT RUN as a release gate. |
 | AC11–14 explicit safe report/bundle and no auto-upload | `OperationJournalWorkspaceTests` cover redacted report, local ZIP manifest/checksums and relative-path rejection; `ActivityDiagnosticsScenarioTests` cover explicit copy/export and local export failure. | Disconnected Owner Stage 0/2 report/bundle walkthrough and review of an exact-candidate export NOT RUN. |
 | AC15 and AC17 startup/failure ID-to-journal correlation | Current release `AppViewModel.CreateSafeStartupFailure` and `MinimalSafeStartupJournal.TryRecord` produce unrelated records; invalid Connection form lacks a correlated validation event, while production journal metadata blocks persistence. Focused E1/E2 corrections are in unmerged PR #19 and #25. | Native forced-startup-failure UI/export, combined candidate correlation and Owner Stage 2/6 NOT RUN. |
@@ -383,7 +408,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21, #23, #25, #27, #30 and #32 independently, then
+- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36 and #38 independently, then
   validate their integration on an exact candidate. The local composite is not
   that gate. Do not self-merge to release/main or infer visual acceptance.
 - Review #31 inline local-key correction in PR #32 before claiming complete
@@ -406,6 +431,10 @@ tracks the separate E5 gate.
   for F07 additive `IdentityFile` semantics. Local OpenSSH `ssh -G` confirms
   the false no-change source gap, but exact combined-candidate and Owner proof
   remain separate.
+- Obtain independent privacy review of [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38)
+  for keyed host/user pseudonyms and authenticated nested-redaction tokens.
+  Its isolated local E1 and macOS publish do not establish a reviewed or
+  integrated-candidate F09 privacy/export gate.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
