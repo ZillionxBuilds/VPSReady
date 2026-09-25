@@ -29,6 +29,13 @@ public sealed class SshSessionCompletionRegressionTests
         var transport = new DeploymentTransport();
         await using var session = new ObservedSession(outcome == "timeout");
         await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), transport);
+        if (!authentication)
+        {
+            // Pause after the workflow returns, before ApplicationSession makes
+            // its authoritative cancellation/timeout decision. This remains
+            // valid when a fix defers the workflow's terminal diagnostic.
+            session.AfterDispatch = barrier.PauseAsync;
+        }
         var initialSession = session.Snapshot.SessionId;
         var verifier = new BarrierVerifier(barrier);
         using var vm = new SshManagementViewModel(session,
@@ -110,6 +117,7 @@ public sealed class SshSessionCompletionRegressionTests
         var barrier = new CompletionBarrier();
         await using var session = new ObservedSession(shortTimeout: false);
         await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new DeploymentTransport());
+        session.AfterDispatch = barrier.PauseAsync;
         using var vm = new SshManagementViewModel(session,
             new Ed25519OpenSshKeyPairGenerator(barrier), new ExistingOpenSshKeySelector(barrier),
             new PublicKeyDeploymentWorkflow(barrier), new BarrierVerifier(barrier), new UnusedConfigEditor());
@@ -159,8 +167,9 @@ public sealed class SshSessionCompletionRegressionTests
     private static async Task<(OperationResult Result, CompletionBarrier Barrier)> RunCancelledKeyAuthenticationAsync()
     {
         var barrier = new CompletionBarrier();
-        await using var session = new ApplicationSession();
+        await using var session = new ObservedSession(shortTimeout: false);
         await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new DeploymentTransport());
+        session.AfterDispatch = barrier.PauseAsync;
         var selectedKey = ExistingSshKeySelectionResult.Success(
             OperationResult.Success("selected-fixture", OperationState.Unchanged),
             new ExistingSshKeyLocation("/fixture/key"),
@@ -209,13 +218,11 @@ public sealed class SshSessionCompletionRegressionTests
             if (entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded)
             {
                 DeploymentSuccessObserved = true;
-                return PauseAsync();
             }
 
             if (entry.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded)
             {
                 KeyAuthenticationSuccessObserved = true;
-                return PauseAsync();
             }
 
             return Task.CompletedTask;
@@ -284,6 +291,7 @@ public sealed class SshSessionCompletionRegressionTests
         public OperationResult? Returned { get; private set; }
         public int Dispatches { get; private set; }
         public Func<Task>? BeforeDispatch { get; set; }
+        public Func<Task>? AfterDispatch { get; set; }
         public TaskCompletionSource TokenCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ApplicationSessionSnapshot Snapshot => inner.Snapshot;
         public event EventHandler? StateChanged { add => inner.StateChanged += value; remove => inner.StateChanged -= value; }
@@ -301,7 +309,13 @@ public sealed class SshSessionCompletionRegressionTests
                 {
                     Dispatches++;
                     using var registration = token.Register(() => TokenCancelled.TrySetResult());
-                    return await operation(transport, token);
+                    var result = await operation(transport, token);
+                    if (AfterDispatch is not null)
+                    {
+                        await AfterDispatch();
+                    }
+
+                    return result;
                 }, expectedSessionId, cancellationToken);
             return Returned;
         }
