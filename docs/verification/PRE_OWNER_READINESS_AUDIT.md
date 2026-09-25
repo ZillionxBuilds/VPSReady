@@ -9,7 +9,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21),
 [key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23),
 [startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25), and
-[OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27)
+[OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27), and
+[local Activity guidance PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -73,6 +74,34 @@ The generated summary's generic "CI runner" wording describes its intended
 script environment; this execution was **local Docker**, not GitHub Actions.
 The temporary source checkout was removed after verification.
 
+### Later F05/F09 native findings — separate from approved-candidate proof
+
+On the earlier unreviewed `fd0aba1` composite, native macOS generated an
+Ed25519 pair in an isolated disposable folder using an explicit name. The
+private/public files had modes `0600`/`0644`; repeating the same name/folder
+reported `LOCAL_KEY_TARGET_COLLISION` without modifying either file. The
+resulting Activity entry incorrectly advised checking **remote** state for this
+local-only failure. Focused [issue #29](https://github.com/ZillionxBuilds/VPSReady/issues/29)
+and draft [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30) correct
+the Activity projection with stable local-only event IDs while retaining
+conservative remote guidance for remote and unknown events. The isolated #30
+branch passed E0, E1 (621 PASS/2 SKIP) and E2 (175 PASS/3 SKIP). Its unsigned
+macOS arm64 publish passed, but selecting an invalid existing key in the native
+app hit the **pre-existing release** production-journal crash corrected only
+in unmerged PR #19; exact-branch native Activity proof is therefore blocked.
+
+A second, local-only developer composite at `e062c10` combined #30 with the
+seven earlier unmerged product PR deltas. Its two focused journal E1 tests and
+unsigned macOS arm64 publish passed. Native selection of a disposable empty
+key file kept the app open, reported `LOCAL_EXISTING_KEY_CORRUPT`, and the
+selected Activity detail advised verifying **local** state. This is limited
+interaction smoke, not independent QA, the exact #30 branch, or an integrated
+release candidate. The same UI still showed a separate inline error falsely
+attributing the local corrupt file to the server; backlog
+[issue #31](https://github.com/ZillionxBuilds/VPSReady/issues/31) tracks that
+message. The disposable generated key pair and test folder were removed after
+inspection; no real host or Owner credential was used. **REAL VPS: NOT TESTED.**
+
 The temporary app bundle and publish output were closed and moved to macOS
 Trash (recoverable); the source branch and separate PRs remain. Rebuild from
 the recorded head if another local walkthrough is needed.
@@ -102,11 +131,11 @@ the trigger/registration problem is resolved and actual runs are observed.
 | F02 Connection, host trust, Test Connection | `MainWindow.axaml.cs` → `ConnectionOverviewViewModel` → `ConnectionSessionLifecycle` → `SshNetRemoteTransport`; `ConnectionInputValidation`, `KnownHostTrustStore` | `ConnectionInputValidationTests`, `ConnectionSessionLifecycleTests`, `ConnectionSessionLifecycleScenarioTests` | PARTIAL. Invalid-form gap has focused E1/E2/native macOS correction in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19) ([#18](https://github.com/ZillionxBuilds/VPSReady/issues/18)); it is **not** release evidence. Recheck other failure classes and changed-host-key UI path; contained production-transport `sshd` test is skipped here; Owner Stage 1 NOT RUN. |
 | F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Recheck active SSH port and family-specific guardrails, stale selection, post-apply verification and recovery against current source; Owner Stage 3 NOT RUN. |
-| F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming, collision/cancellation regressions and local OpenSSH interoperability are in unmerged PR #17; review and exact-candidate integration pending. Owner Stage 4 NOT RUN. |
+| F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming, collision/cancellation regressions and local OpenSSH interoperability are in unmerged PR #17. Native developer-composite generation/collision passed, but the separate inline corrupt-key wording gap is tracked in #31. Review and exact-candidate integration pending; Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Recheck stale plan, privilege, apt locks, late cancellation, reboot reconnect and verified completion criterion by criterion; Owner Stage 5 NOT RUN. |
-| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Native review found production journal writes rejected because bare `0.1.0.0` version resembled an IPv4 identifier to fail-closed redaction; safe version metadata and isolated production regression are in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19). Current release startup fallback UI and minimal journal use unrelated IDs; focused E1 correction is in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25) ([#24](https://github.com/ZillionxBuilds/VPSReady/issues/24)). Recheck disconnected Stage 0 report/bundle, privacy, retention and startup failure on exact candidate; Owner Stage 2/6 NOT RUN. |
+| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only failures incorrectly receive remote-state Activity guidance on release; focused [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30) has E1/E2 and developer-composite macOS UI evidence, but isolated native flow is blocked by the unmerged #19 baseline repair. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
@@ -166,8 +195,9 @@ not a real package manager, reboot, hostname or timezone PASS:
 
 ### F09 criterion walk on the release source
 
-The current release has broad blind diagnostic coverage, but two production
-correlation gaps are corrected only in separate, unmerged PRs:
+The current release has broad blind diagnostic coverage, but production
+correlation and local-recovery guidance gaps are corrected only in separate,
+unmerged PRs:
 
 | F09 criteria | Source and named regression evidence | Remaining boundary |
 | --- | --- | --- |
@@ -176,6 +206,7 @@ correlation gaps are corrected only in separate, unmerged PRs:
 | AC9–10 per-user storage, retention, open/clear | `OperationJournalWorkspaceTests` cover path rejection, size/newest-run retention and log-folder action; `ActivityDiagnosticsScenarioTests` cover clear and filtering. | Actual retention and folder action on each supported native host NOT RUN as a release gate. |
 | AC11–14 explicit safe report/bundle and no auto-upload | `OperationJournalWorkspaceTests` cover redacted report, local ZIP manifest/checksums and relative-path rejection; `ActivityDiagnosticsScenarioTests` cover explicit copy/export and local export failure. | Disconnected Owner Stage 0/2 report/bundle walkthrough and review of an exact-candidate export NOT RUN. |
 | AC15 and AC17 startup/failure ID-to-journal correlation | Current release `AppViewModel.CreateSafeStartupFailure` and `MinimalSafeStartupJournal.TryRecord` produce unrelated records; invalid Connection form lacks a correlated validation event, while production journal metadata blocks persistence. Focused E1/E2 corrections are in unmerged PR #19 and #25. | Native forced-startup-failure UI/export, combined candidate correlation and Owner Stage 2/6 NOT RUN. |
+| AC1/4/17 actionable local failure recovery | Current release `StructuredDiagnosticEvent.ToActivityEntry` chooses the same remote-state next step for local key/config failures. Unmerged PR #30 adds explicit local-only event-ID classification with E1/E2 coverage and developer-composite macOS Activity smoke. | Exact PR #30 native invalid-key flow is blocked by the production journal defect in unmerged PR #19; exact integrated candidate and Owner Stage 2/6 NOT RUN. Separate inline banner defect is backlog #31. |
 
 ## Owner protocol map
 
@@ -197,8 +228,11 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21, #23, #25 and #27 independently, then validate their integration on an
-  exact candidate. Do not self-merge to release/main or infer visual acceptance.
+- Review PR #14, #17, #19, #21, #23, #25, #27 and #30 independently, then
+  validate their integration on an exact candidate. The local composite is not
+  that gate. Do not self-merge to release/main or infer visual acceptance.
+- Resolve backlog #31 inline local-key wording before claiming complete F05/F09
+  readiness; do not treat #30 Activity smoke as fixing that separate banner.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
   Its E1/E2/native macOS result is not combined-candidate evidence.
