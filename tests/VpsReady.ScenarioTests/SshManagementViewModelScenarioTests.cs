@@ -12,6 +12,50 @@ namespace VpsReady.ScenarioTests;
 public sealed class SshManagementViewModelScenarioTests
 {
     [Fact]
+    public async Task CorruptLocalKeyShowsLocalRecoveryWithoutRemoteContactOrPathLeak()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "vpsready-local-key-status-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var invalidPrivateKey = Path.Combine(root, "invalid-local-key");
+            await File.WriteAllTextAsync(invalidPrivateKey, string.Empty);
+            await using var services = ScenarioComposition.Create("scenario.e2.local-key-status");
+            var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+            var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+            var session = services.GetRequiredService<IApplicationSession>();
+            using var vm = new SshManagementViewModel(
+                session,
+                new Ed25519OpenSshKeyPairGenerator(diagnostics),
+                new ExistingOpenSshKeySelector(diagnostics),
+                new PublicKeyDeploymentWorkflow(diagnostics),
+                new KeyAuthenticationVerificationWorkflow(services.GetRequiredService<IRemoteTransportFactory>(), diagnostics),
+                new OpenSshConfigEditor(services.GetRequiredService<IPlatformPaths>(), services.GetRequiredService<ILocalFileStore>(), diagnostics),
+                diagnostics);
+
+            await vm.SelectAsync(invalidPrivateKey);
+
+            Assert.False(session.Snapshot.IsConnected);
+            Assert.False(vm.HasSelectedKey);
+            Assert.Equal(SshManagementScreenState.Failed, vm.State);
+            Assert.Equal(ExistingSshKeySelectionErrorCatalog.Corrupt, vm.ErrorCode);
+            Assert.StartsWith("op_", vm.OperationId, StringComparison.Ordinal);
+            Assert.Contains("local key pair", vm.Status, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(invalidPrivateKey, vm.Status, StringComparison.Ordinal);
+            Assert.DoesNotContain(invalidPrivateKey, recorder.ToJsonLines(), StringComparison.Ordinal);
+            Assert.Contains(recorder.Events, entry =>
+                entry.EventId == DiagnosticEventCatalog.ExistingKeySelectionFailed
+                && entry.ErrorCode == ExistingSshKeySelectionErrorCatalog.Corrupt
+                && entry.Correlation.OperationId == vm.OperationId);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DeterministicJourneyDeploysThenSeparatelyVerifiesKeyAuthenticationWithoutLeakingKeyOrHost()
     {
         var root = Path.Combine(AppContext.BaseDirectory, "c407-ui-scenario", Guid.NewGuid().ToString("N"));

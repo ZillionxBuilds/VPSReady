@@ -39,6 +39,8 @@ grep -Fq '**Cancel connection**' "$guide"
 grep -Fq '**Refresh server facts**' "$guide"
 grep -Fq '**View public key**' "$guide"
 grep -Fq '**Copy public key**' "$guide"
+grep -Fq 'When local key creation, selection, public-key revalidation or OpenSSH alias' "$guide"
+grep -Fq 'These local errors alone do not establish a server' "$guide"
 grep -Fq 'Index refresh immediately invalidates any earlier plan' "$guide"
 ! grep -Fq 'yet render the full server-fact list' "$guide"
 # Entry-path guards complement compiled XAML and real service/VM tests.

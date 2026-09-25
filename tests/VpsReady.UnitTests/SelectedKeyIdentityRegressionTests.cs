@@ -37,6 +37,10 @@ public sealed class SelectedKeyIdentityRegressionTests
         Assert.Null(await vm.ReadPublicKeyForCopyAsync());
         Assert.False(vm.HasSelectedKey);
         Assert.Null(vm.PublicKeyDisplay);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Corrupt, vm.ErrorCode);
+        Assert.Contains("local public key", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(a.PrivateKeyPath, vm.Status, StringComparison.Ordinal);
     }
     [Theory]
     [InlineData("other", false)]
