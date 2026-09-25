@@ -1,6 +1,7 @@
 using System.Text;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
+using VpsReady.Core.Operations;
 using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.UnitTests;
@@ -8,6 +9,59 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class ExistingOpenSshKeySelectorTests
 {
+    [Fact]
+    public async Task MalformedAbsoluteSelectionPathIsAnInvalidTargetNotCorruptKeyMaterial()
+    {
+        await using var workspace = new KeyWorkspace();
+        var malformedPath = workspace.PrivateKeyPath + "\0synthetic";
+        var diagnostics = new CollectingDiagnosticSink();
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("select_key");
+
+        var result = await new ExistingOpenSshKeySelector(diagnostics).SelectAsync(
+            new ExistingSshKeySelectionRequest(malformedPath), correlation, CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, result.SelectionErrorCode);
+        Assert.Equal(OperationErrorCode.Validation, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Null(result.Metadata);
+        Assert.Null(result.Location);
+        Assert.DoesNotContain(workspace.Root, result.Operation.UserMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain(workspace.Root, result.Operation.NextAction, StringComparison.Ordinal);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.Root));
+        var failed = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.ExistingKeySelectionFailed);
+        Assert.Equal(correlation.OperationId, failed.Correlation.OperationId);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, failed.ErrorCode);
+        Assert.All(diagnostics.Events, item => Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task PublicKeyRevalidationRejectsMalformedSelectedLocationAsInvalidTarget()
+    {
+        await using var workspace = new KeyWorkspace();
+        var malformedPath = workspace.PrivateKeyPath + "\0synthetic";
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("read_public_key");
+        var selected = ExistingSshKeySelectionResult.Success(
+            OperationResult.Success(correlation.OperationId, OperationState.Unchanged),
+            new ExistingSshKeyLocation(malformedPath),
+            new ExistingSshKeyMetadata("ed25519", "synthetic-fingerprint"));
+        var diagnostics = new CollectingDiagnosticSink();
+
+        var result = await new ExistingOpenSshKeySelector(diagnostics).ReadPublicKeyAsync(
+            selected, correlation, CancellationToken.None);
+
+        Assert.Null(result.Material);
+        Assert.Equal(OperationErrorCode.Validation, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.DoesNotContain(workspace.Root, result.Operation.UserMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain(workspace.Root, result.Operation.NextAction, StringComparison.Ordinal);
+        var failed = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.ExistingKeySelectionFailed);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.InvalidTarget, failed.ErrorCode);
+        Assert.Equal(correlation.OperationId, failed.Correlation.OperationId);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.Root));
+        Assert.All(diagnostics.Events, item => Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task SelectsAnEphemeralEd25519KeyWithOnlySafeMetadataAndCorrelatedDiagnostics()
     {
