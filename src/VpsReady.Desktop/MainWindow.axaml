@@ -315,8 +315,11 @@
           <Border Classes="card" IsVisible="{Binding HasStartupFailure}">
             <StackPanel Spacing="6">
               <TextBlock FontWeight="SemiBold" Text="Startup was limited safely" />
-              <TextBlock Text="Restart VPSReady. If this persists, use the local diagnostics folder when it becomes available and include only a Safe Issue Report." TextWrapping="Wrap" />
+              <TextBlock Text="Restart VPSReady. If this persists, note the error ID below. Review local diagnostics before sharing them." TextWrapping="Wrap" />
               <TextBlock FontFamily="Consolas" Text="{Binding StartupErrorId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding HasStartupJournalPath}" Text="Local startup diagnostic file (private):" TextWrapping="Wrap" />
+              <SelectableTextBlock IsVisible="{Binding HasStartupJournalPath}" FontFamily="Consolas" Text="{Binding StartupJournalPath}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding IsStartupJournalUnavailable}" Text="A local startup record could not be written. The error ID is still safe to report." TextWrapping="Wrap" />
             </StackPanel>
           </Border>
         </StackPanel>

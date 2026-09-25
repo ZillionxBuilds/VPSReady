@@ -7,6 +7,15 @@ stable-release announcement; exact verification belongs to the linked records.
 
 ## Unreleased — v0.1 Core Basic
 
+### Startup fallback diagnostics (review branch)
+
+- Correlate the limited-state startup error ID with its minimal local journal
+  record. Show the private diagnostic file path only when the fallback write
+  succeeds; keep a safe, usable window when it does not.
+
+See [issue #24](https://github.com/ZillionxBuilds/VPSReady/issues/24).
+This is local-only evidence; **REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

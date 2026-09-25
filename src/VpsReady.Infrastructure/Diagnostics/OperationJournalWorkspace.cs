@@ -813,23 +813,38 @@ public sealed class SafeUnhandledExceptionReporter(IDiagnosticSink diagnosticSin
 }
 
 /// <summary>Last-resort startup record when dependency composition itself failed.</summary>
+public sealed record MinimalStartupRecord(string ErrorId, string? JournalPath);
+
 public static class MinimalSafeStartupJournal
 {
-    public static void TryRecord()
+    public static MinimalStartupRecord TryRecord(IPlatformPaths? platformPaths = null)
     {
+        var errorId = $"startup-{Guid.NewGuid():N}";
         try
         {
-            var paths = new SystemPlatformPaths();
+            var paths = platformPaths ?? new SystemPlatformPaths();
             var path = paths.ResolvePath(LocalStorageArea.State, "logs/startup-failures.jsonl");
             var directory = Path.GetDirectoryName(path) ?? throw new IOException("A startup journal path requires a directory.");
             Directory.CreateDirectory(directory);
             ApplyDirectoryPermissions(directory);
-            File.AppendAllText(path, "{\"schema_version\":1,\"event_id\":\"application.startup_failed\",\"message\":\"VPSReady started in a safe limited state.\"}" + Environment.NewLine, new UTF8Encoding(false));
+            var line = JsonSerializer.Serialize(new
+            {
+                schema_version = 1,
+                timestamp_utc = DateTimeOffset.UtcNow,
+                event_id = "application.startup_failed",
+                operation_id = errorId,
+                error_code = "STARTUP_FAILED",
+                status = "failed",
+                message = "VPSReady started in a safe limited state."
+            });
+            File.AppendAllText(path, line + Environment.NewLine, new UTF8Encoding(false));
             ApplyFilePermissions(path);
+            return new MinimalStartupRecord(errorId, path);
         }
         catch
         {
             // The caller still presents the safe limited-state window.
+            return new MinimalStartupRecord(errorId, null);
         }
     }
 
