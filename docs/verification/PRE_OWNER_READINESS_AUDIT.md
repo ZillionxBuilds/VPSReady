@@ -62,6 +62,24 @@ The temporary app bundle and publish output were closed and moved to macOS
 Trash (recoverable); the source branch and separate PRs remain. Rebuild from
 the recorded head if another local walkthrough is needed.
 
+### Hosted CI discovery — 2026-09-25
+
+The canonical repository (`ZillionxBuilds/VPSReady`, ID `1361332816`) reports
+GitHub Actions enabled with all actions allowed. `release/0.1.0` contains
+`.github/workflows/blind-ci.yml`, configured for pull requests into
+`release/**`, and the file is present through GitHub's content API. Draft
+PR #14 and this audit PR #28 are mergeable, but both have empty check rollups;
+the repository Actions API reports **zero registered workflows and zero runs**.
+`main`, the default branch, has no workflow files. [GitHub requires a workflow
+on the default branch for manual `workflow_dispatch`](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow),
+so that route is not currently available. GitHub documents
+[`pull_request` as a separate trigger](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request);
+the absence of `main` workflow files alone does **not** establish why these
+release-targeting PRs have no runs. Organization-level Actions policy could
+not be read with the current credentials (403); no policy/settings change was
+made. Hosted E0–E4 and Windows/Linux native evidence remain **NOT RUN** until
+the trigger/registration problem is resolved and actual runs are observed.
+
 ## F02–F09 source and evidence map
 
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
@@ -188,7 +206,9 @@ tracks the separate E5 gate.
 - Obtain legitimate hosted checks and required external review tracked by
   [validation #3](https://github.com/ZillionxBuilds/VPSReady/issues/3) and
   [R19 #4](https://github.com/ZillionxBuilds/VPSReady/issues/4). Do not bypass
-  protection or fabricate platform evidence.
+  protection or fabricate platform evidence. Resolve the zero-workflow/zero-run
+  discovery above through approved repository/organization channels first;
+  a manual dispatch also requires a workflow on the default branch.
 - Run available E3 contained OpenSSH and E4 Windows/macOS/Linux native package
   checks on the exact reviewed candidate; label missing hosts `NOT RUN`.
 - Preserve Owner-only E5 and explicit main/stable approval as separate gates.
