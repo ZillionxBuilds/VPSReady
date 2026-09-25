@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 using VpsReady.Desktop;
 using VpsReady.Infrastructure.Remote;
@@ -125,6 +126,7 @@ public sealed class OverviewJourneyRegressionTests
         await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
         var sink = new Sink();
         var correlation = CorrelationIds.Create("overview") with { SessionId = session.Snapshot.SessionId! };
+        var operationDiagnostics = SessionOperationDiagnostics.ForServerOverview(correlation, sink);
         using var cancellation = new CancellationTokenSource();
         var readerReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -132,7 +134,7 @@ public sealed class OverviewJourneyRegressionTests
         var operation = session.RunOperationForSessionAsync(correlation.OperationId, TimeSpan.FromSeconds(5),
             async (activeTransport, token) =>
             {
-                var read = await new ServerOverviewReader(sink).ReadAsync(activeTransport, session.Snapshot.Identity!, correlation, token);
+                var read = await new ServerOverviewReader(sink).ReadAsync(activeTransport, session.Snapshot.Identity!, operationDiagnostics, token);
                 readerReturned.TrySetResult();
                 await release.Task;
                 return read.Result;
@@ -148,10 +150,117 @@ public sealed class OverviewJourneyRegressionTests
         }
 
         var result = await operation.WaitAsync(TimeSpan.FromSeconds(5));
+        await operationDiagnostics.FinalizeAsync(result);
         Assert.True(result.Cancelled);
         Assert.Equal(correlation.OperationId, result.OperationId);
-        Assert.DoesNotContain(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.OperationSucceeded
-            && entry.Correlation.OperationId == result.OperationId);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.OperationSucceeded or DiagnosticEventCatalog.OperationFailed);
+        Assert.Equal(DiagnosticEventCatalog.OperationFailed, terminal.EventId);
+        Assert.Equal(DiagnosticStatus.Cancelled, terminal.Status);
+        Assert.Equal(result.OperationId, terminal.Correlation.OperationId);
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("cancel")]
+    [InlineData("timeout")]
+    [InlineData("replace")]
+    public async Task RefreshUsesSessionVerdictForItsOnlyOverviewTerminalDiagnostic(string outcome)
+    {
+        await using var session = new SessionAuthorityHarness { ShortTimeout = outcome == "timeout" };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), new FactTransport());
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var barrier = new AuthorityBarrier();
+        session.AfterDispatch = barrier.PauseAsync;
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink), sink);
+
+        var refresh = vm.RefreshAsync();
+        Task replacement = Task.CompletedTask;
+        try
+        {
+            await barrier.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (outcome == "cancel") { vm.CancelRefresh(); }
+            if (outcome == "timeout") { await session.TokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+            if (outcome == "replace")
+            {
+                replacement = session.StartAsync(new RemoteEndpoint("replacement.invalid", 22, "fixture"), new FactTransport());
+            }
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+        }
+
+        await Task.WhenAll(refresh, replacement).WaitAsync(TimeSpan.FromSeconds(5));
+        var result = Assert.IsType<OperationResult>(session.LastResult);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.OperationSucceeded or DiagnosticEventCatalog.OperationFailed);
+        Assert.Equal(result.OperationId, vm.OperationId);
+        Assert.Equal(result.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(result.Succeeded ? DiagnosticEventCatalog.OperationSucceeded : DiagnosticEventCatalog.OperationFailed, terminal.EventId);
+        Assert.Equal(result.Succeeded ? DiagnosticStatus.Succeeded :
+            result.Cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed, terminal.Status);
+        Assert.Equal(result.ErrorCode?.ToStableCode(), terminal.ErrorCode);
+        if (outcome == "success")
+        {
+            Assert.Equal(ConnectionScreenState.Connected, vm.OverviewState);
+            Assert.Equal(12, vm.Facts.Count(row => row.IsKnown));
+        }
+        else
+        {
+            Assert.Equal(outcome == "timeout" ? OperationErrorCode.Timeout : OperationErrorCode.Cancelled, result.ErrorCode);
+            Assert.Equal(ConnectionScreenState.Unknown, vm.OverviewState);
+            Assert.All(vm.Facts, row => Assert.False(row.IsKnown));
+        }
+    }
+
+    [Fact]
+    public async Task StaleOverviewDispatchDoesNotReadReplacementOrLoseFailureId()
+    {
+        await using var session = new SessionAuthorityHarness();
+        var originalTransport = new FactTransport();
+        var replacementTransport = new FactTransport();
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), originalTransport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink), sink);
+        session.BeforeDispatch = () => session.StartAsync(
+            new RemoteEndpoint("replacement.invalid", 22, "fixture"), replacementTransport);
+
+        await vm.RefreshAsync();
+
+        var result = Assert.IsType<OperationResult>(session.LastResult);
+        Assert.False(result.Succeeded);
+        Assert.Equal(0, originalTransport.Calls);
+        Assert.Equal(0, replacementTransport.Calls);
+        Assert.Equal(result.OperationId, vm.OperationId);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.OperationFailed);
+        Assert.Equal(result.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(result.ErrorCode?.ToStableCode(), terminal.ErrorCode);
+        Assert.Equal(ConnectionScreenState.Unknown, vm.OverviewState);
+        Assert.All(vm.Facts, row => Assert.False(row.IsKnown));
+    }
+
+    [Fact]
+    public async Task OverviewFailedCandidateCannotMasqueradeAsCancelledTerminal()
+    {
+        var sink = new Sink();
+        var correlation = CorrelationIds.Create("overview");
+        var operationDiagnostics = SessionOperationDiagnostics.ForServerOverview(correlation, sink);
+        await operationDiagnostics.RecordAsync(sink, new StructuredDiagnosticEvent(
+            DiagnosticEventCatalog.OperationFailed, "Server overview", DiagnosticLevel.Information,
+            correlation.ForStep("overview"), DiagnosticPhase.Verify, DiagnosticStatus.Failed,
+            "Read-only overview failed.", ErrorCode: OperationErrorCode.Timeout.ToStableCode(),
+            Action: "ReadServerOverview"));
+
+        await operationDiagnostics.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+        var terminal = Assert.Single(sink.Events);
+        Assert.Equal(DiagnosticEventCatalog.OperationFailed, terminal.EventId);
+        Assert.Equal(DiagnosticStatus.Cancelled, terminal.Status);
+        Assert.Equal(OperationErrorCode.Cancelled.ToStableCode(), terminal.ErrorCode);
+        Assert.Equal(correlation.OperationId, terminal.Correlation.OperationId);
     }
 
     private sealed class NoFactory : IRemoteTransportFactory

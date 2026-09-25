@@ -3,7 +3,7 @@ using VpsReady.Core.Operations;
 namespace VpsReady.Core.Diagnostics;
 
 /// <summary>
-/// Keeps one SSH workflow's terminal event private until its enclosing session
+/// Keeps one remote workflow's terminal event private until its enclosing session
 /// has chosen the authoritative result. Non-terminal command evidence remains
 /// immediate. Standalone workflows do not use this scope and keep their normal
 /// diagnostic behavior.
@@ -64,6 +64,16 @@ public sealed class SessionOperationDiagnostics
         DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled,
         "Separate key authentication was not accepted as complete by the current session. Reconnect and retry before relying on the key.");
 
+    public static SessionOperationDiagnostics ForServerOverview(CorrelationIds correlation, IDiagnosticSink? fallbackSink) => new(
+        correlation,
+        fallbackSink,
+        "Server overview",
+        "ReadServerOverview",
+        DiagnosticEventCatalog.OperationSucceeded,
+        DiagnosticEventCatalog.OperationFailed,
+        DiagnosticEventCatalog.OperationFailed,
+        "Read-only overview did not complete for the current session. Refresh facts again; no server changes were made.");
+
     public Task RecordAsync(IDiagnosticSink sink, StructuredDiagnosticEvent entry)
     {
         ArgumentNullException.ThrowIfNull(sink);
@@ -118,7 +128,7 @@ public sealed class SessionOperationDiagnostics
         {
             // A successful session result alone is not proof that a workflow
             // reached its own verified terminal state.
-            if (candidate?.EventId != succeededEventId)
+            if (candidate?.EventId != succeededEventId || candidate.Status != DiagnosticStatus.Succeeded)
             {
                 return;
             }
@@ -127,6 +137,7 @@ public sealed class SessionOperationDiagnostics
         }
         else if (candidate is not null
             && candidate.EventId == (result.Cancelled ? cancelledEventId : failedEventId)
+            && candidate.Status == (result.Cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed)
             && string.Equals(candidate.ErrorCode, result.ErrorCode?.ToStableCode(), StringComparison.Ordinal))
         {
             terminal = candidate;

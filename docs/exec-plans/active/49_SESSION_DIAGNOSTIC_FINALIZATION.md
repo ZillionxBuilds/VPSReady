@@ -2,7 +2,7 @@
 
 ## 1. Purpose and outcome
 
-Make C404 public-key deployment and C405 separate key-authentication show one terminal diagnostic for the result accepted by `ApplicationSession`. The displayed operation ID must locate the same sanitized Activity, journal, report and support-bundle chronology. A previous session's successful proof must not become proof for a replacement session.
+Make C404 public-key deployment, C405 separate key-authentication and the same-class read-only Overview refresh show one terminal diagnostic for the result accepted by `ApplicationSession`. The displayed operation ID must locate the same sanitized Activity, journal, report and support-bundle chronology. A previous session's successful proof must not become proof for a replacement session.
 
 ## 2. Source of truth and issue hierarchy
 
@@ -14,7 +14,7 @@ Make C404 public-key deployment and C405 separate key-authentication show one te
 
 ## 3. Scope and non-goals
 
-In scope: C404/C405 session-bound correlation and terminal diagnostics, stale-session proof presentation, safe diagnostic export of catalogued command IDs, and deterministic regressions. Standalone workflow calls retain their accepted behavior. F04/F08 and other actions with independently created IDs require separate triage, not an implicit claim of repair here.
+In scope: C404/C405 and Overview session-bound terminal diagnostics, stale-session proof presentation, safe diagnostic export of catalogued command IDs, and deterministic regressions. Standalone workflow calls retain their accepted behavior. F04/F08 and other actions with independently created IDs require separate triage, not an implicit claim of repair here.
 
 Out of scope: real VPS tests, SSH target/credential access, release/main self-merge, stable publication and branch-protection changes.
 
@@ -24,19 +24,19 @@ No success is accepted after cancellation, timeout or stale-session invalidation
 
 ## 5. Architecture baseline
 
-`ApplicationSession.RunOperationCoreAsync` can override a late workflow result with Cancelled or Timeout. C404/C405 workflows previously wrote terminal Succeeded before that decision and minted operation IDs independent of the ViewModel's session call. `OperationJournalWorkspace` persisted those events immediately. A selected tab or current session may change again after a result returns; the UI must not lend old proof to the new session.
+`ApplicationSession.RunOperationCoreAsync` can override a late workflow result with Cancelled or Timeout. C404/C405 workflows previously wrote terminal Succeeded before that decision and minted operation IDs independent of the ViewModel's session call. The Overview reader also wrote Succeeded before this outer verdict, although its operation ID already matched. `OperationJournalWorkspace` persisted those events immediately. A selected tab or current session may change again after a result returns; the UI must not lend old proof to the new session.
 
 ## 6. Milestones and cards
 
-1. Preserve deterministic C404/C405 RED tests on exact release base.
-2. Pass one opaque correlation into each session-bound workflow and defer its terminal candidate until the session verdict.
+1. Preserve deterministic C404/C405 and Overview RED tests on exact release base.
+2. Pass one opaque correlation into each session-bound workflow/reader and defer its terminal candidate until the session verdict.
 3. Verify Activity, journal, Safe Issue Report and sanitized ZIP retain only the authoritative terminal outcome and safe known command IDs.
 4. Review stale dispatch, timeout, cancellation, replacement and remote-applied-but-session-cancelled state.
 5. Validate exact reviewable source with E0–E4 and submit a separate draft PR; external review decides integration.
 
 ## 7. Dependencies and parallel execution lanes
 
-SOLO engineer only. #47 / PR #48 remains a distinct draft pre-terminal fix and must be validated with #49 in a local composite before either is considered for integration. No second worker or duplicate issue/PR.
+SOLO engineer only. #47 / PR #48 remains a distinct draft pre-terminal fix; #20 / PR #21 remains a distinct standalone Overview terminal-write fix. Both must be validated with #49 in a local composite before integration. No second worker or duplicate issue/PR.
 
 ## 8. Milestone gates
 
@@ -54,22 +54,26 @@ Pause after the inner workflow returns but before `ApplicationSession` chooses t
 ## 10. Progress
 
 - [x] C404 and C405 RED terminal/ID mismatch captured on release-based branch.
+- [x] Overview post-reader/outer-session cancellation RED captured at test-only commit `022a4d08bda3b8e79858bcbf0263aba7d2e24778` (0 PASS/1 FAIL).
 - [x] Focused session-aware source correction and E1/E2 tests are locally GREEN.
+- [x] Overview success/cancel/timeout/replacement/stale-dispatch E1 and read-only stateful E2 are locally GREEN; exact-head full regression remains pending.
 - [x] Missing expected-session ID is rejected before dispatch.
 - [x] Known catalogued command IDs no longer falsely block sanitized ZIP export; free-text redaction remains tested.
-- [ ] Exact-head full E0–E4, PR #48 composite, independent review and draft PR handoff.
+- [ ] Exact-head full E0–E4, PR #21/#48 composite, independent review and draft PR handoff.
 
 ## 11. Decision log
 
 - 2026-09-25: Keep standalone workflow diagnostics immediate; defer only explicitly session-bound terminal candidates. This avoids changing direct workflow callers while preventing a journal success from preceding an outer cancellation.
 - 2026-09-25: A session replacement after the outer result was already accepted is a new lifecycle event. Preserve its historical terminal result, but demote the ViewModel's current proof state so the replacement cannot inherit it.
 - 2026-09-25: Exempt only an allowlisted `commandId` JSON field during the secondary ZIP text scan. Do not exempt free text or unknown IDs.
+- 2026-09-26: PR #21 protects direct Overview reader cancellation while its terminal event is being written, but cannot control the later ApplicationSession verdict. Reuse the explicit #49 session scope for Overview; do not alter direct reader behavior. Overview uses the same `operation.failed` ID for Failed and Cancelled, so candidate reuse also checks status.
 
 ## 12. Surprises and discoveries
 
 - C405 has the same terminal/ID mismatch as C404, confirmed by an actual-workflow fake-transport test.
 - A blank expected session ID could turn a session-bound call into an unbound call against a replacement connection; the boundary now fails closed.
 - The ZIP safety scan rejected a safe catalogued authorized-keys command ID. The test now verifies that the stable ID is retained while raw `authorized_keys` text is omitted.
+- Overview has the same post-reader terminal-success race as C404/C405 even though its operation ID already matched the session. A release-based RED test confirmed it after all 12 reads completed.
 
 ## 13. Risks and recovery
 
