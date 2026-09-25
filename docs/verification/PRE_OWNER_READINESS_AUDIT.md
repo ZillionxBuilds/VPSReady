@@ -30,11 +30,32 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [CPU/memory fact PR #70](https://github.com/ZillionxBuilds/VPSReady/pull/70),
 [CPU-model evidence PR #72](https://github.com/ZillionxBuilds/VPSReady/pull/72),
 [uptime evidence PR #74](https://github.com/ZillionxBuilds/VPSReady/pull/74),
-[authorized-key fixture PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76), and
-[UFW malformed-CIDR PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78)
+[authorized-key fixture PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76),
+[UFW malformed-CIDR PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78),
+[stored SSH-port PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80), and
+[typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
+
+### Owner navigation-hover report — 2026-09-25 22:27 UTC
+
+The Owner's screenshots show a visible navigation tooltip and unreadable
+selected text. They match the older release markup, but their executable SHA
+is unknown. Draft [PR #14](https://github.com/ZillionxBuilds/VPSReady/pull/14)
+at `fc0fbce08c6ff88e4ba35bfab4f4eda1e6971baa` removes the visual
+navigation tooltip while retaining accessible HelpText, and uses explicit
+high-contrast selected and hover surfaces. Four source-structure regressions
+now assert no visual navigation tooltip and at least 4.5:1 label/surface
+contrast for selected, selected-hover and inactive-hover states. On this exact
+head, locked restore, Release `-warnaserror` build, format and diff checks
+passed; E1 was **615 PASS/2 SKIP** and E2 **174 PASS/3 SKIP**. Unsigned
+`osx-arm64` publish and bounded startup passed. A window-only screenshot
+showed selected text legible and no tooltip at rest; interactive hover pixels
+were **NOT VERIFIED** because a synthetic pointer event did not change the
+cursor or screenshot. Windows/Linux native and hosted checks are **NOT RUN**.
+The UI correction is not in release; Owner visual acceptance and independent
+review remain separate. **REAL VPS: NOT TESTED.**
 
 ### F04 numbered-rule CIDR parse correction — 2026-09-25 21:53 UTC
 
@@ -60,6 +81,32 @@ build/format, E1 **857 PASS/3 SKIP** and E2 **210 PASS/3 SKIP**. E3/E4 on
 this new composite were **NOT RUN**. Neither tree is independently reviewed
 or an approved candidate; hosted checks, native Windows/Linux and Owner
 Stage 3/E5 remain unverified. **REAL VPS: NOT TESTED.**
+
+### F04/F08 typed numeric evidence corrections — 2026-09-25 22:16 UTC
+
+Exact-release E1/E2 were **RED** for a terminal-NUL `port=` in stored UFW
+SSH-policy evidence: it was accepted as a valid session port and could reach
+an additional firewall ensure command despite malformed input. Focused
+[issue #79](https://github.com/ZillionxBuilds/VPSReady/issues/79) and draft
+[PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80) at
+`aa8e5efee1d57dcba1295048f874efd7b8f88a51` require ASCII decimal
+characters before the stored port is trusted. Exact-head E0 passed; E1 was
+**615 PASS/2 SKIP**, E2 **175 PASS/3 SKIP**, E3 **NOT RUN**, and unsigned
+macOS arm64 E4 publish/startup smoke passed. No real firewall was changed.
+
+The same-class review then reproduced exact-release **RED** handling of
+terminal-NUL typed session-port and apt-upgrade-plan count evidence in
+`CommandParserEvidence`. Focused [issue #81](https://github.com/ZillionxBuilds/VPSReady/issues/81)
+and draft [PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82) at
+`47207ffced4e5a4f6ed0d474be958104b3b6bd59` add a shared ASCII-decimal
+gate. Exact-head E0 passed; E1 was **615 PASS/2 SKIP**, E2 was
+**176 PASS/3 SKIP**, E3 **NOT RUN**, and unsigned macOS arm64 E4 publish/startup smoke
+passed. A developer-only composite including both corrections passed E0,
+E1 **871 PASS/3 SKIP** and E2 **213 PASS/3 SKIP**. It is compatibility
+evidence, not an approved or independently reviewed release candidate.
+Both PRs remain draft/unmerged with no hosted checks; native Windows/Linux,
+exact integrated-candidate E3/E4 and Owner Stage 3/5 remain **NOT RUN**.
+**REAL VPS: NOT TESTED.**
 
 ### F06 shell-fixture and full-pending Linux checkpoint — 2026-09-25 21:30 UTC
 
@@ -1016,6 +1063,12 @@ and post-terminal consistency need review on the exact combined source.
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). It also produces contradictory package-plan Succeeded/Cancelled terminal records on late cancellation; focused E1 correction is in unmerged [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42) ([#41](https://github.com/ZillionxBuilds/VPSReady/issues/41)). Recheck privilege, apt locks, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
 | F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). Dictionary-reversible and repeatedly rehashed host/user pseudonyms are corrected in unmerged [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38); raw replacement-only environment metadata in unmerged [PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40). Developer-only #19/#38/#40 F09 interaction checks passed locally, but independent review and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
+Cross-cutting F04/F08 update: malformed stored SSH-port, typed session-port
+and apt-upgrade-plan count evidence are still accepted by this unchanged
+release baseline; draft PR #80 and #82 correct these separate producer/parser
+paths. Do not treat the earlier F04 safety or F08 plan rows as complete until
+both corrections receive review, integration and exact-candidate validation.
+
 F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
 or absence of leaks on the Owner's machine.
@@ -1172,6 +1225,14 @@ tracks the separate E5 gate.
   for F04 malformed CIDR output and fail-closed snapshot/selection behavior.
   Its local auto-merge with #34/#68 and E0/E1/E2 passes do not replace hosted
   checks, approved integration or Owner real-firewall testing.
+- Obtain independent same-class review of [PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80)
+  for malformed stored SSH-port metadata and its firewall-enable preflight.
+  Preserve the RED mutation-boundary regression when combining with #34/#52;
+  the local composite is not real-firewall or independent QA evidence.
+- Obtain independent same-class review of [PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82)
+  for typed SSH-port and apt-plan count metadata. Validate the #80/#82
+  interaction on the exact reviewed candidate; the 871/213 local E1/E2
+  composite is not hosted, native-platform or Owner evidence.
 - Obtain independent same-class review of [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44)
   for identity-edit session invalidation, stale/in-flight host-trust refusal
   and interaction with #14/#19. Its isolated and local-composite passes are
@@ -1227,4 +1288,7 @@ tracks the separate E5 gate.
 - Rerun contained E3 and E4 Windows/macOS/Linux native package checks on the
   exact **reviewed** candidate; local developer-composite E3 and contained
   Linux startup do not replace that gate. Label missing hosts `NOT RUN`.
+- Sync the reviewed audit document to `development` after release-side review;
+  this draft documentation PR targets `release/0.1.0` only and is not evidence
+  that the two branches already carry identical documentation.
 - Preserve Owner-only E5 and explicit main/stable approval as separate gates.
