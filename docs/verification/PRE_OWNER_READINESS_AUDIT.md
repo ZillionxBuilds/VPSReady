@@ -144,6 +144,45 @@ The temporary app bundle and publish output were closed and moved to macOS
 Trash (recoverable); the source branch and separate PRs remain. Rebuild from
 the recorded head if another local walkthrough is needed.
 
+### Full developer-only integration and Linux ARM64 smoke — 2026-09-25
+
+A separate **local, unpushed** composite `codex/15-full-preflight-r31` at
+`cac37c2e069c4f65491af711d5eea776a97e49a6` combines the draft
+#14/#17/#19/#21/#23/#25/#27/#30/#32 source corrections. It is **not** an
+approved release candidate. Cherry-picking #32 onto the earlier eight-PR
+composite required preserving #17's named-generation path while routing both
+named and picker generation through #32's fixed local-status catalog. An
+auto-merged unit helper initially had a duplicate parameter (E0 CS0100);
+the local preflight commit corrected it and added assertions that named-key
+collision/cancellation never advise checking a server. No individual product
+PR or release branch was rewritten for this experiment.
+
+On the exact clean `cac37c2` head: locked restore, Release build with
+`-warnaserror` (0 warnings/errors), format, diff and guide guard **PASS**;
+E1 **683 PASS/2 SKIP**; E2 **180 PASS/3 SKIP**. E3 in a disposable Ubuntu
+24.04 ARM64/.NET SDK 10.0.400 container ran
+`bash eng/run-local-contained-e3.sh`: production SSH.NET loopback and
+generated-key/OpenSSH interoperability **2 PASS/0 FAIL/0 SKIP**, plus
+unknown-host fail-closed, known-host, wrong-password, stdout/stderr/exit and
+timeout script checks **PASS**. In-container and host artifact-safety scans
+**PASS**. Retained ignored TRX at
+`artifacts/validation/full-composite-e3-cac37c2/e3-production-sshnet.trx`
+has SHA-256 `1708c99a788f066c04a042859813d1f155518e9057fa2b300c0818af4b8dc0ff`;
+the local protocol summary has SHA-256
+`3d4dad4fc0d23f017f3d53b6ac998b9311ff69f5fb2690aa090badde57602c1f`.
+
+E4: the actual `./scripts/build/linux.sh --arch arm64` entrypoint **PASS**
+inside a disposable Ubuntu ARM64 Docker container, producing an unsigned,
+self-contained aarch64 ELF apphost (SHA-256
+`ac6ee7d21b7c4b4f3feaa20855e179df3b5f0d5c48b880c7a322d39523ec43d9`).
+A second disposable Ubuntu ARM64 container launched that exact apphost under
+Xvfb; the process stayed alive for 8 seconds until the expected test timeout,
+with no early exit or error output. This proves only contained Linux startup,
+**not** interactive UI correctness, a physical Windows/Linux/macOS host,
+official packaging, an exact reviewed candidate, or Owner VPS operation.
+Docker used bridge rather than host networking, exposed no port, and contacted
+no real VPS or public SSH target. E5 **REAL VPS: NOT TESTED**.
+
 ### Hosted CI discovery — 2026-09-25
 
 The canonical repository (`ZillionxBuilds/VPSReady`, ID `1361332816`) reports
@@ -159,8 +198,9 @@ so that route is not currently available. GitHub documents
 the absence of `main` workflow files alone does **not** establish why these
 release-targeting PRs have no runs. Organization-level Actions policy could
 not be read with the current credentials (403); no policy/settings change was
-made. Hosted E0–E4 and Windows/Linux native evidence remain **NOT RUN** until
-the trigger/registration problem is resolved and actual runs are observed.
+made. Hosted E0–E4 and native Windows/full Linux host validation remain
+**NOT RUN**; the contained Linux startup smoke above is a separate local
+developer result, not hosted or approved-candidate evidence.
 
 ## F02–F09 source and evidence map
 
@@ -298,6 +338,6 @@ tracks the separate E5 gate.
   discovery above through approved repository/organization channels first;
   a manual dispatch also requires a workflow on the default branch.
 - Rerun contained E3 and E4 Windows/macOS/Linux native package checks on the
-  exact **reviewed** candidate; this local composite E3 does not replace that
-  gate. Label missing hosts `NOT RUN`.
+  exact **reviewed** candidate; local developer-composite E3 and contained
+  Linux startup do not replace that gate. Label missing hosts `NOT RUN`.
 - Preserve Owner-only E5 and explicit main/stable approval as separate gates.
