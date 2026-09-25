@@ -14,9 +14,11 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32),
 [UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34),
 [system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36),
-[diagnostic pseudonym PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38), and
-[environment metadata PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40), and
-[package-plan cancellation PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42)
+[diagnostic pseudonym PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38),
+[environment metadata PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40),
+[package-plan cancellation PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42),
+[connection-identity PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44), and
+[key-transaction PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -394,14 +396,60 @@ artifacts, not candidates for Owner VPS use. Passing aggregate and
 focused checks does not replace independent review, approved integration,
 hosted/native platform gates or the separate Owner Stage 0–6 protocol.
 
+### Later F02/F05 corrections and full-source local preflight — 2026-09-25
+
+Exact release `9965c5b` left a previously verified session usable after its
+host, port or username was edited, and could leave a prior host-key decision
+visible after invalid new input. A focused E1 regression for the stale review
+was RED on release. [Issue #43](https://github.com/ZillionxBuilds/VPSReady/issues/43)
+and draft [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44) at
+`fce82c5895e2719480bced87f0f30d281c53751c` invalidate the session on
+identity edits and clear stale/in-flight trust decisions. On that **isolated**
+head, E0 locked restore, Release `-warnaserror` build (0 warnings/errors),
+format and diff PASS; E1 615 PASS/2 SKIP; E2 185 PASS/3 SKIP. E4 unsigned
+macOS arm64 publish/artifact scan PASS, with an 8-second noninteractive process
+smoke; interactive UI and clean exit were not verified. E3, native
+Windows/Linux, hosted CI and independent review were NOT RUN.
+
+Exact release also tried to recover every valid interrupted local-key
+transaction in a folder as the *requested* name. A valid transaction for name
+A therefore blocked generation of unrelated name B. A focused E2 regression
+was RED 0/1 on release. [Issue #45](https://github.com/ZillionxBuilds/VPSReady/issues/45)
+and draft [PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46) at
+`69c455e84703cf1b7474abd2fc23508429c93bd1` leave safely validated
+other-name transactions untouched, retain matching-name recovery and fail
+closed on malformed or case-ambiguous state. On that **isolated** head, E0
+locked restore, Release `-warnaserror` build (0 warnings/errors), format and
+diff PASS; E1 609 PASS/2 SKIP; E2 177 PASS/3 SKIP; E4 unsigned macOS arm64
+publish/artifact scan PASS. Startup, E3, native Windows/Linux, hosted CI and
+independent review were NOT RUN. The nameable-key UI remains a separate
+unmerged [PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17).
+
+A clean **local-only** `codex/45-full-preflight` head
+`2cf6186d5405330d4ae10b4d509eff6e280a5223` stacks those two exact
+source corrections on the prior `22fff7e` composite. It includes all open
+product PRs through #46 (documentation PR #28 remains separate). E0 locked
+restore, Release `-warnaserror` build with 0 warnings/errors, format and diff
+PASS; E1 full Unit 749 PASS/2 SKIP; E2 full Scenario 205 PASS/3 SKIP; E4
+unsigned osx-arm64 publish and artifact-safety scan PASS. E3 and interactive
+startup on **this exact head** were NOT RUN. Its checks do not inherit the
+earlier composite's E3/six-RID/startup results. It was not pushed to
+release/main, independently reviewed or approved for Owner use.
+
+Hosted Actions remain unverified: the repository permission API reports
+Actions enabled, but workflow inventory is still zero and `main` has no
+`.github/workflows` tree. The exact cause of missing PR checks is unknown;
+no settings, protection or default-branch change was made. **REAL VPS: NOT
+TESTED.**
+
 ## F02–F09 source and evidence map
 
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
 | --- | --- | --- | --- |
-| F02 Connection, host trust, Test Connection | `MainWindow.axaml.cs` → `ConnectionOverviewViewModel` → `ConnectionSessionLifecycle` → `SshNetRemoteTransport`; `ConnectionInputValidation`, `KnownHostTrustStore` | `ConnectionInputValidationTests`, `ConnectionSessionLifecycleTests`, `ConnectionSessionLifecycleScenarioTests` | PARTIAL. Invalid-form gap has focused E1/E2/native macOS correction in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19) ([#18](https://github.com/ZillionxBuilds/VPSReady/issues/18)); it is **not** release evidence. Recheck other failure classes and changed-host-key UI path; contained production-transport `sshd` test is skipped here; Owner Stage 1 NOT RUN. |
+| F02 Connection, host trust, Test Connection | `MainWindow.axaml.cs` → `ConnectionOverviewViewModel` → `ConnectionSessionLifecycle` → `SshNetRemoteTransport`; `ConnectionInputValidation`, `KnownHostTrustStore` | `ConnectionInputValidationTests`, `ConnectionSessionLifecycleTests`, `ConnectionSessionLifecycleScenarioTests` | PARTIAL. Invalid-form guidance is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19) ([#18](https://github.com/ZillionxBuilds/VPSReady/issues/18)); stale verified-session and host-trust state after identity edits is corrected in unmerged [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44) ([#43](https://github.com/ZillionxBuilds/VPSReady/issues/43)). Neither is release evidence. Recheck changed-host-key UI and interaction on an approved integrated candidate; Owner Stage 1 NOT RUN. |
 | F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Exact release drops a numbered port-range listing; focused E1/E2 correction is in unmerged [PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34) ([#33](https://github.com/ZillionxBuilds/VPSReady/issues/33)). Recheck active SSH protection, stale selection, verification and recovery on an approved integrated candidate; Owner Stage 3 NOT RUN. |
-| F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. Developer-composite native key generation/collision and corrupt-key guidance passed on named local heads, not an approved candidate. Owner Stage 4 NOT RUN. |
+| F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. A valid interrupted transaction for another name blocks generation on release; unmerged [PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46) ([#45](https://github.com/ZillionxBuilds/VPSReady/issues/45)) corrects this with RED-to-GREEN E2. Developer-composite smoke is not approved-candidate proof; Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). It also produces contradictory package-plan Succeeded/Cancelled terminal records on late cancellation; focused E1 correction is in unmerged [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42) ([#41](https://github.com/ZillionxBuilds/VPSReady/issues/41)). Recheck privilege, apt locks, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
@@ -418,7 +466,7 @@ or absence of leaks on the Owner's machine.
 | F02 AC1–2 input and pre-SSH validation | `ConnectionInputValidation`, `ConnectionOverviewViewModel`, `ConnectionInputValidationTests` and scenario tests cover typed fields, default/invalid port, missing values and credential clearing before transport. | Current release invalid-form UI lacks an actionable correlated failure; unmerged PR #19 corrects it. Owner Stage 1 NOT RUN. |
 | F02 AC3–4 production SSH and verified success | `DesktopComposition` wires `SshNetRemoteTransport` through `ConnectionSessionLifecycle`; `ConnectionSessionLifecycleTests` and stateful scenarios require authentication plus minimum command before reusable success. | Contained production-transport loopback `sshd` is skipped in the current baseline; no E5 connection proof. |
 | F02 AC5–6 typed failures, trust, cancellation and timeout | `KnownHostTrustStoreTests`, trust scenarios, connection presentation/lifecycle tests cover unknown/changed keys, stale review, cancel and candidate disposal. | Native changed-host trust review and platform-specific timeout/refusal cases require exact-candidate/E5 checks. |
-| F02 AC7–10 secret/session identity boundaries | `ConnectionSecretInput`, `ConnectionSessionLifecycleTests`, `KnownHostTrustStoreTests` and scenario tests cover clear-on-use, non-persistence, session reuse/invalidation and explicit trust decisions. | Owner credential handling and connection reuse on an actual server NOT RUN. |
+| F02 AC7–10 secret/session identity boundaries | `ConnectionSecretInput`, `ConnectionSessionLifecycleTests`, `KnownHostTrustStoreTests` and scenario tests cover clear-on-use, non-persistence, session reuse/invalidation and explicit trust decisions. | Release does not invalidate the previously verified session or stale trust decision on identity edit/invalid resubmission; unmerged PR #44 adds focused E1/E2 correction. Owner credential handling and connection reuse on an actual server NOT RUN. |
 | F02 AC11 evidence boundary | E1/E2 are represented above; baseline E3 remains declared SKIP. | Owner Stage 1 E5 NOT TESTED. |
 | F03 AC1–3 actual fields/Ubuntu parsing | `ServerOverviewReader`, Ubuntu fact catalog/parsers and `OverviewJourneyRegressionTests`, `UbuntuServerFactParserTests`, fact catalog/parser scenarios cover 12 visible facts, read-only command IDs, approved fixtures and units. | Real Ubuntu variation and local-host UI field walkthrough NOT RUN on exact candidate. |
 | F03 AC4–6 partial/untrusted/bounded inspection | `UbuntuServerFactAggregator` and parser scenario fault injection retain good fields while bad ones become Unknown; catalog capture policy bounds remote output. | Actual partial remote output and unsupported distro behavior remain Owner Stage 1 work. |
@@ -441,7 +489,7 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | Criteria | Source and named blind evidence | Remaining boundary |
 | --- | --- | --- |
 | F05 AC1/9 Ed25519 format and maintained approach | `Ed25519OpenSshKeyPairGeneratorTests` cover OpenSSH v1 output and key-generation scenario tests cover stateful faults; third-party notices and the key-generation decision record explain the approach. | Explicit name/path UX and local OpenSSH interoperability evidence are in unmerged PR #17, not release. Owner Stage 4 NOT RUN. |
-| F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. | Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
+| F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. | Release attempts other-name transaction recovery and blocks unrelated generation; unmerged PR #46 adds focused E2 correction. Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
 | F05 AC5–7 intentional public view/copy and private omission | `SshManagementViewModel` and key-management presentation tests cover public-only view/copy; generator/diagnostic leakage tests check private material omission. | Native Owner clipboard/screenshot and reviewed bundle privacy checks NOT RUN. |
 | F06 AC1–5 safe authorized-key deployment | `PublicKeyDeploymentWorkflowTests` and scenarios cover missing directory/file, ownership/modes, existing-entry preservation, idempotence, malformed material and no full key in diagnostics. | Real account ownership/permissions and `authorized_keys` mutation remain Owner Stage 4 E5. |
 | F06 AC6–9 separate key login and unchanged password access | `KeyAuthenticationVerificationWorkflowTests` and scenarios require a separate trusted candidate and minimum command; failed verification does not authorize password-access changes. | Current release has a terminal success/cancel race; unmerged PR #23 corrects it. Contained OpenSSH and Owner separate-login proof NOT RUN here. |
@@ -498,7 +546,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36, #38, #40 and #42 independently, then
+- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36, #38, #40, #42, #44 and #46 independently, then
   validate their integration on an exact candidate. The local composite is not
   that gate. Do not self-merge to release/main or infer visual acceptance.
 - Review #31 inline local-key correction in PR #32 before claiming complete
@@ -532,6 +580,14 @@ tracks the separate E5 gate.
 - Obtain independent review of [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42)
   for package-upgrade planning's cancellation completion boundary. Its isolated
   E1 and macOS publish are not an integrated-candidate or real apt proof.
+- Obtain independent same-class review of [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44)
+  for identity-edit session invalidation, stale/in-flight host-trust refusal
+  and interaction with #14/#19. Its isolated and local-composite passes are
+  not a native Owner trust walkthrough.
+- Obtain independent same-class review of [PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46)
+  for unrelated versus matching Ed25519 transaction recovery, tamper refusal
+  and interaction with the named-key UI in #17. Its isolated and
+  local-composite passes are not exact approved-candidate or Owner evidence.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
