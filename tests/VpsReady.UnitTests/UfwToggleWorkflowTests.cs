@@ -131,6 +131,25 @@ public sealed class UfwToggleWorkflowTests
     }
 
     [Fact]
+    public async Task MalformedStoredPortBlocksEnableBeforeAnyMutation()
+    {
+        var malformed = StoredSshAllows.Replace("port=22\n", "port=22\0\n", StringComparison.Ordinal);
+        var transport = new RecordingTransport(Result("22"), Result("Status: inactive"), Result(malformed));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(3, transport.Commands.Count);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("UNSUPPORTED_ENVIRONMENT", result.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationFailed && item.CommandId == RemoteCommandCatalog.UbuntuUfwStoredSshRead);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task AlreadyActiveSafeFirewallVerifiesAuthenticatedContinuityBeforeIdempotentSuccess()
     {
         var transport = new RecordingTransport(Result("22"), Result(ActiveWithSshAllows), Result(StoredSshAllows), Result(string.Empty));
