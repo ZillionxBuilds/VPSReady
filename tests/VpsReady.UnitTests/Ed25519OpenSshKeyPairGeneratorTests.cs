@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Renci.SshNet;
 using VpsReady.Core.Diagnostics;
@@ -242,6 +243,55 @@ public sealed class Ed25519OpenSshKeyPairGeneratorScenarioTests
     }
 
     [Fact]
+    public async Task InterruptedTransactionForAnotherNameDoesNotBlockOrAlterNewPair()
+    {
+        await using var workspace = new KeyWorkspace();
+        var firstRequest = new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath);
+        var secondPrivatePath = Path.Combine(workspace.Root, "another_ed25519");
+        var interrupted = new Ed25519OpenSshKeyPairGenerator(
+            new CollectingDiagnosticSink(),
+            new ThrowAtTransactionStage(KeyPairTransactionStage.PrivateStaged, new SimulatedKeyProcessCrashException()));
+
+        await Assert.ThrowsAsync<SimulatedKeyProcessCrashException>(() => interrupted.GenerateAsync(
+            firstRequest,
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None));
+
+        var transactionDirectory = Assert.Single(Directory.EnumerateDirectories(workspace.Root, ".vpsready-keytxn-*"));
+        var stagedPrivatePath = Path.Combine(transactionDirectory, "private.key");
+        var stagedDigest = await PrivateKeyDigestAsync(stagedPrivatePath);
+        var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
+
+        var second = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(secondPrivatePath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        Assert.True(second.Succeeded);
+        Assert.True(File.Exists(secondPrivatePath));
+        Assert.True(File.Exists(secondPrivatePath + ".pub"));
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.Equal(stagedDigest, await PrivateKeyDigestAsync(stagedPrivatePath));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+
+        var first = await generator.GenerateAsync(
+            firstRequest,
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        Assert.True(first.Succeeded);
+        Assert.False(Directory.Exists(transactionDirectory));
+        Assert.True(File.Exists(workspace.PrivateKeyPath));
+        Assert.True(File.Exists(workspace.PublicKeyPath));
+    }
+
+    private static async Task<string> PrivateKeyDigestAsync(string path)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Convert.ToHexString(await SHA256.HashDataAsync(stream));
+    }
+
+    [Fact]
     public async Task CancellationBeforeWorkCreatesNoFilesAndProducesOnlyAStableCancelledOutcome()
     {
         await using var workspace = new KeyWorkspace();
@@ -317,6 +367,10 @@ internal sealed class ThrowAtTransactionStage(KeyPairTransactionStage stage, Exc
             throw exception ?? new IOException("Injected key-pair transaction fault.");
         }
     }
+}
+
+internal sealed class SimulatedKeyProcessCrashException : Exception
+{
 }
 
 internal sealed class CollectingDiagnosticSink : IDiagnosticSink

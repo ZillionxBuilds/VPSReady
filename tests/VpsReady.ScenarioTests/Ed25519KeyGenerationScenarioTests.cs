@@ -323,6 +323,53 @@ public sealed class Ed25519KeyGenerationScenarioTests
         Assert.False(File.Exists(workspace.PublicKeyPath));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MalformedOrTamperedUnrelatedTransactionStillFailsClosed(bool unexpectedEntry)
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(
+            transactionDirectory,
+            privateFileName: "another_ed25519",
+            publicFileName: unexpectedEntry ? "another_ed25519.pub" : "wrong.pub");
+        if (unexpectedEntry)
+        {
+            await File.WriteAllTextAsync(Path.Combine(transactionDirectory, "unexpected-entry"), "test-only sentinel");
+        }
+
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
+    public async Task CaseOnlyTransactionNameIsAmbiguousAndFailsClosed()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(transactionDirectory, privateFileName: "ID_ED25519", publicFileName: "ID_ED25519.pub");
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
     [Fact]
     public async Task RestartRecoveryFailsClosedAndPreservesUnexpectedUserFinals()
     {
