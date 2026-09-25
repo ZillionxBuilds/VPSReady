@@ -15,7 +15,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34),
 [system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36),
 [diagnostic pseudonym PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38), and
-[environment metadata PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40)
+[environment metadata PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40), and
+[package-plan cancellation PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -235,6 +236,32 @@ were **NOT RUN** on that branch. These are developer results, not independent
 QA, atomic protection against all external read/apply races, or real Ubuntu
 mutation proof. Release remains unchanged. E5 **REAL VPS: NOT TESTED**.
 
+### F08 package-upgrade plan terminal correction — isolated
+
+On exact release `9965c5b`, a deterministic E1 sink cancelled the caller token
+when `apt.upgrade.planned`/Succeeded was recorded. `PackageUpgradeWorkflow`
+then wrote `apt.upgrade.cancelled`/Cancelled for the **same operation ID** and
+returned a not-ready plan: focused regression **1/1 RED**. This is a
+planning/diagnostics completion race, not an apt mutation. Focused
+[issue #41](https://github.com/ZillionxBuilds/VPSReady/issues/41) and draft
+[PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42) at
+`5ac508b9b0e52c0686f4201a391cd5405960cbc4` move the cancellation check
+immediately before the terminal planned-success event. The two-case focused
+E1 now passes **2/2**: cancellation before success records only Cancelled;
+cancellation as success is recorded keeps a ready plan with only Succeeded.
+The apt command, package fingerprint, apply confirmation and verification
+paths are unchanged.
+
+The **isolated PR #42 branch** passed locked restore, Release `-warnaserror`
+build with zero warnings/errors, format and diff checks (E0); full unit
+**610 PASS/2 SKIP** (E1) and scenario **174 PASS/3 SKIP** (E2). E3 is
+**NOT RUN** for this planning-only fix. E4 unsigned self-contained macOS arm64
+publish/Mach-O and artifact-safety scan passed; the process stayed alive for
+eight seconds without error output before manual interruption. Interactive
+UI/clean exit, Windows/Linux native, hosted checks and independent review are
+**NOT RUN**. The local composites below predate PR #42, and release remains
+unchanged. **REAL VPS: NOT TESTED.**
+
 ### Expanded local integration preflight — #34 and #36 added
 
 A second clean, **local-only** composite `codex/15-full-preflight-r35` at
@@ -348,7 +375,7 @@ full local composite at `90abe1b` includes neither PR #38 nor #40.
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. Developer-composite native key generation/collision and corrupt-key guidance passed on named local heads, not an approved candidate. Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
-| F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). Recheck privilege, apt locks, late cancellation, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
+| F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). It also produces contradictory package-plan Succeeded/Cancelled terminal records on late cancellation; focused E1 correction is in unmerged [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42) ([#41](https://github.com/ZillionxBuilds/VPSReady/issues/41)). Recheck privilege, apt locks, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
 | F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). Dictionary-reversible and repeatedly rehashed host/user pseudonyms are corrected in unmerged [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38); raw replacement-only environment metadata in unmerged [PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40). Developer-only #19/#38/#40 F09 interaction checks passed locally, but independent review and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
@@ -405,7 +432,7 @@ not a real package manager, reboot, hostname or timezone PASS:
 | AC2–4 explicit bounded package action, typed blockers and no release upgrade | `PackageIndexUpdateWorkflowTests`, `PackageUpgradeWorkflowTests`, `PackageNoninteractiveContractTests`, matching scenario suites and `SystemActionsViewModelScenarioTests` cover confirmation, finite timeout, apt lock, privilege/nonzero/interactive failures and normal-upgrade-only command catalog. | Real apt lock/conffile behavior and native Windows/Linux UI NOT RUN; candidate packaging is separate. |
 | AC5–7 explicit reboot, expected disconnect and bounded trusted reconnect | `RebootWorkflowTests` and `RebootWorkflowScenarioTests` cover confirmation, old/new boot identity, expected disconnect, retry deadline, cancellation, trust refusal and recovery verification. | Real reboot/access continuity and host-key revalidation remain Owner Stage 5 E5 NOT RUN. |
 | AC8 validated hostname/timezone and fresh verification | Baseline `HostnameChangeWorkflowTests`, `TimezoneChangeWorkflowTests` and matching scenarios cover invalid input and post-apply verification; PR #36 adds stale-state, removed-selection, failed-read, cross-transport, cancellation and safe-diagnostic regressions. | Release remains vulnerable to stale plans until reviewed correction integrates. Separate SSH commands retain a residual read/apply race; real Ubuntu mutation NOT RUN. |
-| AC9–10 cancellation state and safe correlated diagnostics | `SystemActionsViewModelTests`, `PackageIndexUpdateWorkflowScenarioTests`, `RebootWorkflowTests` and system-action scenario tests exercise cancellation/stale-plan clearing and diagnostic operation IDs; remote workflows use command catalog IDs and fixed safe summaries. | Exact combined candidate Activity/journal, privacy/export and Owner Stage 2/5/6 remain NOT RUN. |
+| AC9–10 cancellation state and safe correlated diagnostics | `SystemActionsViewModelTests`, `PackageIndexUpdateWorkflowScenarioTests`, `RebootWorkflowTests` and system-action scenario tests exercise cancellation/stale-plan clearing and diagnostic operation IDs; remote workflows use command catalog IDs and fixed safe summaries. Exact-release package-upgrade planning emits both Succeeded and Cancelled under one operation ID on late cancellation; PR #42 corrects this with red-to-green E1. | PR #42 is unmerged and not independently reviewed; exact combined candidate Activity/journal, privacy/export and Owner Stage 2/5/6 remain NOT RUN. |
 
 ### F09 criterion walk on the release source
 
@@ -442,7 +469,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36, #38 and #40 independently, then
+- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36, #38, #40 and #42 independently, then
   validate their integration on an exact candidate. The local composite is not
   that gate. Do not self-merge to release/main or infer visual acceptance.
 - Review #31 inline local-key correction in PR #32 before claiming complete
@@ -473,6 +500,9 @@ tracks the separate E5 gate.
   for environment metadata sanitation before journal/report/bundle/manifest
   serialization. The local #19/#38/#40 interaction smoke remains unapproved;
   exact integrated-candidate privacy export and Owner E5 are separate.
+- Obtain independent review of [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42)
+  for package-upgrade planning's cancellation completion boundary. Its isolated
+  E1 and macOS publish are not an integrated-candidate or real apt proof.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
