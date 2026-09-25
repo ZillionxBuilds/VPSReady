@@ -108,11 +108,6 @@
       <Setter Property="BorderBrush" Value="#E5B64B" />
       <Setter Property="BorderThickness" Value="2" />
     </Style>
-    <Style Selector="ToolTip">
-      <Setter Property="Background" Value="#FFFFFF" />
-      <Setter Property="Foreground" Value="#14243D" />
-      <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
-    </Style>
     <Style Selector="TextBox">
       <Setter Property="CornerRadius" Value="9" />
       <Setter Property="MinHeight" Value="44" />
