@@ -24,6 +24,43 @@ are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
 
+### Current all-pending product preflight — 2026-09-25 18:36 UTC
+
+The local-only `codex/15-full-integrated-check` at
+`0bd4223a3d91f812a51531ab0e742fb7014faeb6` starts from the unchanged
+release source and combines the pending product corrections through
+[PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48) with
+[PR #50](https://github.com/ZillionxBuilds/VPSReady/pull/50), stacked
+[PR #54](https://github.com/ZillionxBuilds/VPSReady/pull/54), and
+[PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52). It also carries
+the test-fixture follow-up from [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25)
+at `80ae2db3b5a510d9e4e094fa5a1de31815b9d2d3`. Five conflicts were
+resolved only in this local experiment: Overview cancellation versus session
+diagnostics, connection validation versus Overview diagnostic sink, two sets
+of journal tests, and UFW toggle pre-terminal cancellation/session diagnostics
+while preserving port-range SSH protection. No product source merge or push
+to release/main was made.
+
+The first integrated E0 scan failed on a synthetic startup test fixture from
+PR #25. The same existing PR now renames only that fixture variable; the
+seeded no-leak assertion and strict tracked-secret scanner are unchanged.
+After that correction, the **exact local composite head** passed locked
+restore, Release `-warnaserror` build with zero warnings/errors, format,
+packaging/CI policy, ignore and tracked-secret checks (E0); **801 PASS/2
+SKIP** unit tests (E1); and **208 PASS/3 SKIP** stateful scenarios (E2).
+Unsigned self-contained `osx-arm64` publish passed, yielded a Mach-O arm64
+apphost and a SHA-embedded desktop DLL; the latter's SHA-256 is
+`abd91690c346ae63291208b4b1f59cc180496d98a877b428588c28437463b09b`.
+The artifact safety scan passed. The local process remained running during a
+bounded startup observation and was intentionally stopped with Ctrl-C; this
+is **startup smoke only**, not interactive visual/resize proof or a clean-exit
+claim. The ignored temporary publish is not an approved or retained Owner
+package. Docker daemon was unavailable on this Mac, so E3 was **NOT RUN on
+this head**. Windows/Linux native and hosted E0–E4, independent review/QA,
+official exact-candidate packaging, and Owner Stage 0–6 remain **NOT RUN or
+UNVERIFIED** as applicable. Self-review is not independent QA. **REAL VPS:
+NOT TESTED.**
+
 ## Verdicts and exact baseline
 
 `PARTIAL` means the production path and some blind evidence exist, but not every
