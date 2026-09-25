@@ -12,9 +12,10 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27),
 [local Activity guidance PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30),
 [local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32),
-[UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34), and
-[system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36), and
-[diagnostic pseudonym PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38)
+[UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34),
+[system-plan freshness PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36),
+[diagnostic pseudonym PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38), and
+[environment metadata PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -304,6 +305,39 @@ Windows/Linux, hosted checks, independent QA, exact combined-candidate privacy
 export, and Owner E5 are NOT RUN. The earlier local composite at `90abe1b` does
 **not** contain PR #38. **REAL VPS: NOT TESTED.**
 
+### F09 environment metadata correction and local interaction preflight
+
+Exact release `9965c5b` checks only `WasOmitted` before serializing
+`DiagnosticEnvironment`. A replacement-only redaction could therefore leave
+the original metadata in a journal, Safe Issue Report or support bundle.
+Focused E1 tests with a **constructed synthetic marker**, not a real token,
+were RED for all five fields (app version, build SHA, local OS, local
+architecture and artifact RID). Focused [issue #39](https://github.com/ZillionxBuilds/VPSReady/issues/39)
+and draft [PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40) at
+`36eed87066310000428425d6e42566403128ea5a` sanitize a copied environment
+at the workspace boundary before any journal/report/bundle/manifest consumer.
+The isolated branch passed focused E1 5/5, locked E0 restore/Release
+`-warnaserror` build/format/diff, full E1 613 PASS/2 SKIP and E2 174 PASS/3
+SKIP. E3 is NOT RUN for this local metadata change. E4 unsigned macOS arm64
+publish/Mach-O and 8-second noninteractive startup smoke PASS; interactive
+UI/clean exit, native Windows/Linux and hosted checks NOT RUN.
+
+A **separate, unreviewed local-only** F09 composite at
+`c7492c756f161f831657de62b724785c639d8c68` cherry-picked exact PR
+#19/#38/#40 corrections over release. One test-file conflict was resolved by
+preserving both regression methods; production code did not conflict. Exact
+head E0 locked restore/Release `-warnaserror` build (0 warnings/errors), format
+and diff checks PASS; E1 623 PASS/2 SKIP; E2 175 PASS/3 SKIP. E3 disposable
+Ubuntu ARM64 Docker/OpenSSH loopback production SSH.NET 1 PASS/0 FAIL/0 SKIP,
+script host-key/auth/command/timeout checks and artifact safety scan PASS.
+The first E3 container stopped at setup because the SDK image lacked `sudo`;
+a fresh container installed it and passed. E4 unsigned macOS arm64
+publish/Mach-O and 8-second noninteractive startup smoke PASS. The container
+auto-removed; no hosted E3 artifact was retained. This is developer interaction
+smoke, **not** independent QA, approved integration or Owner E5. The earlier
+full local composite at `90abe1b` includes neither PR #38 nor #40.
+**REAL VPS: NOT TESTED.**
+
 ## F02–F09 source and evidence map
 
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
@@ -315,7 +349,7 @@ export, and Owner E5 are NOT RUN. The earlier local composite at `90abe1b` does
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Exact release permits a stale hostname/timezone plan to overwrite independently changed server state; the red E2 reproduction and source correction are in unmerged [PR #36](https://github.com/ZillionxBuilds/VPSReady/pull/36) ([#35](https://github.com/ZillionxBuilds/VPSReady/issues/35)). Recheck privilege, apt locks, late cancellation, reboot reconnect and verified completion on an approved integrated candidate; Owner Stage 5 NOT RUN. |
-| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). Dictionary-reversible and repeatedly rehashed host/user pseudonyms are corrected in unmerged [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38). A developer-only #19/#30/#32 macOS flow showed both surfaces consistent, but isolated native flow and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
+| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Production journal metadata failure is corrected in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19); startup fallback ID mismatch in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25). Local-only Activity guidance is corrected in unmerged [PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30); inline local key/config text in unmerged [PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32). Dictionary-reversible and repeatedly rehashed host/user pseudonyms are corrected in unmerged [PR #38](https://github.com/ZillionxBuilds/VPSReady/pull/38); raw replacement-only environment metadata in unmerged [PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40). Developer-only #19/#38/#40 F09 interaction checks passed locally, but independent review and approved integrated-candidate proof remain missing. Recheck disconnected report/bundle, privacy, retention and startup failure on an exact reviewed candidate; Owner Stage 2/6 NOT RUN. |
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
@@ -382,9 +416,9 @@ unmerged PRs:
 | F09 criteria | Source and named regression evidence | Remaining boundary |
 | --- | --- | --- |
 | AC1–4 Activity, correlation, stable IDs and journal fields | `DiagnosticsCoreTests`, `StructuredDiagnosticsScenarioTests`, `ActivityDiagnosticsScenarioTests` and `OperationJournalWorkspaceTests` exercise phase/command IDs, bounded Activity entries and JSONL projection. | Native release review found journal metadata rejected by fail-closed redaction; unmerged PR #19 repairs it. Recheck on exact integrated candidate. |
-| AC5–8 and AC16 bounded capture, redaction and seeded-secret exclusions | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests` and structured-diagnostics scenarios cover secrets, untyped output, omission policy, public-key lines and journal/report/bundle surfaces. PR #38 adds RED-to-GREEN host/user dictionary-resistance and stable-token journal/bundle tests using synthetic identities. | PR #38 remains unmerged; Windows/Linux host and Owner-reviewed bundle/screenshot leak checks NOT RUN; no raw Owner material was collected. |
+| AC5–8 and AC16 bounded capture, redaction and seeded-secret exclusions | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests` and structured-diagnostics scenarios cover secrets, untyped output, omission policy, public-key lines and journal/report/bundle surfaces. PR #38 adds RED-to-GREEN host/user dictionary-resistance and stable-token journal/bundle tests; PR #40 adds all-five-field environment metadata leak regressions, using synthetic values only. | PR #38/#40 remain unmerged; Windows/Linux host and Owner-reviewed bundle/screenshot leak checks NOT RUN; no raw Owner material was collected. |
 | AC9–10 per-user storage, retention, open/clear | `OperationJournalWorkspaceTests` cover path rejection, size/newest-run retention and log-folder action; `ActivityDiagnosticsScenarioTests` cover clear and filtering. | Actual retention and folder action on each supported native host NOT RUN as a release gate. |
-| AC11–14 explicit safe report/bundle and no auto-upload | `OperationJournalWorkspaceTests` cover redacted report, local ZIP manifest/checksums and relative-path rejection; `ActivityDiagnosticsScenarioTests` cover explicit copy/export and local export failure. | Disconnected Owner Stage 0/2 report/bundle walkthrough and review of an exact-candidate export NOT RUN. |
+| AC11–14 explicit safe report/bundle and no auto-upload | `OperationJournalWorkspaceTests` cover redacted report, local ZIP manifest/checksums and relative-path rejection; `ActivityDiagnosticsScenarioTests` cover explicit copy/export and local export failure. PR #40 verifies metadata is sanitized in journal, report, every ZIP entry and manifest while export remains usable. | PR #40 is unmerged; disconnected Owner Stage 0/2 report/bundle walkthrough and review of an exact-candidate export NOT RUN. |
 | AC15 and AC17 startup/failure ID-to-journal correlation | Current release `AppViewModel.CreateSafeStartupFailure` and `MinimalSafeStartupJournal.TryRecord` produce unrelated records; invalid Connection form lacks a correlated validation event, while production journal metadata blocks persistence. Focused E1/E2 corrections are in unmerged PR #19 and #25. | Native forced-startup-failure UI/export, combined candidate correlation and Owner Stage 2/6 NOT RUN. |
 | AC1/4/17 actionable local failure recovery | Current release `StructuredDiagnosticEvent.ToActivityEntry` chooses the same remote-state next step for local key/config failures. Unmerged PR #30 adds explicit local-only event-ID classification; unmerged PR #32 gives inline local-file guidance and preserves the selector code during public-key reread. E1/E2 and a developer-composite macOS flow cover both surfaces. | Exact isolated native invalid-key flow depends on unmerged production journal repair PR #19. Independent review, exact integrated candidate, Windows/Linux native and Owner Stage 2/6 NOT RUN. |
 
@@ -408,7 +442,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36 and #38 independently, then
+- Review PR #14, #17, #19, #21, #23, #25, #27, #30, #32, #34, #36, #38 and #40 independently, then
   validate their integration on an exact candidate. The local composite is not
   that gate. Do not self-merge to release/main or infer visual acceptance.
 - Review #31 inline local-key correction in PR #32 before claiming complete
@@ -435,6 +469,10 @@ tracks the separate E5 gate.
   for keyed host/user pseudonyms and authenticated nested-redaction tokens.
   Its isolated local E1 and macOS publish do not establish a reviewed or
   integrated-candidate F09 privacy/export gate.
+- Obtain independent review of [PR #40](https://github.com/ZillionxBuilds/VPSReady/pull/40)
+  for environment metadata sanitation before journal/report/bundle/manifest
+  serialization. The local #19/#38/#40 interaction smoke remains unapproved;
+  exact integrated-candidate privacy export and Owner E5 are separate.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
