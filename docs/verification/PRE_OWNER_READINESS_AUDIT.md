@@ -54,6 +54,19 @@ F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
 or absence of leaks on the Owner's machine.
 
+### F02/F03 criterion walk on the release source
+
+| Criteria | Source and named blind evidence | Remaining boundary |
+| --- | --- | --- |
+| F02 AC1–2 input and pre-SSH validation | `ConnectionInputValidation`, `ConnectionOverviewViewModel`, `ConnectionInputValidationTests` and scenario tests cover typed fields, default/invalid port, missing values and credential clearing before transport. | Current release invalid-form UI lacks an actionable correlated failure; unmerged PR #19 corrects it. Owner Stage 1 NOT RUN. |
+| F02 AC3–4 production SSH and verified success | `DesktopComposition` wires `SshNetRemoteTransport` through `ConnectionSessionLifecycle`; `ConnectionSessionLifecycleTests` and stateful scenarios require authentication plus minimum command before reusable success. | Contained production-transport loopback `sshd` is skipped in the current baseline; no E5 connection proof. |
+| F02 AC5–6 typed failures, trust, cancellation and timeout | `KnownHostTrustStoreTests`, trust scenarios, connection presentation/lifecycle tests cover unknown/changed keys, stale review, cancel and candidate disposal. | Native changed-host trust review and platform-specific timeout/refusal cases require exact-candidate/E5 checks. |
+| F02 AC7–10 secret/session identity boundaries | `ConnectionSecretInput`, `ConnectionSessionLifecycleTests`, `KnownHostTrustStoreTests` and scenario tests cover clear-on-use, non-persistence, session reuse/invalidation and explicit trust decisions. | Owner credential handling and connection reuse on an actual server NOT RUN. |
+| F02 AC11 evidence boundary | E1/E2 are represented above; baseline E3 remains declared SKIP. | Owner Stage 1 E5 NOT TESTED. |
+| F03 AC1–3 actual fields/Ubuntu parsing | `ServerOverviewReader`, Ubuntu fact catalog/parsers and `OverviewJourneyRegressionTests`, `UbuntuServerFactParserTests`, fact catalog/parser scenarios cover 12 visible facts, read-only command IDs, approved fixtures and units. | Real Ubuntu variation and local-host UI field walkthrough NOT RUN on exact candidate. |
+| F03 AC4–6 partial/untrusted/bounded inspection | `UbuntuServerFactAggregator` and parser scenario fault injection retain good fields while bad ones become Unknown; catalog capture policy bounds remote output. | Actual partial remote output and unsupported distro behavior remain Owner Stage 1 work. |
+| F03 AC7 correlated refresh | `ConnectionOverviewViewModel` and `ServerOverviewReader` use operation IDs and diagnostic events; `OverviewJourneyRegressionTests` cover late cancellation/session replacement. | Current release has a terminal success/cancel race; unmerged PR #21 corrects it. Combined Activity/journal and Owner E5 NOT RUN. |
+
 ### F04 criterion walk on the release source
 
 This is a trace of blind coverage, not a release or real-firewall PASS:
@@ -65,6 +78,20 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | AC6–7 selected/confirmed remove and stale identity | `FirewallViewModelTests`, `UfwSelectedRuleRemovalWorkflowTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` cover selection, reorder, duplicates and verified absence. | Real concurrent UFW behavior NOT RUN. |
 | AC8–9 active SSH port protection before enable/remove | `UfwToggleWorkflowTests`, `UfwStoredSshTests`, `UfwSafetyPropertyScenarioTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` require validated server-port evidence and both needed address families. | Independent active-access check belongs to Owner E5; no lockout proof here. |
 | AC10–12 verify, cancel/failure, stateful fault matrix | `UfwToggleWorkflowScenarioTests`, `UfwAllowRuleWorkflowScenarioTests`, `UfwSafetyPropertyScenarioTests` cover fresh verification, recovery, privilege failure and phase faults. | Exact combined candidate, supported hosts and Owner Stage 3 NOT RUN. |
+
+### F05–F07 criterion walk on the release source
+
+| Criteria | Source and named blind evidence | Remaining boundary |
+| --- | --- | --- |
+| F05 AC1/9 Ed25519 format and maintained approach | `Ed25519OpenSshKeyPairGeneratorTests` cover OpenSSH v1 output and key-generation scenario tests cover stateful faults; third-party notices and the key-generation decision record explain the approach. | Explicit name/path UX and local OpenSSH interoperability evidence are in unmerged PR #17, not release. Owner Stage 4 NOT RUN. |
+| F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. | Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
+| F05 AC5–7 intentional public view/copy and private omission | `SshManagementViewModel` and key-management presentation tests cover public-only view/copy; generator/diagnostic leakage tests check private material omission. | Native Owner clipboard/screenshot and reviewed bundle privacy checks NOT RUN. |
+| F06 AC1–5 safe authorized-key deployment | `PublicKeyDeploymentWorkflowTests` and scenarios cover missing directory/file, ownership/modes, existing-entry preservation, idempotence, malformed material and no full key in diagnostics. | Real account ownership/permissions and `authorized_keys` mutation remain Owner Stage 4 E5. |
+| F06 AC6–9 separate key login and unchanged password access | `KeyAuthenticationVerificationWorkflowTests` and scenarios require a separate trusted candidate and minimum command; failed verification does not authorize password-access changes. | Current release has a terminal success/cancel race; unmerged PR #23 corrects it. Contained OpenSSH and Owner separate-login proof NOT RUN here. |
+| F06 AC10 evidence boundary | Stateful deployment/verification faults run in E2; production transport has no successful contained `sshd` run in this baseline audit. | Owner Stage 4 E5 NOT TESTED. |
+| F07 AC1–3/8 create, preserve and collision/no-change | `OpenSshConfigEditorTests` and scenarios cover absent file, unrelated text/line endings, explicit collision, idempotence and no write on invalid config. | Current release can falsely report Unchanged with an extra effective key; unmerged PR #27 corrects it. |
+| F07 AC4–5 wildcard semantics and selected key path | Editor parses exact/wildcard/negated Host blocks and validates an absolute selected identity path; local `ssh -G` confirmed `IdentityFile` is additive. | Include/Match are intentionally refused. External/system-wide OpenSSH config, platform behavior and Owner alias login NOT RUN. |
+| F07 AC6–7/9 backup, permissions, safe summary | `OpenSshConfigEditorTests` and scenarios cover atomic backup, post-commit recovery, restricted modes and fixed safe diagnostic messages without local path/config text. | Native Windows/Linux file semantics and Owner Stage 4 review NOT RUN. |
 
 ### F08 criterion walk on the release source
 
