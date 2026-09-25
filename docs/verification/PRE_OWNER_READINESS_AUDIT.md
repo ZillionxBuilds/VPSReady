@@ -66,6 +66,32 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | AC8–9 active SSH port protection before enable/remove | `UfwToggleWorkflowTests`, `UfwStoredSshTests`, `UfwSafetyPropertyScenarioTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` require validated server-port evidence and both needed address families. | Independent active-access check belongs to Owner E5; no lockout proof here. |
 | AC10–12 verify, cancel/failure, stateful fault matrix | `UfwToggleWorkflowScenarioTests`, `UfwAllowRuleWorkflowScenarioTests`, `UfwSafetyPropertyScenarioTests` cover fresh verification, recovery, privilege failure and phase faults. | Exact combined candidate, supported hosts and Owner Stage 3 NOT RUN. |
 
+### F08 criterion walk on the release source
+
+The evidence below is blind unit/scenario coverage on the exact release baseline,
+not a real package manager, reboot, hostname or timezone PASS:
+
+| F08 criteria | Source and named regression evidence | Remaining boundary |
+| --- | --- | --- |
+| AC1 read current state and review plan before write | `SystemActionsViewModel` exposes separate package/reboot inspection and hostname/timezone plan actions; `SystemActionsViewModelScenarioTests`, `PackageUpgradeWorkflowTests`, `HostnameChangeWorkflowTests` and `TimezoneChangeWorkflowTests` cover reviewed state before apply. | Owner Stage 5 observed read-only/current-state presentation NOT RUN. |
+| AC2–4 explicit bounded package action, typed blockers and no release upgrade | `PackageIndexUpdateWorkflowTests`, `PackageUpgradeWorkflowTests`, `PackageNoninteractiveContractTests`, matching scenario suites and `SystemActionsViewModelScenarioTests` cover confirmation, finite timeout, apt lock, privilege/nonzero/interactive failures and normal-upgrade-only command catalog. | Real apt lock/conffile behavior and native Windows/Linux UI NOT RUN; candidate packaging is separate. |
+| AC5–7 explicit reboot, expected disconnect and bounded trusted reconnect | `RebootWorkflowTests` and `RebootWorkflowScenarioTests` cover confirmation, old/new boot identity, expected disconnect, retry deadline, cancellation, trust refusal and recovery verification. | Real reboot/access continuity and host-key revalidation remain Owner Stage 5 E5 NOT RUN. |
+| AC8 validated hostname/timezone and fresh verification | `HostnameChangeWorkflowTests`, `TimezoneChangeWorkflowTests` and matching scenario suites cover invalid input, fresh read, apply, verify mismatch and repeat. | Real Ubuntu hostname/timezone mutation NOT RUN. |
+| AC9–10 cancellation state and safe correlated diagnostics | `SystemActionsViewModelTests`, `PackageIndexUpdateWorkflowScenarioTests`, `RebootWorkflowTests` and system-action scenario tests exercise cancellation/stale-plan clearing and diagnostic operation IDs; remote workflows use command catalog IDs and fixed safe summaries. | Exact combined candidate Activity/journal, privacy/export and Owner Stage 2/5/6 remain NOT RUN. |
+
+### F09 criterion walk on the release source
+
+The current release has broad blind diagnostic coverage, but two production
+correlation gaps are corrected only in separate, unmerged PRs:
+
+| F09 criteria | Source and named regression evidence | Remaining boundary |
+| --- | --- | --- |
+| AC1–4 Activity, correlation, stable IDs and journal fields | `DiagnosticsCoreTests`, `StructuredDiagnosticsScenarioTests`, `ActivityDiagnosticsScenarioTests` and `OperationJournalWorkspaceTests` exercise phase/command IDs, bounded Activity entries and JSONL projection. | Native release review found journal metadata rejected by fail-closed redaction; unmerged PR #19 repairs it. Recheck on exact integrated candidate. |
+| AC5–8 and AC16 bounded capture, redaction and seeded-secret exclusions | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests` and structured-diagnostics scenarios cover secrets, untyped output, omission policy, public-key lines and journal/report/bundle surfaces. | Windows/Linux host and Owner-reviewed bundle/screenshot leak checks NOT RUN; no raw Owner material was collected. |
+| AC9–10 per-user storage, retention, open/clear | `OperationJournalWorkspaceTests` cover path rejection, size/newest-run retention and log-folder action; `ActivityDiagnosticsScenarioTests` cover clear and filtering. | Actual retention and folder action on each supported native host NOT RUN as a release gate. |
+| AC11–14 explicit safe report/bundle and no auto-upload | `OperationJournalWorkspaceTests` cover redacted report, local ZIP manifest/checksums and relative-path rejection; `ActivityDiagnosticsScenarioTests` cover explicit copy/export and local export failure. | Disconnected Owner Stage 0/2 report/bundle walkthrough and review of an exact-candidate export NOT RUN. |
+| AC15 and AC17 startup/failure ID-to-journal correlation | Current release `AppViewModel.CreateSafeStartupFailure` and `MinimalSafeStartupJournal.TryRecord` produce unrelated records; invalid Connection form lacks a correlated validation event, while production journal metadata blocks persistence. Focused E1/E2 corrections are in unmerged PR #19 and #25. | Native forced-startup-failure UI/export, combined candidate correlation and Owner Stage 2/6 NOT RUN. |
+
 ## Owner protocol map
 
 All Owner stages are `NOT RUN` for E5, regardless of prior blind tests:
