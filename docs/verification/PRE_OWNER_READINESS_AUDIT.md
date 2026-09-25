@@ -7,7 +7,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [key-naming PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17),
 [connection/Activity PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19),
 [Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21), and
-[key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23)
+[key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23), and
+[startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25)
 are separate, unmerged changes. No result below proves their combined tree.
 
 ## Verdicts and exact baseline
@@ -46,7 +47,7 @@ acceptance criterion is checked against an exact candidate.
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
 | F08 System actions | `SystemActionsViewModel` → package index/upgrade, reboot, hostname and timezone workflows and Ubuntu command catalogs | Matching unit/scenario workflow suites, R19 completion regression suite | PARTIAL. Recheck stale plan, privilege, apt locks, late cancellation, reboot reconnect and verified completion criterion by criterion; Owner Stage 5 NOT RUN. |
-| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Native review found production journal writes rejected because bare `0.1.0.0` version resembled an IPv4 identifier to fail-closed redaction; safe version metadata and isolated production regression are in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19). Startup fallback UI and minimal journal use unrelated IDs; focused [#24](https://github.com/ZillionxBuilds/VPSReady/issues/24) tracks AC15/17 correction. Recheck disconnected Stage 0 report/bundle, privacy, retention and startup failure on exact candidate; Owner Stage 2/6 NOT RUN. |
+| F09 Activity and diagnostics | `ActivityDiagnosticsViewModel` → `RedactingDiagnosticSink`, `OperationJournalWorkspace`, safe report/bundle contracts | `DiagnosticsCoreTests`, `DiagnosticLeakageTests`, `OperationJournalWorkspaceTests`, activity/structured-diagnostics scenarios | PARTIAL. Native review found production journal writes rejected because bare `0.1.0.0` version resembled an IPv4 identifier to fail-closed redaction; safe version metadata and isolated production regression are in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19). Current release startup fallback UI and minimal journal use unrelated IDs; focused E1 correction is in unmerged [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25) ([#24](https://github.com/ZillionxBuilds/VPSReady/issues/24)). Recheck disconnected Stage 0 report/bundle, privacy, retention and startup failure on exact candidate; Owner Stage 2/6 NOT RUN. |
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
@@ -84,7 +85,7 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14, #17, #19, #21 and #23 independently, then validate their integration on an
+- Review PR #14, #17, #19, #21, #23 and #25 independently, then validate their integration on an
   exact candidate. Do not self-merge to release/main or infer visual acceptance.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
@@ -95,9 +96,10 @@ tracks the separate E5 gate.
 - Obtain independent review of [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23)
   for F06 separate key-auth terminal consistency. Its local synthetic-key
   evidence is not contained SSH protocol or Owner E5 proof.
-- Reconcile the F09 startup fallback error ID with its minimal local journal
-  and safe path through [issue #24](https://github.com/ZillionxBuilds/VPSReady/issues/24).
-  Current release cannot correlate the displayed ID to the fallback record.
+- Obtain independent review of [PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25)
+  for F09 startup fallback ID, local-path and privacy behavior. Its isolated E1
+  and macOS publish evidence does not establish a forced-fallback native UI or
+  exact combined-candidate result.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
