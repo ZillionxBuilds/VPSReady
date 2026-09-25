@@ -54,9 +54,24 @@ testing. It is useful interaction smoke evidence, not the final gate.
 | E0 | Locked restore, Release build (0 warnings/errors), format and diff checks PASS. | Hosted CI/protection checks absent. |
 | E1 | 653 PASS, 2 SKIP. | Self-run aggregate; independent QA pending. |
 | E2 | 178 PASS, 3 SKIP. | Stateful fake host is not a VPS. |
-| E3 | Local `ssh-keygen` interoperability 1 PASS and synthetic `ssh -G` additive-identity evaluation PASS. | Production loopback `sshd` 1 SKIP / NOT RUN. |
+| E3 | Local Ubuntu 24.04 ARM64 Docker/OpenSSH runner: `Category=E3` 2 PASS/0 FAIL/0 SKIP, including the production SSH.NET password transport and generated-key OpenSSH interoperability. The runner also passed unknown-host refusal, known-host match, wrong-password rejection, command stdout/stderr/nonzero exit and bounded timeout. Local macOS synthetic `ssh -G` additive-identity evaluation PASS. | Disposable local loopback only; not hosted CI, native Linux desktop or a real VPS. The earlier ordinary E1 run's opt-in E3 skip remains a separate result. |
 | E4 | Unsigned macOS arm64 publish PASS; native Connection and SSH Keys & Config navigation/AX inspected. Selected text was readable and no redundant tooltip appeared in those views. | Forced startup-fallback UI, resize, Windows/Linux native and official candidate packaging NOT RUN. |
 | E5 | REAL VPS: NOT TESTED. | Owner-only, after approval. |
+
+The later E3 run used the **same** unreviewed composite head `fd0aba1` in an
+official .NET 10.0.400 Ubuntu Noble SDK container on local Docker Desktop.
+Source was mounted read-only; the container had no published port, host network,
+privileged mode, Docker socket or Owner secret. The unchanged
+`eng/run-local-contained-e3.sh` exited 0 and the container was removed.
+Retained local-only TRX and protocol summary are under the ignored
+`artifacts/validation/combined-e3-fd0aba1/` directory; artifact-safety scan
+PASS. SHA-256: TRX
+`a9155d602da44793767815df7479788901a2c86f0b732a67bfdf9180572a3444`,
+protocol summary
+`3d4dad4fc0d23f017f3d53b6ac998b9311ff69f5fb2690aa090badde57602c1f`.
+The generated summary's generic "CI runner" wording describes its intended
+script environment; this execution was **local Docker**, not GitHub Actions.
+The temporary source checkout was removed after verification.
 
 The temporary app bundle and publish output were closed and moved to macOS
 Trash (recoverable); the source branch and separate PRs remain. Rebuild from
@@ -209,6 +224,7 @@ tracks the separate E5 gate.
   protection or fabricate platform evidence. Resolve the zero-workflow/zero-run
   discovery above through approved repository/organization channels first;
   a manual dispatch also requires a workflow on the default branch.
-- Run available E3 contained OpenSSH and E4 Windows/macOS/Linux native package
-  checks on the exact reviewed candidate; label missing hosts `NOT RUN`.
+- Rerun contained E3 and E4 Windows/macOS/Linux native package checks on the
+  exact **reviewed** candidate; this local composite E3 does not replace that
+  gate. Label missing hosts `NOT RUN`.
 - Preserve Owner-only E5 and explicit main/stable approval as separate gates.
