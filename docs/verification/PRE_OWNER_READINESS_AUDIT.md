@@ -365,6 +365,35 @@ smoke, **not** independent QA, approved integration or Owner E5. The earlier
 full local composite at `90abe1b` includes neither PR #38 nor #40.
 **REAL VPS: NOT TESTED.**
 
+### All-open-source-PR preflight — local-only, not an approved candidate
+
+A clean local `codex/15-full-preflight-r41` at
+`22fff7ef60f25d8d2b664eb2e7dd5c0a32298280` adds the exact source
+commits from draft PR #38, #40 and #42 to the prior `90abe1b` composite.
+Together it represents the currently open product corrections #14, #17, #19,
+#21, #23, #25, #27, #30, #32, #34, #36, #38, #40 and #42 over unchanged
+release `9965c5b`. Documentation PR #28 is separate. Cherry-picking #38
+required a single **test-file** conflict resolution in
+`OperationJournalWorkspaceTests.cs`: the connection-form, local-key guidance
+and host/user privacy regressions were all retained. There was no production
+code conflict; #40 and #42 applied cleanly. This branch was not pushed to
+release/main, independently reviewed or approved for Owner testing.
+
+| Evidence | Exact local composite result | Limit |
+| --- | --- | --- |
+| E0 | Locked restore, Release `-warnaserror` build (0 warnings/errors), format/diff, user-guide contract and six-profile packaging-policy checks PASS. An initial mistyped guide-check path exited 127; the actual tracked check passed. | No hosted CI/protection evidence. |
+| E1 | Full Unit **741 PASS/2 SKIP**. Focused environment, pseudonym, package-plan and UFW-range interactions **9/9 PASS**. | Developer-run; declared opt-in skips remain distinct. |
+| E2 | Full Scenario **191 PASS/3 SKIP**; focused external hostname/timezone plan changes **2/2 PASS**. | Stateful simulated host, not a VPS. |
+| E3 | Disposable Ubuntu ARM64 Docker/OpenSSH loopback: production SSH.NET and generated-key interoperability **2 PASS/0 FAIL/0 SKIP**; unknown-host refusal, known-host match, wrong-password rejection, command output/exit, timeout and artifact-safety checks PASS. | Source mounted read-only then copied, bridge network, no published port; not hosted or public SSH. Container removed; host TRX not retained. |
+| E4 macOS/Linux ARM64 | On macOS arm64, unsigned self-contained `./scripts/build/macos.sh` publish/Mach-O/artifact-safety PASS; process alive 8 seconds without output before manual interruption. Separate disposable Ubuntu ARM64 container published the exact archived source with explicit build SHA into a self-contained ELF aarch64 apphost, safety scan PASS; Xvfb process alive 8 seconds without output until planned timeout. | No interactive UI/clean exit proof; contained Linux used direct `dotnet publish`, not `linux.sh`; not a physical Linux host. |
+| E4 cross-publish | Direct self-contained `dotnet publish` on macOS arm64 passed for osx-x64, win-x64, win-arm64 and linux-x64 with the exact composite SHA embedded. `file` confirmed matching Mach-O x86_64, Windows PE32+ x86-64/Aarch64 and Linux ELF x86-64 apphosts; artifact-safety scan PASS. Together with the two ARM64 publishes above, all six configured RIDs built. | These four targets were **not** startup-smoked; no native Windows/Linux host, official package/manifest/signing or hosted check. `pwsh` was unavailable, so the official PowerShell packager was **NOT RUN**. |
+| E5 | **REAL VPS: NOT TESTED.** | Owner-only after reviewed-candidate approval. |
+
+Both containers auto-removed. The temporary local publish outputs are developer
+artifacts, not candidates for Owner VPS use. Passing aggregate and
+focused checks does not replace independent review, approved integration,
+hosted/native platform gates or the separate Owner Stage 0–6 protocol.
+
 ## F02–F09 source and evidence map
 
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
