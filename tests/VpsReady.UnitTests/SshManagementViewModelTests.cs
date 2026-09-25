@@ -3,12 +3,127 @@ using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.UnitTests;
 
 [Trait("Category", "E1")]
 public sealed class SshManagementViewModelTests
 {
+    [Fact]
+    public async Task NamedGenerationUsesChosenFolderAndNameThenSelectsWithoutPublishingItsPath()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var privatePath = Path.Combine(root, "owner-key_2026");
+            var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Success(
+                OperationResult.Success("generate-named"),
+                new LocalEd25519KeyPairLocation(privatePath, privatePath + ".pub")));
+            await using var session = new ApplicationSession();
+            var diagnostics = new RecordingDiagnosticSink();
+            using var viewModel = CreateViewModel(session, selector: new RecordingSelector(SuccessSelection(privatePath)), diagnostics: diagnostics, generator: generator);
+
+            Assert.True(LocalSshKeyNamePolicy.IsValid(viewModel.NewKeyName));
+            viewModel.NewKeyName = "owner-key_2026";
+            Assert.True(viewModel.CanGenerateKey);
+            await viewModel.GenerateNamedAsync(root, viewModel.NewKeyName);
+
+            Assert.Equal(privatePath, generator.LastRequest?.PrivateKeyPath);
+            Assert.Equal(SshManagementScreenState.KeySelected, viewModel.State);
+            Assert.True(viewModel.HasSelectedKey);
+            Assert.DoesNotContain(privatePath, viewModel.Status, StringComparison.Ordinal);
+            Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains(root, StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("../escape")]
+    [InlineData("key.pub")]
+    [InlineData("CON")]
+    [InlineData("")]
+    public async Task InvalidNamedGenerationFailsBeforeGeneratorInvocation(string name)
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+                OperationResult.Failure("unused", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget));
+            await using var session = new ApplicationSession();
+            using var viewModel = CreateViewModel(session, generator: generator);
+            viewModel.NewKeyName = name;
+            Assert.True(viewModel.HasInvalidKeyName);
+            Assert.False(viewModel.CanGenerateKey);
+
+            await viewModel.GenerateNamedAsync(root, name);
+
+            Assert.Equal(0, generator.Calls);
+            Assert.Equal(SshManagementScreenState.Failed, viewModel.State);
+            Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+            Assert.DoesNotContain(root, viewModel.Status, StringComparison.Ordinal);
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("relative-folder")]
+    [InlineData("\0invalid-folder")]
+    public async Task InvalidFolderFailsSafelyBeforeGeneratorInvocation(string folder)
+    {
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+            OperationResult.Failure("unused", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget));
+        await using var session = new ApplicationSession();
+        using var viewModel = CreateViewModel(session, generator: generator);
+
+        await viewModel.GenerateNamedAsync(folder, "safe-name");
+
+        Assert.Equal(0, generator.Calls);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.DoesNotContain(folder, viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NamedGenerationCollisionAndCancellationNeverOverwriteOrReportSuccess()
+    {
+        await using var workspace = new KeyWorkspace();
+        var root = workspace.Root;
+        var privatePath = Path.Combine(root, "owner-key");
+        var publicPath = privatePath + ".pub";
+        await File.WriteAllTextAsync(privatePath, "original private placeholder");
+        await File.WriteAllTextAsync(publicPath, "original public placeholder");
+        await using var session = new ApplicationSession();
+        var diagnostics = new RecordingDiagnosticSink();
+        using var viewModel = CreateViewModel(session, diagnostics: diagnostics, generator: new Ed25519OpenSshKeyPairGenerator(diagnostics));
+
+        await viewModel.GenerateNamedAsync(root, "owner-key");
+
+        Assert.Equal(SshManagementScreenState.Failed, viewModel.State);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Collision, viewModel.ErrorCode);
+        Assert.Contains("Choose another name or folder", viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal("original private placeholder", await File.ReadAllTextAsync(privatePath));
+        Assert.Equal("original public placeholder", await File.ReadAllTextAsync(publicPath));
+        Assert.False(viewModel.HasSelectedKey);
+
+        File.Delete(privatePath);
+        await viewModel.GenerateNamedAsync(root, "owner-key");
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Collision, viewModel.ErrorCode);
+        Assert.False(File.Exists(privatePath));
+        Assert.Equal("original public placeholder", await File.ReadAllTextAsync(publicPath));
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await viewModel.GenerateNamedAsync(root, "another-key", cancellation.Token);
+
+        Assert.Equal(SshManagementScreenState.Cancelled, viewModel.State);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Cancelled, viewModel.ErrorCode);
+        Assert.False(File.Exists(Path.Combine(root, "another-key")));
+        Assert.False(File.Exists(Path.Combine(root, "another-key.pub")));
+        Assert.DoesNotContain(root, viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains(root, StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("Alias")]
     [InlineData("HostName")]
@@ -165,6 +280,8 @@ public sealed class SshManagementViewModelTests
 
         var first = viewModel.SelectAsync("private-key-path");
         await selector.Entered.Task;
+        await viewModel.GenerateNamedAsync("relative-folder", "../invalid");
+        Assert.Equal(SshManagementScreenState.Working, viewModel.State);
         var duplicate = viewModel.SelectAsync("another-private-key-path");
         viewModel.Cancel();
         await Task.WhenAll(first, duplicate);
@@ -181,9 +298,10 @@ public sealed class SshManagementViewModelTests
         IPublicKeyDeployment? deployment = null,
         IKeyAuthenticationVerifier? verifier = null,
         RecordingDiagnosticSink? diagnostics = null,
-        RecordingConfigEditor? config = null) => new(
+        RecordingConfigEditor? config = null,
+        ILocalEd25519KeyGenerator? generator = null) => new(
         session,
-        new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(OperationResult.Failure("generate-not-used", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget)),
+        generator ?? new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(OperationResult.Failure("generate-not-used", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget)),
         selector ?? new RecordingSelector(SuccessSelection("private-key-path")),
         deployment ?? new RecordingDeployment(),
         verifier ?? new RecordingKeyAuthenticationVerifier(),
@@ -205,9 +323,11 @@ public sealed class SshManagementViewModelTests
     private sealed class RecordingGenerator(LocalEd25519KeyGenerationResult result) : ILocalEd25519KeyGenerator
     {
         public int Calls { get; private set; }
+        public LocalEd25519KeyGenerationRequest? LastRequest { get; private set; }
         public Task<LocalEd25519KeyGenerationResult> GenerateAsync(LocalEd25519KeyGenerationRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
         {
             Calls++;
+            LastRequest = request;
             return Task.FromResult(result);
         }
     }

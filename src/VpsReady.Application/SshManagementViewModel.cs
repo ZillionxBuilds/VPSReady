@@ -39,6 +39,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private readonly object operationLock = new();
     private CancellationTokenSource? activeCancellation;
     private ExistingSshKeySelectionResult? selectedKey;
+    private string newKeyName = "vpsready_ed25519_" + Guid.NewGuid().ToString("N")[..12];
     private string alias = string.Empty;
     private string hostName = string.Empty;
     private string userName = string.Empty;
@@ -140,6 +141,23 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
     public bool CanStartOperation => !IsBusy;
 
+    public string NewKeyName
+    {
+        get => newKeyName;
+        set
+        {
+            if (SetProperty(ref newKeyName, value ?? string.Empty))
+            {
+                OnPropertyChanged(nameof(HasInvalidKeyName));
+                OnPropertyChanged(nameof(CanGenerateKey));
+            }
+        }
+    }
+
+    public bool HasInvalidKeyName => !LocalSshKeyNamePolicy.IsValid(NewKeyName);
+
+    public bool CanGenerateKey => CanStartOperation && !HasInvalidKeyName;
+
     public bool CanCancel => IsBusy;
 
     public bool CanDeploy => !IsBusy && session.Snapshot.IsConnected && HasSelectedKey && IsDeploymentConfirmed;
@@ -183,6 +201,48 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     public bool IsConfigConfirmed { get => isConfigConfirmed; set => SetProperty(ref isConfigConfirmed, value && HasSelectedKey && !IsBusy); }
 
     /// <summary>
+    /// Turns an explicitly named local folder choice into a single private-key
+    /// destination. The generator remains the only writer and independently
+    /// rejects collisions, unsafe paths and failed verification.
+    /// </summary>
+    public async Task GenerateNamedAsync(string? folderPath, string? requestedName, CancellationToken cancellationToken = default)
+    {
+        if (!TryBegin(SshManagementScreenState.Working, requiresSession: false, out var cancellation, cancellationToken))
+        {
+            return;
+        }
+
+        try
+        {
+            if (requestedName is null || !LocalSshKeyNamePolicy.IsValid(requestedName) || string.IsNullOrWhiteSpace(folderPath))
+            {
+                CompletePreconditionFailure("Enter a valid key name and choose a local folder before generating a key.");
+                return;
+            }
+
+            string privateKeyPath;
+            try
+            {
+                if (!Path.IsPathFullyQualified(folderPath))
+                {
+                    CompletePreconditionFailure("Choose a valid local folder before generating a key.");
+                    return;
+                }
+
+                privateKeyPath = Path.Combine(folderPath, requestedName);
+            }
+            catch (ArgumentException)
+            {
+                CompletePreconditionFailure("Choose a valid local folder before generating a key.");
+                return;
+            }
+
+            await GenerateCoreAsync(privateKeyPath, cancellation.Token).ConfigureAwait(false);
+        }
+        finally { End(cancellation); }
+    }
+
+    /// <summary>
     /// The desktop host obtains a local destination through its picker and
     /// passes it directly. The path is never retained for display or
     /// diagnostics; success continues through the same safe selection path.
@@ -196,22 +256,31 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
         try
         {
-            var generated = await generator.GenerateAsync(
-                new LocalEd25519KeyGenerationRequest(privateKeyPath),
-                CorrelationIds.Create("generate_key"),
-                cancellation.Token).ConfigureAwait(false);
-            Complete(generated.Operation, generated.GenerationErrorCode, generated.Succeeded
-                ? "A local key pair was generated and verified. Validating its safe selection metadata."
-                : null,
-                generated.Succeeded ? SshManagementScreenState.Working : null);
-            if (generated.Succeeded && generated.KeyPair is not null)
-            {
-                await SelectCoreAsync(generated.KeyPair.PrivateKeyPath, cancellation.Token).ConfigureAwait(false);
-            }
+            await GenerateCoreAsync(privateKeyPath, cancellation.Token).ConfigureAwait(false);
         }
         finally
         {
             End(cancellation);
+        }
+    }
+
+    private async Task GenerateCoreAsync(string privateKeyPath, CancellationToken cancellationToken)
+    {
+        var generated = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(privateKeyPath),
+            CorrelationIds.Create("generate_key"),
+            cancellationToken).ConfigureAwait(false);
+        Complete(generated.Operation, generated.GenerationErrorCode, generated.Succeeded
+            ? "A local key pair was generated and verified. Validating its safe selection metadata."
+            : null,
+            generated.Succeeded ? SshManagementScreenState.Working : null);
+        if (generated.GenerationErrorCode == LocalEd25519KeyGenerationErrorCatalog.Collision)
+        {
+            Status = "A key with that name already exists in the selected folder. Choose another name or folder; VPSReady does not overwrite an existing key.";
+        }
+        if (generated.Succeeded && generated.KeyPair is not null)
+        {
+            await SelectCoreAsync(generated.KeyPair.PrivateKeyPath, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -588,6 +657,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(CanStartOperation));
+        OnPropertyChanged(nameof(CanGenerateKey));
         OnEligibilityChanged();
     }
 
