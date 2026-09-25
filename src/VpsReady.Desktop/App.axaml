@@ -76,20 +76,42 @@
     </Style>
     <Style Selector="Button.nav:pointerover">
       <Setter Property="Background" Value="#263C60" />
+      <Setter Property="Foreground" Value="#E8F0FC" />
+    </Style>
+    <Style Selector="Button.nav:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#263C60" />
+    </Style>
+    <Style Selector="Button.nav:pointerover TextBlock">
+      <Setter Property="Foreground" Value="#E8F0FC" />
     </Style>
     <Style Selector="Button.nav.selected">
       <Setter Property="Background" Value="#EAF2FF" />
       <Setter Property="Foreground" Value="#14243D" />
     </Style>
+    <Style Selector="Button.nav.selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="#EAF2FF" />
+    </Style>
     <Style Selector="Button.nav.selected TextBlock">
       <Setter Property="Foreground" Value="#14243D" />
     </Style>
     <Style Selector="Button.nav.selected:pointerover">
-      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="Background" Value="#EAF2FF" />
+      <Setter Property="Foreground" Value="#14243D" />
+    </Style>
+    <Style Selector="Button.nav.selected:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#EAF2FF" />
+    </Style>
+    <Style Selector="Button.nav.selected:pointerover TextBlock">
+      <Setter Property="Foreground" Value="#14243D" />
     </Style>
     <Style Selector="Button.nav:focus">
       <Setter Property="BorderBrush" Value="#E5B64B" />
       <Setter Property="BorderThickness" Value="2" />
+    </Style>
+    <Style Selector="ToolTip">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="Foreground" Value="#14243D" />
+      <Setter Property="BorderBrush" Value="{StaticResource LineBrush}" />
     </Style>
     <Style Selector="TextBox">
       <Setter Property="CornerRadius" Value="9" />

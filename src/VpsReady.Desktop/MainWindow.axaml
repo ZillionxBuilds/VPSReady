@@ -26,6 +26,7 @@
                           HorizontalContentAlignment="Left"
                           Command="{Binding NavigateCommand}"
                           AutomationProperties.Name="{Binding Label}"
+                          AutomationProperties.HelpText="{Binding Hint}"
                           ToolTip.Tip="{Binding Hint}">
                     <Grid ColumnDefinitions="4,*" ColumnSpacing="12">
                       <Border IsVisible="{Binding IsSelected}" Background="#2367D9" CornerRadius="2" />
