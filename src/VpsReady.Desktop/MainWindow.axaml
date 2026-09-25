@@ -102,8 +102,16 @@
                   <RadioButton GroupName="FirewallFamily" IsChecked="{Binding Firewall.IsIpv6, Mode=TwoWay}" Content="IPv6" />
                 </StackPanel>
               </Grid>
-              <TextBox Watermark="Port (1–65535)" Text="{Binding Firewall.AddPort, Mode=TwoWay}" />
-              <TextBox Watermark="Source (Anywhere, IP, or CIDR)" Text="{Binding Firewall.AddSource, Mode=TwoWay}" />
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Port" />
+                <TextBox AutomationProperties.Name="Allowed port" Text="{Binding Firewall.AddPort, Mode=TwoWay}" />
+                <TextBlock Classes="field-hint" Text="1–65535" />
+              </StackPanel>
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Source" />
+                <TextBox AutomationProperties.Name="Allowed source" Text="{Binding Firewall.AddSource, Mode=TwoWay}" />
+                <TextBlock Classes="field-hint" Text="Anywhere, IP address, or CIDR range" />
+              </StackPanel>
               <Button Classes="primary" Click="AddFirewallRuleAsync" IsEnabled="{Binding Firewall.CanStartOperation}" Content="Add verified allow rule" HorizontalAlignment="Left" />
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
               <TextBlock Classes="section-title" Text="Risky actions" />
@@ -149,10 +157,24 @@
               <TextBlock Text="Key-authentication success is only shown after a new connection to the same trusted host completes its minimum verification. This screen never disables password access." TextWrapping="Wrap" />
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
               <TextBlock Classes="section-title" Text="Local OpenSSH alias" />
-              <TextBox Watermark="Alias" Text="{Binding SshManagement.Alias, Mode=TwoWay}" />
-              <TextBox Watermark="Host name" Text="{Binding SshManagement.HostName, Mode=TwoWay}" />
-              <TextBox Watermark="User name" Text="{Binding SshManagement.UserName, Mode=TwoWay}" />
-              <TextBox Watermark="SSH port" Text="{Binding SshManagement.Port, Mode=TwoWay}" />
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Alias" />
+                <TextBox AutomationProperties.Name="OpenSSH alias" Text="{Binding SshManagement.Alias, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Host name" />
+                <TextBox AutomationProperties.Name="OpenSSH host name" Text="{Binding SshManagement.HostName, Mode=TwoWay}" />
+              </StackPanel>
+              <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+                <StackPanel Spacing="5">
+                  <TextBlock Classes="field-label" Text="User name" />
+                  <TextBox AutomationProperties.Name="OpenSSH user name" Text="{Binding SshManagement.UserName, Mode=TwoWay}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="5">
+                  <TextBlock Classes="field-label" Text="SSH port" />
+                  <TextBox AutomationProperties.Name="OpenSSH port" Text="{Binding SshManagement.Port, Mode=TwoWay}" />
+                </StackPanel>
+              </Grid>
               <CheckBox IsChecked="{Binding SshManagement.IsConfigConfirmed, Mode=TwoWay}" Content="I confirm saving this local OpenSSH alias." />
               <Button Click="SaveSshConfigAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Save verified local alias" />
               <TextBlock Text="Use Activity &amp; Diagnostics and the operation ID to Copy a Safe Issue Report or export a sanitized support bundle. Nothing is uploaded automatically." TextWrapping="Wrap" />
@@ -189,7 +211,10 @@
               <Button Classes="danger" Click="RebootSystemAsync" IsEnabled="{Binding SystemActions.CanReboot}" Content="Reboot and verify reconnect" HorizontalAlignment="Left" />
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
               <TextBlock Classes="section-title" Text="Hostname" />
-              <TextBox Watermark="New hostname" Text="{Binding SystemActions.Hostname, Mode=TwoWay}" />
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="New hostname" />
+                <TextBox AutomationProperties.Name="New hostname" Text="{Binding SystemActions.Hostname, Mode=TwoWay}" />
+              </StackPanel>
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Click="PlanHostnameAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Validate and read hostname plan" />
                 <Button Click="ApplyHostnameAsync" IsEnabled="{Binding SystemActions.CanApplyHostname}" Content="Apply and verify hostname" />
@@ -199,7 +224,11 @@
               <CheckBox IsChecked="{Binding SystemActions.IsHostnameConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed hostname change." />
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
               <TextBlock Classes="section-title" Text="Timezone" />
-              <TextBox Watermark="IANA timezone, for example Europe/London" Text="{Binding SystemActions.Timezone, Mode=TwoWay}" />
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="IANA timezone" />
+                <TextBox AutomationProperties.Name="IANA timezone" Text="{Binding SystemActions.Timezone, Mode=TwoWay}" />
+                <TextBlock Classes="field-hint" Text="For example, Europe/London" />
+              </StackPanel>
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Click="PlanTimezoneAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Validate and read timezone plan" />
                 <Button Click="ApplyTimezoneAsync" IsEnabled="{Binding SystemActions.CanApplyTimezone}" Content="Apply and verify timezone" />
@@ -213,22 +242,28 @@
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsConnectionPage}">
             <StackPanel Spacing="12">
               <TextBlock Classes="section-title" Text="SSH connection" />
-              <TextBlock FontWeight="SemiBold" Text="Host or IP address" />
-              <TextBox x:Name="ConnectionHost" Watermark="example.com or 203.0.113.10" AutomationProperties.Name="Host or IP address" />
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Host or IP address" />
+                <TextBox x:Name="ConnectionHost" AutomationProperties.Name="Host or IP address" />
+                <TextBlock Classes="field-hint" Text="For example, example.com or 203.0.113.10" />
+              </StackPanel>
               <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
-                <StackPanel Spacing="6">
-                  <TextBlock FontWeight="SemiBold" Text="SSH port" />
-                  <TextBox x:Name="ConnectionPort" Watermark="22" AutomationProperties.Name="SSH port" />
+                <StackPanel Spacing="5">
+                  <TextBlock Classes="field-label" Text="SSH port" />
+                  <TextBox x:Name="ConnectionPort" AutomationProperties.Name="SSH port" />
+                  <TextBlock Classes="field-hint" Text="Blank uses 22" />
                 </StackPanel>
-                <StackPanel Grid.Column="1" Spacing="6">
-                  <TextBlock FontWeight="SemiBold" Text="Username" />
-                  <TextBox x:Name="ConnectionUser" Watermark="Your SSH user" AutomationProperties.Name="Username" />
+                <StackPanel Grid.Column="1" Spacing="5">
+                  <TextBlock Classes="field-label" Text="Username" />
+                  <TextBox x:Name="ConnectionUser" AutomationProperties.Name="Username" />
                 </StackPanel>
               </Grid>
-              <TextBlock FontWeight="SemiBold" Text="Password" />
-              <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" TextInput="ConnectionPasswordTextInput" AutomationProperties.Name="Password input" Background="#F6F9FE" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" Padding="12,10">
-                <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" />
-              </Border>
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Password" />
+                <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" TextInput="ConnectionPasswordTextInput" AutomationProperties.Name="Password input" Background="#F6F9FE" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" MinHeight="44" Padding="12,9">
+                  <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" VerticalAlignment="Center" />
+                </Border>
+              </StackPanel>
               <TextBlock Classes="muted" FontSize="13" Text="Type the password using your keyboard layout. Backspace deletes the last character; Escape clears it. Tab moves to the next control. Clipboard paste is not supported in this version. Input is cleared after submission." />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Classes="primary" Click="TestConnectionAsync" IsEnabled="{Binding ConnectionOverview.CanTestConnection}" Content="Test connection" />
@@ -281,7 +316,10 @@
             <StackPanel Spacing="10">
               <TextBlock Classes="section-title" Text="Operation history" />
               <TextBlock Text="Activity is redacted before display and stored only on this device. VPSReady never uploads diagnostics automatically." TextWrapping="Wrap" />
-              <TextBox Watermark="Filter safe activity" Text="{Binding ActivityDiagnostics.Filter}" />
+              <StackPanel Spacing="5">
+                <TextBlock Classes="field-label" Text="Filter activity" />
+                <TextBox AutomationProperties.Name="Filter safe activity" Text="{Binding ActivityDiagnostics.Filter}" />
+              </StackPanel>
               <WrapPanel ItemSpacing="8" LineSpacing="8">
                 <Button Command="{Binding ActivityDiagnostics.RefreshCommand}" Content="Refresh activity" />
                 <Button Command="{Binding ActivityDiagnostics.ClearCommand}" Content="Clear diagnostics" />

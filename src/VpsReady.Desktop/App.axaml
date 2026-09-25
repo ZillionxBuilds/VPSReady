@@ -39,6 +39,16 @@
       <Setter Property="FontWeight" Value="SemiBold" />
       <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
     </Style>
+    <Style Selector="TextBlock.field-label">
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="{StaticResource InkBrush}" />
+    </Style>
+    <Style Selector="TextBlock.field-hint">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="{StaticResource MutedInkBrush}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
     <Style Selector="Button">
       <Setter Property="CornerRadius" Value="9" />
       <Setter Property="Padding" Value="14,9" />
@@ -83,7 +93,9 @@
     </Style>
     <Style Selector="TextBox">
       <Setter Property="CornerRadius" Value="9" />
-      <Setter Property="MinHeight" Value="38" />
+      <Setter Property="MinHeight" Value="44" />
+      <Setter Property="Padding" Value="12,9" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
   </Application.Styles>
 </Application>
