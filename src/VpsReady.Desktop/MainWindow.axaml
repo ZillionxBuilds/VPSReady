@@ -245,6 +245,7 @@
               <TextBlock Text="{Binding ConnectionOverview.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding ConnectionOverview.State}" />
               <TextBlock IsVisible="{Binding ConnectionOverview.OperationId}" FontFamily="Consolas" Text="{Binding ConnectionOverview.OperationId}" TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding ConnectionOverview.ErrorCode}" FontFamily="Consolas" Text="{Binding ConnectionOverview.ErrorCode}" TextWrapping="Wrap" />
               <Border IsVisible="{Binding ConnectionOverview.HasHostTrustReview}" Background="#FFF4E7" BorderBrush="#EAC48F" BorderThickness="1" CornerRadius="12" Padding="16">
                 <StackPanel Spacing="6">
                   <TextBlock FontWeight="SemiBold" Text="{Binding ConnectionOverview.TrustReviewTitle}" />

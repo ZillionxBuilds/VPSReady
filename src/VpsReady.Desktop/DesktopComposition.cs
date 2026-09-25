@@ -13,21 +13,28 @@ namespace VpsReady.Desktop;
 
 public static class DesktopComposition
 {
-    public static ServiceProvider CreateProductionServices()
+    public static ServiceProvider CreateProductionServices(IPlatformPaths? platformPaths = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<IServerOverviewReader, ServerOverviewReader>();
         services.AddSingleton<AppViewModel>();
         services.AddSingleton<IClock, SystemClock>();
-        services.AddSingleton<IPlatformPaths, SystemPlatformPaths>();
+        if (platformPaths is null)
+        {
+            services.AddSingleton<IPlatformPaths, SystemPlatformPaths>();
+        }
+        else
+        {
+            services.AddSingleton(platformPaths);
+        }
         services.AddSingleton<ILocalFileStore, AtomicFileStore>();
         services.AddSingleton<ISecureLocalStorage, SecureLocalStorage>();
         services.AddSingleton<IKnownHostTrustStore, KnownHostTrustStore>();
         services.AddSingleton<IProcessRunner, SystemProcessRunner>();
         services.AddSingleton<IRedactor, FailClosedRedactor>();
         services.AddSingleton(new DiagnosticEnvironment(
-            Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0-dev",
+            $"v{Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.1.0-dev"}",
             GetBuildSha(),
             RuntimeInformation.OSDescription,
             RuntimeInformation.ProcessArchitecture.ToString(),

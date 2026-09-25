@@ -14,6 +14,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private readonly IConnectionSessionLifecycle lifecycle;
     private readonly IApplicationSession session;
     private readonly IServerOverviewReader? overviewReader;
+    private readonly IDiagnosticSink? diagnostics;
     private readonly object cancellationGate = new();
     private CancellationTokenSource? connectionCancellation;
     private CancellationTokenSource? overviewCancellation;
@@ -22,15 +23,17 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private string status = "No server is connected.";
     private string overviewStatus = "Unknown — remote facts have not been refreshed.";
     private string? operationId;
+    private string? errorCode;
     private ConnectionScreenState state = ConnectionScreenState.Disconnected;
     private ConnectionScreenState overviewState = ConnectionScreenState.Unknown;
     private HostTrustReview? hostTrustReview;
 
-    public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session, IServerOverviewReader? overviewReader = null)
+    public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session, IServerOverviewReader? overviewReader = null, IDiagnosticSink? diagnostics = null)
     {
         this.lifecycle = lifecycle;
         this.session = session;
         this.overviewReader = overviewReader;
+        this.diagnostics = diagnostics;
         RefreshCommand = new DelegateCommand(() => _ = RefreshAsync());
         CancelConnectionCommand = new DelegateCommand(CancelConnection);
         CancelRefreshCommand = new DelegateCommand(CancelRefresh);
@@ -38,6 +41,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         lifecycle.ProgressChanged += (_, progress) =>
         {
             OperationId = progress.OperationId;
+            ErrorCode = progress.ErrorCode;
             State = progress.State switch
             {
                 ConnectionTestProgressState.Started or ConnectionTestProgressState.Connecting or ConnectionTestProgressState.Verifying => ConnectionScreenState.Testing,
@@ -61,6 +65,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public ConnectionScreenState State { get => state; private set => SetProperty(ref state, value); }
     public string Status { get => status; private set => SetProperty(ref status, value); }
     public string? OperationId { get => operationId; private set => SetProperty(ref operationId, value); }
+    public string? ErrorCode { get => errorCode; private set => SetProperty(ref errorCode, value); }
     public string OverviewStatus { get => overviewStatus; private set => SetProperty(ref overviewStatus, value); }
     public ConnectionScreenState OverviewState { get => overviewState; private set => SetProperty(ref overviewState, value); }
     public HostTrustReview? HostTrustReview { get => hostTrustReview; private set => SetProperty(ref hostTrustReview, value); }
@@ -130,19 +135,28 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         OnPropertyChanged(nameof(CanTestConnection));
         try
         {
+            OperationId = null;
+            ErrorCode = null;
             using var transient = SecretInput.TakeForSubmission();
             OnPropertyChanged(nameof(SecretDisplay));
             var validation = ConnectionInputValidator.Validate(host, port, user, transient.Characters, timeout);
             if (!validation.IsValid)
             {
+                var correlation = CorrelationIds.Create("validate");
+                OperationId = correlation.OperationId;
+                ErrorCode = OperationErrorCode.Validation.ToStableCode();
                 State = ConnectionScreenState.Failed;
-                Status = "Connection details are incomplete or invalid.";
+                Status = DescribeValidationErrors(validation.Errors);
+                await ReportValidationFailureAsync(correlation).ConfigureAwait(false);
                 return;
             }
 
             using var input = validation.Connection!;
+            Status = "Testing the SSH connection…";
+            State = ConnectionScreenState.Testing;
             var result = await lifecycle.TestConnectionAsync(input, cancellation.Token).ConfigureAwait(false);
             OperationId = result.OperationId;
+            ErrorCode = result.Result.ErrorCode?.ToStableCode();
             State = result.Result.Succeeded ? ConnectionScreenState.Connected : result.Result.ErrorCode == OperationErrorCode.HostTrust ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
             SetHostTrustReview(result.Result.ErrorCode == OperationErrorCode.HostTrust ? lifecycle.PendingHostTrustReview : null);
             Status = result.Result.UserMessage;
@@ -159,6 +173,46 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
             cancellation.Dispose();
             OnPropertyChanged(nameof(IsConnecting));
             OnPropertyChanged(nameof(CanTestConnection));
+        }
+    }
+
+    private static string DescribeValidationErrors(IReadOnlyList<ConnectionInputValidationError> errors)
+    {
+        var guidance = errors.Select(error => error switch
+        {
+            ConnectionInputValidationError.HostRequiredOrInvalid => "Enter a valid host or IP address.",
+            ConnectionInputValidationError.PortInvalid => "Enter an SSH port from 1 to 65535.",
+            ConnectionInputValidationError.UserNameRequiredOrInvalid => "Enter a username without spaces.",
+            ConnectionInputValidationError.PasswordRequiredOrInvalid => "Enter a password using the password field.",
+            ConnectionInputValidationError.TimeoutInvalid => "Choose a positive connection timeout.",
+            _ => "Review the connection fields.",
+        });
+        return $"{string.Join(" ", guidance)} Correct the indicated fields, then try again.";
+    }
+
+    private async Task ReportValidationFailureAsync(CorrelationIds correlation)
+    {
+        if (diagnostics is null) { return; }
+        try
+        {
+            await diagnostics.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Failed,
+                    Status,
+                    ErrorCode: OperationErrorCode.Validation.ToStableCode(),
+                    Action: "TestConnection",
+                    OutputPolicy: OutputCapturePolicy.None),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Validation remains failed even if local diagnostics are unavailable.
+            // Never expose sink exceptions or submitted form values here.
         }
     }
 
@@ -190,6 +244,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
             ? await lifecycle.ReplacePendingChangedHostKeyAsync(cancellationToken).ConfigureAwait(false)
             : await lifecycle.AcceptPendingUnknownHostKeyAsync(cancellationToken).ConfigureAwait(false);
         OperationId = result.OperationId;
+        ErrorCode = result.ErrorCode?.ToStableCode();
         if (result.Succeeded)
         {
             SetHostTrustReview(null);
@@ -261,6 +316,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
                     return read.Result;
                 }, snapshot.SessionId!, cancellation.Token).ConfigureAwait(false);
             OperationId = result.OperationId;
+            ErrorCode = result.ErrorCode?.ToStableCode();
             if (result.Succeeded && ReferenceEquals(result, read?.Result) && !cancellation.IsCancellationRequested
                 && string.Equals(snapshot.SessionId, session.Snapshot.SessionId, StringComparison.Ordinal) && read.Facts is not null)
             {
