@@ -10,6 +10,55 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OverviewJourneyRegressionTests
 {
+    [Fact]
+    public async Task CancellationDuringTerminalJournalWriteCannotProduceSuccessAndCancellationForOneOverview()
+    {
+        var transport = new FactTransport();
+        var sink = new BlockingSuccessSink();
+        var correlation = CorrelationIds.Create("overview");
+        using var cancellation = new CancellationTokenSource();
+        var readTask = new ServerOverviewReader(sink).ReadAsync(
+            transport,
+            new RemoteEndpoint("fixture.invalid", 22, "fixture"),
+            correlation,
+            cancellation.Token);
+        await sink.SuccessEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        sink.Release.TrySetResult();
+        var result = await readTask;
+
+        var terminal = sink.Events.Where(entry => entry.EventId is
+            DiagnosticEventCatalog.OperationSucceeded or DiagnosticEventCatalog.OperationFailed).ToArray();
+        Assert.Single(terminal);
+        Assert.Equal(result.Result.Succeeded, terminal[0].EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Equal(correlation.OperationId, terminal[0].Correlation.OperationId);
+    }
+
+    [Fact]
+    public async Task CancellationBeforeOverviewReadsFinishRecordsOnlyCancelledTerminal()
+    {
+        var transport = new FactTransport { Block = true };
+        var sink = new Sink();
+        var correlation = CorrelationIds.Create("overview");
+        using var cancellation = new CancellationTokenSource();
+        var readTask = new ServerOverviewReader(sink).ReadAsync(
+            transport,
+            new RemoteEndpoint("fixture.invalid", 22, "fixture"),
+            correlation,
+            cancellation.Token);
+        await transport.Entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        transport.Release.TrySetResult();
+        var result = await readTask;
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Null(result.Facts);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.OperationSucceeded or DiagnosticEventCatalog.OperationFailed);
+        Assert.Equal(DiagnosticStatus.Cancelled, terminal.Status);
+        Assert.Equal(correlation.OperationId, terminal.Correlation.OperationId);
+    }
+
     [Theory]
     // Synthetic byte evidence, not reconstructed from rounded human units.
     [InlineData("/dev/fixture 33822867456 5558272 31997505536 0% /", true)]
@@ -166,6 +215,23 @@ public sealed class OverviewJourneyRegressionTests
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
         public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+    }
+
+    private sealed class BlockingSuccessSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+        public TaskCompletionSource SuccessEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            if (entry.EventId == DiagnosticEventCatalog.OperationSucceeded)
+            {
+                SuccessEntered.TrySetResult();
+                await Release.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
+            }
+            Events.Add(entry);
+        }
     }
 
     private sealed class FactTransport : IRemoteTransport
