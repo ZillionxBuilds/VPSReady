@@ -13,6 +13,73 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OperationJournalWorkspaceTests
 {
+    [Theory]
+    [InlineData("app_version")]
+    [InlineData("build_sha")]
+    [InlineData("local_os")]
+    [InlineData("local_arch")]
+    [InlineData("artifact_rid")]
+    public async Task TokenLikeEnvironmentMetadataIsSanitizedOnEveryDiagnosticSurface(string field)
+    {
+        var root = CreateTemporaryDirectory();
+        var exportDirectory = Path.Combine(root, "user-selected-export");
+        var syntheticToken = string.Concat("gh", "p_", "syntheticnotarealtoken12345");
+        var redactor = new FailClosedRedactor();
+        var redacted = redactor.Redact(syntheticToken);
+        Assert.False(redacted.WasOmitted);
+        Assert.NotEqual(syntheticToken, redacted.SafeText);
+        var environment = new DiagnosticEnvironment(
+            field == "app_version" ? syntheticToken : "0.1.0-test",
+            field == "build_sha" ? syntheticToken : "testbuild",
+            field == "local_os" ? syntheticToken : "test-os",
+            field == "local_arch" ? syntheticToken : "test-arch",
+            field == "artifact_rid" ? syntheticToken : "osx-arm64");
+
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                environment,
+                new RecordingFolderOpener());
+
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await new RedactingDiagnosticSink(redactor, workspace).WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    "Connection verification failed."),
+                CancellationToken.None);
+
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exportDirectory, CancellationToken.None);
+            Assert.DoesNotContain(syntheticToken, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(syntheticToken, report, StringComparison.Ordinal);
+
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                var content = reader.ReadToEnd();
+                Assert.DoesNotContain(syntheticToken, content, StringComparison.Ordinal);
+                if (entry.FullName == "environment.json")
+                {
+                    Assert.Contains("[REDACTED_TOKEN]", content, StringComparison.Ordinal);
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
     {
