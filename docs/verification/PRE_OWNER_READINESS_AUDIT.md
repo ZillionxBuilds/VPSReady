@@ -10,7 +10,9 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [key-auth PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23),
 [startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25), and
 [OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27)
-are separate, unmerged changes. No result below proves their combined tree.
+are separate, unmerged changes. The baseline below excludes them; a later
+developer-only local composite preflight is recorded separately and does not
+approve release integration.
 
 ## Verdicts and exact baseline
 
@@ -36,6 +38,29 @@ The unit and scenario totals are aggregate smoke evidence, not criterion-level
 coverage. The table below records where the production path and representative
 regressions live; the `PARTIAL` verdict deliberately remains until each
 acceptance criterion is checked against an exact candidate.
+
+### Local composite preflight — not an approved release candidate
+
+A clean local `codex/15-combined-preflight` branch at
+`fd0aba1cd907b395ac4072216e43e032d3f618c8` cherry-picked the exact
+source commits for draft PR #14, #17, #19, #21, #23, #25 and #27 over release
+`9965c5b`. Only `CHANGELOG.md` section insertions conflicted; all sections
+were retained. C#/XAML/test files auto-merged. This local branch was **not**
+merged or pushed to release/main, independently reviewed, or approved for Owner
+testing. It is useful interaction smoke evidence, not the final gate.
+
+| Evidence | Local composite result | Limit |
+| --- | --- | --- |
+| E0 | Locked restore, Release build (0 warnings/errors), format and diff checks PASS. | Hosted CI/protection checks absent. |
+| E1 | 653 PASS, 2 SKIP. | Self-run aggregate; independent QA pending. |
+| E2 | 178 PASS, 3 SKIP. | Stateful fake host is not a VPS. |
+| E3 | Local `ssh-keygen` interoperability 1 PASS and synthetic `ssh -G` additive-identity evaluation PASS. | Production loopback `sshd` 1 SKIP / NOT RUN. |
+| E4 | Unsigned macOS arm64 publish PASS; native Connection and SSH Keys & Config navigation/AX inspected. Selected text was readable and no redundant tooltip appeared in those views. | Forced startup-fallback UI, resize, Windows/Linux native and official candidate packaging NOT RUN. |
+| E5 | REAL VPS: NOT TESTED. | Owner-only, after approval. |
+
+The temporary app bundle and publish output were closed and moved to macOS
+Trash (recoverable); the source branch and separate PRs remain. Rebuild from
+the recorded head if another local walkthrough is needed.
 
 ## F02–F09 source and evidence map
 
