@@ -45,11 +45,19 @@ public sealed class SshManagementViewModelScenarioTests
             Assert.Equal(SshManagementScreenState.PublicKeyDeployed, viewModel.State);
             Assert.NotEmpty(state.Ssh.AuthorizedKeyFingerprints);
             Assert.Null(viewModel.ErrorCode);
+            var deploymentOperationId = viewModel.OperationId;
+            Assert.Contains(recorder.Events, entry =>
+                entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded
+                && entry.Correlation.OperationId == deploymentOperationId);
 
             await viewModel.VerifyKeyAuthenticationAsync();
             Assert.Equal(SshManagementScreenState.KeyAuthenticationVerified, viewModel.State);
             Assert.Equal("key", state.Ssh.LastAuthenticationMethod);
             Assert.True(state.Ssh.IsConnected);
+            var verificationOperationId = viewModel.OperationId;
+            Assert.Contains(recorder.Events, entry =>
+                entry.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded
+                && entry.Correlation.OperationId == verificationOperationId);
 
             viewModel.Alias = "scenario-alias";
             viewModel.HostName = endpoint.Host;
@@ -105,6 +113,13 @@ public sealed class SshManagementViewModelScenarioTests
         Assert.Equal(KeyAuthenticationVerificationErrorCatalog.HostTrust, viewModel.ErrorCode);
         Assert.NotEqual(SshManagementScreenState.KeyAuthenticationVerified, viewModel.State);
         Assert.NotEqual("key", services.GetRequiredService<ScenarioHostState>().Ssh.LastAuthenticationMethod);
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var terminal = Assert.Single(recorder.Events, entry =>
+            entry.Correlation.OperationId == viewModel.OperationId
+            && entry.EventId is DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+                DiagnosticEventCatalog.KeyAuthenticationVerificationFailed or
+                DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
     }
 
     private sealed class StaticGenerator : ILocalEd25519KeyGenerator

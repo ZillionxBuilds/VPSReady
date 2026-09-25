@@ -231,6 +231,9 @@ public sealed class SelectedKeyIdentityRegressionTests
             Calls++;
             return Task.FromResult(new PublicKeyDeploymentOperationResult(OperationResult.Success("deploy-fixture"), false, null));
         }
+
+        public Task<PublicKeyDeploymentOperationResult> DeployAsync(IRemoteTransport transport, PublicKeyDeploymentMaterial material, SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default) =>
+            DeployAsync(transport, material, cancellationToken);
     }
     private sealed class CountAuthentication : IKeyAuthenticationVerifier
     {
@@ -240,6 +243,9 @@ public sealed class SelectedKeyIdentityRegressionTests
             Calls++;
             return Task.FromResult(new KeyAuthenticationVerificationResult(OperationResult.Success("auth-fixture"), null));
         }
+
+        public Task<KeyAuthenticationVerificationResult> VerifyAsync(KeyAuthenticationVerificationRequest request, SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default) =>
+            VerifyAsync(request, cancellationToken);
     }
     private sealed class NoCommands : IRemoteTransport
     {

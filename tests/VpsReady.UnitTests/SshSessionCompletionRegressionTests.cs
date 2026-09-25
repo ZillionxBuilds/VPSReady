@@ -40,7 +40,7 @@ public sealed class SshSessionCompletionRegressionTests
         var verifier = new BarrierVerifier(barrier);
         using var vm = new SshManagementViewModel(session,
             new Ed25519OpenSshKeyPairGenerator(barrier), new ExistingOpenSshKeySelector(barrier),
-            new PublicKeyDeploymentWorkflow(barrier), verifier, new UnusedConfigEditor());
+            new PublicKeyDeploymentWorkflow(barrier), verifier, new UnusedConfigEditor(), barrier);
         await vm.GenerateAsync(workspace.PrivateKeyPath);
         Assert.True(vm.HasSelectedKey);
         vm.IsDeploymentConfirmed = true;
@@ -108,6 +108,24 @@ public sealed class SshSessionCompletionRegressionTests
         {
             Assert.NotEqual(initialSession, session.Snapshot.SessionId);
         }
+
+        if (!authentication && outcome != "stale")
+        {
+            var terminal = Assert.Single(barrier.Events, entry => entry.EventId is
+                DiagnosticEventCatalog.PublicKeyDeploymentSucceeded or
+                DiagnosticEventCatalog.PublicKeyDeploymentFailed or
+                DiagnosticEventCatalog.PublicKeyDeploymentCancelled);
+            Assert.Equal(session.Returned.OperationId, terminal.Correlation.OperationId);
+            Assert.Equal(session.Returned.Succeeded ? DiagnosticStatus.Succeeded :
+                session.Returned.Cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed, terminal.Status);
+            Assert.Equal(session.Returned.ErrorCode?.ToStableCode(), terminal.ErrorCode);
+        }
+        else if (!authentication)
+        {
+            var terminal = Assert.Single(barrier.Events, entry => entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentFailed);
+            Assert.Equal(session.Returned.OperationId, terminal.Correlation.OperationId);
+            Assert.Equal(OperationErrorCode.Reconnect.ToStableCode(), terminal.ErrorCode);
+        }
     }
 
     [Fact]
@@ -147,7 +165,7 @@ public sealed class SshSessionCompletionRegressionTests
     [Fact]
     public async Task CancelledKeyAuthenticationDoesNotLeaveATerminalSuccessDiagnostic()
     {
-        var (result, barrier) = await RunCancelledKeyAuthenticationAsync();
+        var (result, barrier) = await RunKeyAuthenticationOutcomeAsync("cancel");
 
         Assert.True(result.Cancelled);
         Assert.False(barrier.KeyAuthenticationSuccessObserved);
@@ -156,7 +174,7 @@ public sealed class SshSessionCompletionRegressionTests
     [Fact]
     public async Task CancelledKeyAuthenticationOperationIdCanLocateItsDiagnosticRecord()
     {
-        var (result, barrier) = await RunCancelledKeyAuthenticationAsync();
+        var (result, barrier) = await RunKeyAuthenticationOutcomeAsync("cancel");
 
         Assert.True(result.Cancelled);
         Assert.Contains(barrier.Events, entry =>
@@ -164,10 +182,60 @@ public sealed class SshSessionCompletionRegressionTests
             && entry.Correlation.OperationId == result.OperationId);
     }
 
-    private static async Task<(OperationResult Result, CompletionBarrier Barrier)> RunCancelledKeyAuthenticationAsync()
+    [Theory]
+    [InlineData("success")]
+    [InlineData("cancel")]
+    [InlineData("timeout")]
+    [InlineData("replace")]
+    public async Task KeyAuthenticationHasOneTerminalDiagnosticMatchingTheSessionVerdict(string outcome)
+    {
+        var (result, barrier) = await RunKeyAuthenticationOutcomeAsync(outcome);
+
+        var terminal = Assert.Single(barrier.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled);
+        Assert.Equal(result.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(result.Succeeded ? DiagnosticStatus.Succeeded :
+            result.Cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed, terminal.Status);
+        Assert.Equal(result.ErrorCode?.ToStableCode(), terminal.ErrorCode);
+    }
+
+    [Fact]
+    public async Task SessionReplacementDuringDiagnosticPersistenceCannotShowOldDeploymentProofForNewSession()
+    {
+        await using var workspace = new KeyWorkspace();
+        var barrier = new CompletionBarrier { PauseTerminalPublish = true };
+        await using var session = new ObservedSession(shortTimeout: false);
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new DeploymentTransport());
+        using var vm = new SshManagementViewModel(session,
+            new Ed25519OpenSshKeyPairGenerator(barrier), new ExistingOpenSshKeySelector(barrier),
+            new PublicKeyDeploymentWorkflow(barrier), new BarrierVerifier(barrier), new UnusedConfigEditor());
+        await vm.GenerateAsync(workspace.PrivateKeyPath);
+        vm.IsDeploymentConfirmed = true;
+
+        var action = vm.DeployAsync();
+        try
+        {
+            await barrier.TerminalEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(session.Returned?.Succeeded);
+            await session.StartAsync(new RemoteEndpoint("replacement.invalid", 22, "fixture"), new DeploymentTransport());
+        }
+        finally
+        {
+            barrier.TerminalRelease.TrySetResult();
+        }
+
+        await action.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotEqual(SshManagementScreenState.PublicKeyDeployed, vm.State);
+        Assert.NotEqual(SshManagementScreenState.KeyAuthenticationVerified, vm.State);
+        Assert.Contains("session changed", vm.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<(OperationResult Result, CompletionBarrier Barrier)> RunKeyAuthenticationOutcomeAsync(string outcome)
     {
         var barrier = new CompletionBarrier();
-        await using var session = new ObservedSession(shortTimeout: false);
+        await using var session = new ObservedSession(shortTimeout: outcome == "timeout");
         await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new DeploymentTransport());
         session.AfterDispatch = barrier.PauseAsync;
         var selectedKey = ExistingSshKeySelectionResult.Success(
@@ -180,30 +248,50 @@ public sealed class SshSessionCompletionRegressionTests
             selectedKey,
             TimeSpan.FromMinutes(1));
         var workflow = new KeyAuthenticationVerificationWorkflow(new SeparateKeyAuthFactory(), barrier);
+        var correlation = CorrelationIds.Create("key_auth_verify");
+        var operationDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(correlation, barrier);
         using var cancellation = new CancellationTokenSource();
         var action = session.RunOperationForSessionAsync(
-            "ssh_key_auth_verify",
+            correlation.OperationId,
             TimeSpan.FromMinutes(1),
-            async (_, token) => (await workflow.VerifyAsync(request, token)).Result,
+            async (_, token) => (await workflow.VerifyAsync(request, operationDiagnostics, token)).Result,
             session.Snapshot.SessionId!,
             cancellation.Token);
+        Task replacement = Task.CompletedTask;
         try
         {
             await barrier.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            cancellation.Cancel();
+            if (outcome == "cancel")
+            {
+                cancellation.Cancel();
+            }
+            else if (outcome == "timeout")
+            {
+                await session.TokenCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            else if (outcome == "replace")
+            {
+                replacement = session.StartAsync(new RemoteEndpoint("replacement.invalid", 22, "fixture"), new DeploymentTransport());
+            }
         }
         finally
         {
             barrier.Release.TrySetResult();
         }
 
-        return (await action.WaitAsync(TimeSpan.FromSeconds(5)), barrier);
+        await Task.WhenAll(action, replacement).WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await action;
+        await operationDiagnostics.FinalizeAsync(result);
+        return (result, barrier);
     }
 
     private sealed class CompletionBarrier : IDiagnosticSink
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TerminalEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TerminalRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool PauseTerminalPublish { get; init; }
         public List<StructuredDiagnosticEvent> Events { get; } = [];
         public bool DeploymentSuccessObserved { get; private set; }
         public bool KeyAuthenticationSuccessObserved { get; private set; }
@@ -218,6 +306,11 @@ public sealed class SshSessionCompletionRegressionTests
             if (entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded)
             {
                 DeploymentSuccessObserved = true;
+                if (PauseTerminalPublish)
+                {
+                    TerminalEntered.TrySetResult();
+                    return TerminalRelease.Task;
+                }
             }
 
             if (entry.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded)
@@ -238,6 +331,9 @@ public sealed class SshSessionCompletionRegressionTests
             await barrier.PauseAsync();
             return new(OperationResult.Success("verified-fixture", OperationState.Unchanged), null);
         }
+
+        public Task<KeyAuthenticationVerificationResult> VerifyAsync(KeyAuthenticationVerificationRequest request, SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default) =>
+            VerifyAsync(request, cancellationToken);
     }
 
     private sealed class DeploymentTransport : IPublicKeyDeploymentTransport

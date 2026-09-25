@@ -22,12 +22,25 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
     }
 
-    public async Task<KeyAuthenticationVerificationResult> VerifyAsync(
+    public Task<KeyAuthenticationVerificationResult> VerifyAsync(
         KeyAuthenticationVerificationRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        VerifyCoreAsync(request, null, cancellationToken);
+
+    public Task<KeyAuthenticationVerificationResult> VerifyAsync(
+        KeyAuthenticationVerificationRequest request,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        VerifyCoreAsync(request, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<KeyAuthenticationVerificationResult> VerifyCoreAsync(
+        KeyAuthenticationVerificationRequest request,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var correlation = CorrelationIds.Create("key_auth_verify");
+        var correlation = new WorkflowDiagnosticContext(
+            sessionDiagnostics?.Correlation ?? CorrelationIds.Create("key_auth_verify"), sessionDiagnostics);
         IRemoteTransport? candidate = null;
         using var timeoutCancellation = new CancellationTokenSource(request.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
@@ -103,18 +116,18 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         }
     }
 
-    private async Task<KeyAuthenticationVerificationResult> FailAsync(CorrelationIds correlation, OperationErrorCode error, string verificationError, DiagnosticPhase phase, string? commandId)
+    private async Task<KeyAuthenticationVerificationResult> FailAsync(WorkflowDiagnosticContext correlation, OperationErrorCode error, string verificationError, DiagnosticPhase phase, string? commandId)
     {
         var failed = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged, error == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun);
         await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, phase, DiagnosticStatus.Failed, "Separate key-authentication verification did not complete safely.", commandId, error).ConfigureAwait(false);
         return new KeyAuthenticationVerificationResult(failed, verificationError);
     }
 
-    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, string? commandId, OperationErrorCode? error)
+    private async Task ReportAsync(WorkflowDiagnosticContext correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, string? commandId, OperationErrorCode? error)
     {
         try
         {
-            await diagnostics.WriteAsync(
+            await correlation.WriteAsync(diagnostics,
                 new StructuredDiagnosticEvent(
                     eventId,
                     "SSH key authentication",
@@ -125,8 +138,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
                     message,
                     commandId,
                     error?.ToStableCode(),
-                    ActionName),
-                CancellationToken.None).ConfigureAwait(false);
+                    ActionName)).ConfigureAwait(false);
         }
         catch
         {
@@ -134,11 +146,11 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         }
     }
 
-    private async Task ReportCommandAsync(CorrelationIds correlation, RemoteCommandResult result, string commandId)
+    private async Task ReportCommandAsync(WorkflowDiagnosticContext correlation, RemoteCommandResult result, string commandId)
     {
         try
         {
-            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "SSH key authentication", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(DiagnosticPhase.Verify.ToString().ToLowerInvariant()), DiagnosticPhase.Verify, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Key-authentication verification command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Verification.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode), CancellationToken.None).ConfigureAwait(false);
+            await correlation.WriteAsync(diagnostics, new StructuredDiagnosticEvent(DiagnosticEventCatalog.CommandCompleted, "SSH key authentication", result.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error, correlation.ForStep(DiagnosticPhase.Verify.ToString().ToLowerInvariant()), DiagnosticPhase.Verify, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Key-authentication verification command completed without recording remote output.", commandId, result.Succeeded ? null : OperationErrorCode.Verification.ToStableCode(), ActionName, result.Duration, ExitCode: result.ExitCode)).ConfigureAwait(false);
         }
         catch { }
     }

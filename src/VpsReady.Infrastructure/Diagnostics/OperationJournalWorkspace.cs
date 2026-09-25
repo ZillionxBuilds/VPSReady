@@ -570,12 +570,23 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     private static void AssertSafeBundleContents(IReadOnlyDictionary<string, string> files)
     {
-        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(pair.Value)).Key;
+        // Stable catalogued command IDs may describe an authorized-keys step.
+        // They are safe metadata, not raw authorized_keys contents or paths.
+        // Exempt only a JSON commandId field with a known catalog value; scan
+        // every other byte, including free-text fields, with the strict rule.
+        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(
+            pair.Key == "events.jsonl" ? MaskCataloguedCommandIdsForSafetyScan(pair.Value) : pair.Value)).Key;
         if (unsafeFile is not null)
         {
             throw new InvalidOperationException($"Support-bundle export omitted unsafe payload from {unsafeFile} by policy.");
         }
     }
+
+    private static string MaskCataloguedCommandIdsForSafetyScan(string jsonl) => CataloguedCommandIdFieldRegex().Replace(
+        jsonl,
+        match => DiagnosticCommandCatalog.IsKnown(match.Groups["id"].Value)
+            ? "\"commandId\": \"[CATALOGUED_COMMAND_ID]\""
+            : match.Value);
 
     private void AssertSafeEventForExport(StructuredDiagnosticEvent diagnosticEvent)
     {
@@ -645,6 +656,9 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     [System.Text.RegularExpressions.GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----|known[_ -]?hosts|authorized[_ -]?keys|(?:authorization|proxy-authorization)\\s*:\\s*\\S+|\\b(password|passphrase|token|secret|credential|private[_ -]?key)\\s*[=:]", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
     private static partial System.Text.RegularExpressions.Regex UnsafeBundleContentRegex();
+
+    [System.Text.RegularExpressions.GeneratedRegex("\"commandId\"\\s*:\\s*\"(?<id>[A-Za-z0-9_.-]+)\"", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex CataloguedCommandIdFieldRegex();
 
     private static void ApplyDirectoryPermissions(string directory)
     {

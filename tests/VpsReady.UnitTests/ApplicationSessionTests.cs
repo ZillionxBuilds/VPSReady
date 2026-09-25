@@ -107,6 +107,31 @@ public sealed class ApplicationSessionTests
         Assert.Equal(OperationErrorCode.Timeout, timedOut.ErrorCode);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public async Task MissingExpectedSessionIdCannotDispatchAgainstTheCurrentConnection(string? expectedSessionId)
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("server.example", 22, "ubuntu"), new RecordingTransport());
+        var dispatched = false;
+
+        var result = await session.RunOperationForSessionAsync(
+            "fixture-bound-operation",
+            TimeSpan.FromSeconds(5),
+            (_, _) =>
+            {
+                dispatched = true;
+                return Task.FromResult(OperationResult.Success("fixture-bound-operation"));
+            },
+            expectedSessionId!);
+
+        Assert.False(dispatched);
+        Assert.Equal(OperationErrorCode.Reconnect, result.ErrorCode);
+        Assert.Null(session.Snapshot.ActiveOperationId);
+    }
+
     [Fact]
     public async Task DisconnectCancelsInFlightOperationBeforeItsTransportIsDisposed()
     {
