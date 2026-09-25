@@ -113,6 +113,47 @@ public sealed class UfwAllowRuleTests
     }
 
     [Fact]
+    public async Task CancellationDuringVerifiedReadDiagnosticDoesNotReportAllowRuleSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new RecordingTransport(
+            Result(ActiveWithoutTarget),
+            Result(string.Empty),
+            Result(ActiveWithTarget));
+        var diagnostics = new CancellingSanitizedSink(cancellation, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.Phase == DiagnosticPhase.Verify);
+        var workflow = new UfwAllowRuleWorkflow(new RedactingDiagnosticSink(new FailClosedRedactor(), diagnostics));
+
+        var result = await workflow.AddAsync(
+            transport,
+            new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 443, "Anywhere", UfwIpFamily.Ipv4),
+            cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Single(diagnostics.Events, item => item.EventId is DiagnosticEventCatalog.OperationCancelled or DiagnosticEventCatalog.OperationFailed or DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterSuccessDiagnosticDoesNotAddAnotherTerminalEvent()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new RecordingTransport(Result(ActiveWithoutTarget), Result(string.Empty), Result(ActiveWithTarget));
+        var diagnostics = new CancellingSanitizedSink(cancellation, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        var workflow = new UfwAllowRuleWorkflow(new RedactingDiagnosticSink(new FailClosedRedactor(), diagnostics));
+
+        var result = await workflow.AddAsync(
+            transport,
+            new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 443, "Anywhere", UfwIpFamily.Ipv4),
+            cancellation.Token);
+
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.True(result.Result.Succeeded);
+        Assert.Single(diagnostics.Events, item => item.EventId is DiagnosticEventCatalog.OperationCancelled or DiagnosticEventCatalog.OperationFailed or DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
+    }
+
+    [Fact]
     public async Task VerificationMismatchTriggersReadOnlyRecoveryAndNeverSuccess()
     {
         var transport = new RecordingTransport(
@@ -155,6 +196,22 @@ public sealed class UfwAllowRuleTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Events.Add(diagnosticEvent);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CancellingSanitizedSink(CancellationTokenSource cancellation, Func<StructuredDiagnosticEvent, bool> shouldCancel) : ISanitizedDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+        public Task WriteSanitizedAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            Events.Add(diagnosticEvent);
+            if (shouldCancel(diagnosticEvent))
+            {
+                cancellation.Cancel();
+            }
+
             return Task.CompletedTask;
         }
     }

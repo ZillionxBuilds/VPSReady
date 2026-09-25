@@ -115,6 +115,7 @@ public sealed class UfwSelectedRuleRemovalWorkflow
                 return await FailureAfterApplyAsync(correlation, transport, listCommand, IsVerifiableActive(verified) ? OperationErrorCode.Verification : ErrorForRead(verified), cancellationToken).ConfigureAwait(false);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var success = OperationResult.Success(correlation.OperationId, OperationState.Applied);
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "The selected firewall rule is absent from a fresh verified listing.", CancellationToken.None, listCommand.Id.Value, verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new UfwRuleRemovalOperationResult(success, verified.Snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
