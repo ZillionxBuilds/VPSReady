@@ -387,8 +387,11 @@ public static partial class UbuntuServerFactParser
             return false;
         }
 
+        // Numeric parsers may accept a trailing NUL; a rule from untrusted UFW
+        // output must contain only the ASCII digits UFW actually prints.
         if (prefixText is not null
-            && (!int.TryParse(prefixText, NumberStyles.None, CultureInfo.InvariantCulture, out var prefix)
+            && (!prefixText.All(char.IsAsciiDigit)
+                || !int.TryParse(prefixText, NumberStyles.None, CultureInfo.InvariantCulture, out var prefix)
                 || prefix < 0
                 || prefix > (family == UfwIpFamily.Ipv4 ? 32 : 128)))
         {
