@@ -85,24 +85,24 @@
       <Setter Property="Foreground" Value="#E8F0FC" />
     </Style>
     <Style Selector="Button.nav.selected">
-      <Setter Property="Background" Value="#EAF2FF" />
-      <Setter Property="Foreground" Value="#14243D" />
+      <Setter Property="Background" Value="#244165" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
     </Style>
     <Style Selector="Button.nav.selected /template/ ContentPresenter">
-      <Setter Property="Background" Value="#EAF2FF" />
+      <Setter Property="Background" Value="#244165" />
     </Style>
     <Style Selector="Button.nav.selected TextBlock">
-      <Setter Property="Foreground" Value="#14243D" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
     </Style>
     <Style Selector="Button.nav.selected:pointerover">
-      <Setter Property="Background" Value="#EAF2FF" />
-      <Setter Property="Foreground" Value="#14243D" />
+      <Setter Property="Background" Value="#315781" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
     </Style>
     <Style Selector="Button.nav.selected:pointerover /template/ ContentPresenter">
-      <Setter Property="Background" Value="#EAF2FF" />
+      <Setter Property="Background" Value="#315781" />
     </Style>
     <Style Selector="Button.nav.selected:pointerover TextBlock">
-      <Setter Property="Foreground" Value="#14243D" />
+      <Setter Property="Foreground" Value="#FFFFFF" />
     </Style>
     <Style Selector="Button.nav:focus">
       <Setter Property="BorderBrush" Value="#E5B64B" />
