@@ -200,6 +200,18 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 new LocalEd25519KeyGenerationRequest(privateKeyPath),
                 CorrelationIds.Create("generate_key"),
                 cancellation.Token).ConfigureAwait(false);
+            if (generated.Succeeded && cancellation.IsCancellationRequested)
+            {
+                // The pair was already committed. Keep that result visible,
+                // but never leave a previously selected key deployable as if
+                // it were the newly generated one.
+                InvalidateSelection();
+                Complete(generated.Operation, null,
+                    "A local key pair was generated and verified. Automatic selection was cancelled. Select existing local key to continue.",
+                    SshManagementScreenState.Ready);
+                return;
+            }
+
             Complete(generated.Operation, generated.GenerationErrorCode, generated.Succeeded
                 ? "A local key pair was generated and verified. Validating its safe selection metadata."
                 : null,
@@ -207,6 +219,10 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             if (generated.Succeeded && generated.KeyPair is not null)
             {
                 await SelectCoreAsync(generated.KeyPair.PrivateKeyPath, cancellation.Token).ConfigureAwait(false);
+                if (State == SshManagementScreenState.Cancelled)
+                {
+                    Status = "A local key pair was generated and verified, but automatic selection was cancelled. Select existing local key to continue.";
+                }
             }
         }
         finally
