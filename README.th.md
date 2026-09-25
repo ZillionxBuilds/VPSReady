@@ -53,6 +53,31 @@ dotnet run --project src/VpsReady.Desktop/VpsReady.Desktop.csproj --configuratio
 การ build และเปิดแอปโดยยังไม่เชื่อมต่อไม่ต้องใช้ข้อมูล VPS
 แต่แอปจริงไม่ใช่ sandbox จำลองเซิร์ฟเวอร์ การเชื่อมต่อ VPS จริงต้องผ่านขั้นตอนอนุมัติ
 
+### สร้างไฟล์รันสำหรับแต่ละระบบ
+
+สคริปต์ Bash ต่อไปนี้สร้างแอปแบบ self-contained **สำหรับใช้งานในเครื่องและยังไม่ได้ลงลายเซ็น**
+ต้องติดตั้ง .NET SDK ตาม `global.json` ก่อน สำหรับ Windows ให้เปิด Git Bash
+(ไม่ใช่ Command Prompt) แล้วเรียกสคริปต์ของระบบที่ใช้อยู่:
+
+| ระบบที่ใช้ build | คำสั่ง | ไฟล์สำหรับเปิดแอปในโฟลเดอร์ผลลัพธ์ |
+| --- | --- | --- |
+| Windows / Git Bash | `./eng/build-windows.sh` | `VpsReady.Desktop.exe` |
+| macOS | `./eng/build-macos.sh` | `VpsReady.Desktop` |
+| Linux | `./eng/build-linux.sh` | `VpsReady.Desktop` |
+
+สคริปต์เลือก `x64` หรือ `arm64` ตามเครื่องโดยอัตโนมัติ หากต้องการสถาปัตยกรรมอีกแบบ
+**ภายในระบบปฏิบัติการเดียวกัน** ให้เพิ่ม `--arch x64` หรือ `--arch arm64` เช่น
+`./eng/build-linux.sh --arch arm64` ผลลัพธ์อยู่ใน `artifacts/local-build/<rid>.*`
+ซึ่งสคริปต์จะพิมพ์ path จริงออกมาและสร้างโฟลเดอร์ใหม่ทุกครั้ง เปิด
+`./VpsReady.Desktop` บน macOS/Linux หรือ `./VpsReady.Desktop.exe` ใน Git Bash
+บน Windows จากโฟลเดอร์นั้น เมื่อต้องย้ายแอปให้คัดลอก **ทั้งโฟลเดอร์**
+เพราะยังไม่ใช่ไฟล์เดี่ยว และไฟล์ของแต่ละ OS ใช้แทนกันไม่ได้
+
+สคริปต์นี้ไม่ได้เซ็นชื่อ notarize ทำ checksum หรือสร้าง candidate package
+macOS Gatekeeper/Windows SmartScreen อาจเตือนไฟล์ที่ไม่ได้ลงลายเซ็น
+Linux อาจต้องมีไลบรารีของระบบเดสก์ท็อป การ build ข้ามสถาปัตยกรรมไม่ได้ยืนยันว่าเปิดได้บนเครื่องปลายทาง
+การ build สำเร็จไม่ใช่หลักฐานทดสอบ VPS จริงหรือการอนุมัติ release
+
 แพ็กเกจ candidate เป็นแบบ self-contained จึงไม่ต้องติดตั้ง .NET runtime แยก
 แต่ยังไม่ได้ลงลายเซ็น ตรวจระบบปฏิบัติการ สถาปัตยกรรม commit และ checksum
 ให้ตรงกับหลักฐานทุกครั้ง อย่าใช้ผลทดสอบแพ็กเกจเก่ายืนยันแพ็กเกจใหม่
