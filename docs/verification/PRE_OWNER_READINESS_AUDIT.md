@@ -21,7 +21,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [key-transaction PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46),
 [public-key deployment PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48), and
 [selected-identity path PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56), and
-[key-generation terminal PR #58](https://github.com/ZillionxBuilds/VPSReady/pull/58)
+[key-generation terminal PR #58](https://github.com/ZillionxBuilds/VPSReady/pull/58), and
+[existing-key selection PR #60](https://github.com/ZillionxBuilds/VPSReady/pull/60)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -129,6 +130,34 @@ review and an approved exact candidate remain **NOT VERIFIED**. Same-class
 review found a separate existing-key selector success/cancellation boundary
 that is not corrected by #58 and requires focused tracking. The composite
 was not pushed or merged to release/main. **REAL VPS: NOT TESTED.**
+
+### Existing-key selection terminal cancellation — 2026-09-25 19:15 UTC
+
+Exact-release fault injection found a distinct local selection race: cancelling
+while `ExistingKeySelectionSucceeded` was published caused the selector to
+return a Cancelled failure and emit `ExistingKeySelectionCancelled` after the
+success event. Focused [issue #59](https://github.com/ZillionxBuilds/VPSReady/issues/59)
+and draft [PR #60](https://github.com/ZillionxBuilds/VPSReady/pull/60) at
+`52cf7fcd5566373d08b3774c4d8d0d8b7fc6f60e` move the final cancellation
+checkpoint before terminal success. An authentication caller that cancels
+after that validation disposes the parsed private key before transport use;
+public-key reread material remains explicitly caller-owned and disposable.
+The exact-release late-cancellation test was RED while a pre-validation
+cancellation control passed; the focused selector suite is now 13/13 PASS.
+Isolated E0 locked restore, Release `-warnaserror` build (zero warnings/errors),
+format/policy checks PASS; E1 612 PASS/2 SKIP; E2 174 PASS/3 SKIP plus four
+focused selector fault/control cases; E3 disposable Ubuntu ARM64 loopback
+SSH.NET 1 PASS and protocol negatives PASS; E4 unsigned `osx-arm64` publish,
+embedded SHA and bounded startup smoke PASS. Artifact safety scan PASS.
+
+The local-only composite `fe501b1524c320db7de1ef3540a490108f9ae08d`
+adds #60 atop the #58 all-pending preflight without a cherry-pick conflict.
+E0 PASS; E1 816 PASS/2 SKIP; E2 209 PASS/3 SKIP; E3 contained loopback
+2 PASS plus negative protocol and artifact-safety checks; E4 unsigned macOS
+arm64 publish/embedded SHA/startup smoke PASS. It was not pushed or merged
+to release/main. Native Windows/Linux, interactive UI, hosted checks,
+independent review and an approved exact candidate are **NOT VERIFIED**.
+**REAL VPS: NOT TESTED.**
 
 ## Verdicts and exact baseline
 
@@ -693,7 +722,7 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | --- | --- | --- |
 | F05 AC1/9 Ed25519 format and maintained approach | `Ed25519OpenSshKeyPairGeneratorTests` cover OpenSSH v1 output and key-generation scenario tests cover stateful faults; third-party notices and the key-generation decision record explain the approach. | Explicit name/path UX and local OpenSSH interoperability evidence are in unmerged PR #17, not release. Owner Stage 4 NOT RUN. |
 | F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. Exact-release RED terminal-cancellation cases and draft PR #58 cover the committed-pair/result/diagnostic boundary; the isolated correction passed E0/E1/E2 and macOS publish. | Release attempts other-name transaction recovery and blocks unrelated generation; unmerged PR #46 adds focused E2 correction. #58 is also unmerged and does not establish independent approval. Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
-| F05 AC5–7 intentional public view/copy and private omission | `SshManagementViewModel` and key-management presentation tests cover public-only view/copy; generator/diagnostic leakage tests check private material omission. | Native Owner clipboard/screenshot and reviewed bundle privacy checks NOT RUN. |
+| F05 AC5–7 intentional public view/copy and private omission | `SshManagementViewModel` and key-management presentation tests cover public-only view/copy; generator/diagnostic leakage tests check private material omission. Exact-release RED existing-key selection terminal cancellation and draft PR #60 cover a single authoritative selected-key result, public-material reread and cancellation before parsed private material is passed to SSH. | #60 remains unmerged and needs independent review. Native Owner clipboard/screenshot and reviewed bundle privacy checks NOT RUN. |
 | F06 AC1–5 safe authorized-key deployment | `PublicKeyDeploymentWorkflowTests` and scenarios cover missing directory/file, ownership/modes, existing-entry preservation, idempotence, malformed material and no full key in diagnostics. | Release can journal success despite cancellation while the verified command diagnostic completes; unmerged PR #48 adds RED-to-GREEN E1/E2 and correct Verify-phase cancellation for that window. The post-success-event session mismatch in #49 remains RED. Real account ownership/permissions and `authorized_keys` mutation remain Owner Stage 4 E5. |
 | F06 AC6–9 separate key login and unchanged password access | `KeyAuthenticationVerificationWorkflowTests` and scenarios require a separate trusted candidate and minimum command; failed verification does not authorize password-access changes. | Current release has a terminal success/cancel race; unmerged PR #23 corrects it. Contained OpenSSH and Owner separate-login proof NOT RUN here. |
 | F06 AC10 evidence boundary | Stateful deployment/verification faults run in E2; production transport has no successful contained `sshd` run in this baseline audit. | Owner Stage 4 E5 NOT TESTED. |
@@ -804,8 +833,12 @@ tracks the separate E5 gate.
 - Obtain independent same-class review of [PR #58](https://github.com/ZillionxBuilds/VPSReady/pull/58)
   for committed-key terminal cancellation and generated-pair UI guidance,
   including its interaction with #17 and #46. The local composite is not an
-  approved candidate; the existing-key selector terminal boundary remains a
-  separate follow-up.
+  approved candidate; the existing-key selector terminal boundary is tracked
+  separately in #59/PR #60.
+- Obtain independent same-class review of [PR #60](https://github.com/ZillionxBuilds/VPSReady/pull/60)
+  for existing-key selection/public-material/key-use cancellation and safe
+  terminal diagnostics. Its isolated and all-pending E0–E4 runs do not replace
+  hosted/native-platform checks or an approved release candidate.
 - Obtain independent same-class review of [PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48)
   for C404 deployment cancellation, Verify-phase diagnostics, interaction with
   #23 and the enclosing session outcome. The demonstrated fix covers only the
