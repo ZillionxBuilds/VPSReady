@@ -78,6 +78,7 @@ public sealed class UfwToggleWorkflowTests
     [InlineData("0")]
     [InlineData("65536")]
     [InlineData("22\n2222")]
+    [InlineData("22\0")]
     public async Task MissingOrAmbiguousServerPortCannotEnableFirewall(string port)
     {
         var transport = new RecordingTransport(Result(port));

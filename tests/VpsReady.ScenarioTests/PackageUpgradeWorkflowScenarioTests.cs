@@ -92,4 +92,26 @@ public sealed class PackageUpgradeWorkflowScenarioTests
         Assert.False(plan.IsReady);
         Assert.Equal(0, services.GetRequiredService<ScenarioHostState>().Apt.UpgradeGeneration);
     }
+
+    [Fact]
+    public async Task MalformedNumericPlanEvidenceCannotAuthorizeUpgrade()
+    {
+        await using var services = ScenarioComposition.Create("c503-plan-count-nul");
+        services.GetRequiredService<ScenarioFaultPlan>().Inject(DiagnosticPhase.Plan, ScenarioFaultKind.PartialOutput,
+            "c503-plan-count-nul", RemoteCommandCatalog.UbuntuAptUpgradePlan,
+            standardOutput: "upgrade_plan_packages=2\0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var workflow = new PackageUpgradeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+
+        var plan = await workflow.PlanAsync(host);
+        var result = await workflow.UpgradeAsync(host, plan, confirmed: true);
+
+        Assert.False(plan.IsReady);
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(PackageUpgradeErrorCatalog.Confirmation, result.ErrorCode);
+        Assert.Equal(0, services.GetRequiredService<ScenarioHostState>().Apt.UpgradeGeneration);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageUpgradeSucceeded);
+    }
 }
