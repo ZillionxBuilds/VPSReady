@@ -11,7 +11,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [startup fallback PR #25](https://github.com/ZillionxBuilds/VPSReady/pull/25),
 [OpenSSH identity PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27),
 [local Activity guidance PR #30](https://github.com/ZillionxBuilds/VPSReady/pull/30), and
-[local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32)
+[local SSH-key status PR #32](https://github.com/ZillionxBuilds/VPSReady/pull/32), and
+[UFW port-range PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -183,6 +184,32 @@ official packaging, an exact reviewed candidate, or Owner VPS operation.
 Docker used bridge rather than host networking, exposed no port, and contacted
 no real VPS or public SSH target. E5 **REAL VPS: NOT TESTED**.
 
+### F04 numbered port-range gap and focused correction — 2026-09-25
+
+F04 AC2 calls for existing port/range rules to be visible. On the exact
+`9965c5b` release source, a numbered `1000:2000/tcp` rule made the entire
+active listing incomplete; the focused E1 regression failed **1/1 before any
+production edit**. [Issue #33](https://github.com/ZillionxBuilds/VPSReady/issues/33)
+tracks the finding. Draft [PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34)
+at `1ef0f617176e6f2b5c1087a4730ea4b80cc962e0` fixes typed interval
+identity/listing/display and confirmed exact-semantic deletion. It blocks
+every TCP interval containing the server-side active SSH port and never
+treats an interval as an exact SSH allow rule. Malformed/reversed intervals,
+stale or duplicate selection, cancellation and uncertain post-delete state
+remain fail-closed.
+
+The **isolated PR #34 branch**, not release or a composite candidate, passed
+locked restore, Release `-warnaserror` build with 0 warnings/errors, format
+and diff checks (E0); full E1 **643 PASS/2 SKIP** and stateful E2 **182
+PASS/3 SKIP**. A disposable Ubuntu ARM64 container with UFW installed accepted
+IPv4 allow/delete and IPv6 deny-delete `1000:2000` forms in `--dry-run` mode;
+this is local CLI syntax smoke, not firewall activation or production SSH
+proof. Exact clean-head unsigned macOS arm64 self-contained publish passed;
+native app launch, Windows/Linux native hosts and E3 production contained SSH
+on this branch were **NOT RUN**. PR #34 has no hosted checks or independent QA.
+Release remains `9965c5b`; the correction is **not integrated**. E5 **REAL
+VPS: NOT TESTED**.
+
 ### Hosted CI discovery — 2026-09-25
 
 The canonical repository (`ZillionxBuilds/VPSReady`, ID `1361332816`) reports
@@ -208,7 +235,7 @@ developer result, not hosted or approved-candidate evidence.
 | --- | --- | --- | --- |
 | F02 Connection, host trust, Test Connection | `MainWindow.axaml.cs` → `ConnectionOverviewViewModel` → `ConnectionSessionLifecycle` → `SshNetRemoteTransport`; `ConnectionInputValidation`, `KnownHostTrustStore` | `ConnectionInputValidationTests`, `ConnectionSessionLifecycleTests`, `ConnectionSessionLifecycleScenarioTests` | PARTIAL. Invalid-form gap has focused E1/E2/native macOS correction in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19) ([#18](https://github.com/ZillionxBuilds/VPSReady/issues/18)); it is **not** release evidence. Recheck other failure classes and changed-host-key UI path; contained production-transport `sshd` test is skipped here; Owner Stage 1 NOT RUN. |
 | F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
-| F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Recheck active SSH port and family-specific guardrails, stale selection, post-apply verification and recovery against current source; Owner Stage 3 NOT RUN. |
+| F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Exact release drops a numbered port-range listing; focused E1/E2 correction is in unmerged [PR #34](https://github.com/ZillionxBuilds/VPSReady/pull/34) ([#33](https://github.com/ZillionxBuilds/VPSReady/issues/33)). Recheck active SSH protection, stale selection, verification and recovery on an approved integrated candidate; Owner Stage 3 NOT RUN. |
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming/collision corrections are in unmerged PR #17; inline local key/config recovery guidance is in unmerged PR #32. Developer-composite native key generation/collision and corrupt-key guidance passed on named local heads, not an approved candidate. Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Deployment ownership, permission, idempotency and fail-closed tests exist. Deterministic review found separate-login Succeeded then Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #23](https://github.com/ZillionxBuilds/VPSReady/pull/23) ([#22](https://github.com/ZillionxBuilds/VPSReady/issues/22)). Contained protocol and Owner Stage 4 NOT RUN here. |
 | F07 OpenSSH alias | `SshManagementViewModel` → `OpenSshConfigEditor`, `AtomicFileStore` and platform path policy | `OpenSshConfigEditorTests`, `OpenSshConfigEditorScenarioTests`, blind key/config suite | PARTIAL. Current release idempotency parser retains only the first `IdentityFile` even though OpenSSH adds matching identity directives; it can claim no change while another key remains effective. Red-to-green E1/E2 and local `ssh -G` correction are in unmerged [PR #27](https://github.com/ZillionxBuilds/VPSReady/pull/27) ([#26](https://github.com/ZillionxBuilds/VPSReady/issues/26)). Recheck Include/Match/wildcard/line-ending preservation and refusal behavior on exact candidate; Owner Stage 4 NOT RUN. |
@@ -238,10 +265,10 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 
 | F04 criteria | Source and named regression evidence | Remaining boundary |
 | --- | --- | --- |
-| AC1–2 detect/list distinct states and rule identities | `UfwDetectionTests`, `UfwRuleListTests`, `UfwDetectionScenarioTests`, `UfwRuleListRefreshScenarioTests` cover absent/inactive/active/error and IPv4/IPv6 protocol, port, source and stale identity. | Owner Stage 3 real UFW listing NOT RUN. |
+| AC1–2 detect/list distinct states and rule identities | Baseline `UfwDetectionTests`, `UfwRuleListTests`, `UfwDetectionScenarioTests`, `UfwRuleListRefreshScenarioTests` cover absent/inactive/active/error and scalar IPv4/IPv6 rule identity. | Exact release cannot list an existing numbered port range; unmerged PR #34 adds bounded typed intervals and malformed-row regressions. Owner Stage 3 real UFW listing NOT RUN. |
 | AC3–5 TCP/UDP input, validation, idempotent verified add | `UfwAllowRuleTests`, `UfwSafetyPropertyTests`, `UfwAllowRuleWorkflowScenarioTests`; `UfwAllowRuleWorkflow` requires a fresh complete active listing before and after apply. | Current release E1/E2 only; real rule application NOT RUN. |
-| AC6–7 selected/confirmed remove and stale identity | `FirewallViewModelTests`, `UfwSelectedRuleRemovalWorkflowTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` cover selection, reorder, duplicates and verified absence. | Real concurrent UFW behavior NOT RUN. |
-| AC8–9 active SSH port protection before enable/remove | `UfwToggleWorkflowTests`, `UfwStoredSshTests`, `UfwSafetyPropertyScenarioTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` require validated server-port evidence and both needed address families. | Independent active-access check belongs to Owner E5; no lockout proof here. |
+| AC6–7 selected/confirmed remove and stale identity | Baseline `FirewallViewModelTests`, `UfwSelectedRuleRemovalWorkflowTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` cover scalar selection, reorder, duplicates and verified absence; PR #34 adds interval-specific identity, semantic deletion and fault cases. | Range correction remains unmerged; real concurrent UFW behavior NOT RUN. |
+| AC8–9 active SSH port protection before enable/remove | Baseline `UfwToggleWorkflowTests`, `UfwStoredSshTests`, `UfwSafetyPropertyScenarioTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` require validated server-port evidence and both needed families; PR #34 blocks any TCP interval containing that port and excludes ranges from exact-allow evidence. | Independent active-access check belongs to Owner E5; no lockout proof here. |
 | AC10–12 verify, cancel/failure, stateful fault matrix | `UfwToggleWorkflowScenarioTests`, `UfwAllowRuleWorkflowScenarioTests`, `UfwSafetyPropertyScenarioTests` cover fresh verification, recovery, privilege failure and phase faults. | Exact combined candidate, supported hosts and Owner Stage 3 NOT RUN. |
 
 ### F05–F07 criterion walk on the release source
