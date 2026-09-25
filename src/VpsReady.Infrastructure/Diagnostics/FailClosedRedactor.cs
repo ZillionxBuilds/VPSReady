@@ -8,8 +8,10 @@ namespace VpsReady.Infrastructure.Diagnostics;
 public sealed partial class FailClosedRedactor : IRedactor
 {
     private const string Omitted = "PAYLOAD_OMITTED_BY_REDACTION_POLICY";
+    private const int PseudonymBytes = 8;
     private readonly List<string> sensitiveValues = [];
     private readonly Lock sensitiveValuesLock = new();
+    private readonly byte[] pseudonymKey = RandomNumberGenerator.GetBytes(32);
 
     public void RegisterSensitiveValue(string value)
     {
@@ -194,11 +196,62 @@ public sealed partial class FailClosedRedactor : IRedactor
 
     private static RedactionResult Omit() => new(Omitted, true);
 
-    private static string Pseudonymize(string kind, string value)
+    private string Pseudonymize(string kind, string value)
     {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        return $"[{kind.ToUpperInvariant()}-{Convert.ToHexString(hash.AsSpan(0, 6))}]";
+        // The same event can cross several fail-closed redaction boundaries.
+        // Accept only tokens authenticated by this instance; token-shaped raw
+        // input must not bypass pseudonymization.
+        if (IsOwnPseudonym(kind, value))
+        {
+            return value;
+        }
+
+        var identityHash = HMACSHA256.HashData(pseudonymKey, Encoding.UTF8.GetBytes($"identity\0{kind}\0{value}"));
+        var identifier = Convert.ToHexString(identityHash.AsSpan(0, PseudonymBytes));
+        var signature = TokenSignature(kind, identifier);
+        return $"[{kind.ToUpperInvariant()}-{identifier}-{Convert.ToHexString(signature.AsSpan(0, PseudonymBytes))}]";
     }
+
+    private bool IsOwnPseudonym(string kind, string value)
+    {
+        const int hexCharacters = PseudonymBytes * 2;
+        var prefix = $"[{kind.ToUpperInvariant()}-";
+        if (value.Length != prefix.Length + hexCharacters + 1 + hexCharacters + 1
+            || !value.StartsWith(prefix, StringComparison.Ordinal)
+            || value[prefix.Length + hexCharacters] != '-'
+            || value[^1] != ']')
+        {
+            return false;
+        }
+
+        var identifierHex = value.AsSpan(prefix.Length, hexCharacters);
+        var signatureHex = value.AsSpan(prefix.Length + hexCharacters + 1, hexCharacters);
+        if (!IsHex(identifierHex) || !IsHex(signatureHex))
+        {
+            return false;
+        }
+
+        var identifierBytes = Convert.FromHexString(identifierHex);
+        var signatureBytes = Convert.FromHexString(signatureHex);
+        var expectedSignature = TokenSignature(kind, Convert.ToHexString(identifierBytes));
+        return CryptographicOperations.FixedTimeEquals(signatureBytes, expectedSignature.AsSpan(0, PseudonymBytes));
+    }
+
+    private static bool IsHex(ReadOnlySpan<char> value)
+    {
+        foreach (var character in value)
+        {
+            if (!char.IsAsciiHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private byte[] TokenSignature(string kind, string identifier) =>
+        HMACSHA256.HashData(pseudonymKey, Encoding.UTF8.GetBytes($"token\0{kind}\0{identifier}"));
 
     [GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----", RegexOptions.CultureInvariant)]
     private static partial Regex PrivateKeyRegex();

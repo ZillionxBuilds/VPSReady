@@ -14,6 +14,74 @@ namespace VpsReady.UnitTests;
 public sealed class OperationJournalWorkspaceTests
 {
     [Fact]
+    public async Task HostAndUserPseudonymsStayStableThroughJournalAndBundleRedaction()
+    {
+        var root = CreateTemporaryDirectory();
+        const string host = "203.0.113.7";
+        const string user = "ubuntu";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "privacytest", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    "Connection verification failed.",
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["host"] = new(DiagnosticDataClassification.HostIdentifier, host),
+                        ["username"] = new(DiagnosticDataClassification.UserName, user),
+                    }),
+                CancellationToken.None);
+
+            var expectedHost = redactor.Redact(host, DiagnosticDataClassification.HostIdentifier).SafeText;
+            var expectedUser = redactor.Redact(user, DiagnosticDataClassification.UserName).SafeText;
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(
+                correlation.RunId,
+                Path.Combine(root, "user-selected-export"),
+                CancellationToken.None);
+            using var journalDocument = JsonDocument.Parse(journal);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            using var reader = new StreamReader(archive.GetEntry("events.jsonl")!.Open(), Encoding.UTF8);
+            var exportedEvents = reader.ReadToEnd();
+            using var bundleDocument = JsonDocument.Parse(exportedEvents);
+
+            foreach (var (key, expected) in new[] { ("host", expectedHost), ("username", expectedUser) })
+            {
+                Assert.Equal(expected, journalDocument.RootElement.GetProperty("context").GetProperty(key).GetProperty("value").GetString());
+                Assert.Equal(expected, bundleDocument.RootElement.GetProperty("context").GetProperty(key).GetProperty("value").GetString());
+            }
+
+            foreach (var surface in new[] { journal, report, exportedEvents })
+            {
+                Assert.DoesNotContain(host, surface, StringComparison.Ordinal);
+                Assert.DoesNotContain(user, surface, StringComparison.Ordinal);
+            }
+
+            Assert.DoesNotContain(host, Assert.Single(workspace.GetActivity()).Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
     {
         var root = CreateTemporaryDirectory();
