@@ -26,6 +26,7 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
         PreparedPublicKey? key = null;
         IPublicKeyDeploymentTransport? boundTransport = null;
         var applyAttempted = false;
+        var verifyAttempted = false;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, "Public-key deployment started.", null, null).ConfigureAwait(false);
@@ -61,6 +62,7 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
             }
 
             var verify = UbuntuAuthorizedKeysCommandCatalog.CreateVerifyRequest(key);
+            verifyAttempted = true;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying public-key presence, ownership, and secure permissions from fresh state.", verify.Id.Value, null).ConfigureAwait(false);
             var verified = await boundTransport.ExecutePublicKeyDeploymentAsync(verify, key.CanonicalText.AsMemory(), DiagnosticPhase.Verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
@@ -69,6 +71,9 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
                 return await RecoverAsync(correlation, boundTransport, key, OperationErrorCode.Verification, cancellationToken).ConfigureAwait(false);
             }
 
+            // Decide cancellation after the last awaited verification diagnostic,
+            // before recording a terminal success for this deployment.
+            cancellationToken.ThrowIfCancellationRequested();
             var success = OperationResult.Success(correlation.OperationId, alreadyPresent ? OperationState.Unchanged : OperationState.Applied);
             await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "Public-key deployment completed with refreshed verification.", verify.Id.Value, null, verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new PublicKeyDeploymentOperationResult(success, alreadyPresent, null);
@@ -76,7 +81,8 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.PartiallyApplied : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Public-key deployment was cancelled before verified completion.", null, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
+            var phase = verifyAttempted ? DiagnosticPhase.Verify : applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight;
+            await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentCancelled, phase, DiagnosticStatus.Cancelled, "Public-key deployment was cancelled before verified completion.", null, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new PublicKeyDeploymentOperationResult(cancelled, false, PublicKeyDeploymentErrorCatalog.Cancelled);
         }
         catch (RemoteTransportException exception)

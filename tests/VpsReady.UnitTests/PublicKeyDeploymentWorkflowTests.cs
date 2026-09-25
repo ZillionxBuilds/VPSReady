@@ -80,6 +80,24 @@ public sealed class PublicKeyDeploymentWorkflowTests
         Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentFailed && item.Verification == OperationVerification.Failed && item.Recovery == OperationRecovery.Succeeded);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationDuringVerifyDiagnosticsCannotRecordDeploymentSuccess(bool alreadyPresent)
+    {
+        await using var workspace = new KeyWorkspace();
+        var key = await CreateMaterialAsync(workspace);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelAfterVerifyCommandSink(cancellation);
+        var transport = new RecordingDeploymentTransport(alreadyPresent);
+
+        var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(transport, key, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+    }
+
     [Fact]
     public async Task InvalidMaterialFailsBeforeTransportAndIsCleared()
     {
@@ -223,6 +241,22 @@ public sealed class PublicKeyDeploymentWorkflowTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancelAfterVerifyCommandSink(CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            Events.Add(entry);
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Verify)
+            {
+                cancellation.Cancel();
+            }
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FixedPlatformPaths(string root) : IPlatformPaths
