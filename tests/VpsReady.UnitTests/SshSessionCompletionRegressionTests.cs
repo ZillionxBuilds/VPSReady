@@ -103,11 +103,43 @@ public sealed class SshSessionCompletionRegressionTests
         }
     }
 
+    [Fact]
+    public async Task CancelledDeploymentOperationIdCanLocateItsDiagnosticRecord()
+    {
+        await using var workspace = new KeyWorkspace();
+        var barrier = new CompletionBarrier();
+        await using var session = new ObservedSession(shortTimeout: false);
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new DeploymentTransport());
+        using var vm = new SshManagementViewModel(session,
+            new Ed25519OpenSshKeyPairGenerator(barrier), new ExistingOpenSshKeySelector(barrier),
+            new PublicKeyDeploymentWorkflow(barrier), new BarrierVerifier(barrier), new UnusedConfigEditor());
+        await vm.GenerateAsync(workspace.PrivateKeyPath);
+        Assert.True(vm.HasSelectedKey);
+        vm.IsDeploymentConfirmed = true;
+
+        var action = vm.DeployAsync();
+        try
+        {
+            await barrier.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            vm.Cancel();
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+        }
+
+        await action.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(session.Returned);
+        Assert.True(session.Returned.Cancelled);
+        Assert.Equal(session.Returned.OperationId, barrier.DeploymentSuccessOperationId);
+    }
+
     private sealed class CompletionBarrier : IDiagnosticSink
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool DeploymentSuccessObserved { get; private set; }
+        public string? DeploymentSuccessOperationId { get; private set; }
         public async Task PauseAsync()
         {
             Entered.TrySetResult();
@@ -118,6 +150,7 @@ public sealed class SshSessionCompletionRegressionTests
             if (entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded)
             {
                 DeploymentSuccessObserved = true;
+                DeploymentSuccessOperationId = entry.Correlation.OperationId;
                 return PauseAsync();
             }
 
