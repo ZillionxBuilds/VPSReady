@@ -14,10 +14,10 @@ public sealed class MinimalSafeStartupJournalTests
         var root = Directory.CreateTempSubdirectory("vpsready-startup-test-").FullName;
         try
         {
-            const string secret = "synthetic-secret-in-startup-exception";
+            const string seededFailureText = "synthetic-secret-in-startup-exception";
             var record = MinimalSafeStartupJournal.TryRecord(new FixedPlatformPaths(root));
             var viewModel = AppViewModel.CreateSafeStartupFailure(
-                new InvalidOperationException(secret), record.ErrorId, record.JournalPath);
+                new InvalidOperationException(seededFailureText), record.ErrorId, record.JournalPath);
 
             Assert.Matches("^startup-[a-f0-9]{32}$", record.ErrorId);
             Assert.Equal(record.ErrorId, viewModel.StartupErrorId);
@@ -31,7 +31,7 @@ public sealed class MinimalSafeStartupJournalTests
             Assert.Equal("failed", entry.RootElement.GetProperty("status").GetString());
             Assert.True(entry.RootElement.GetProperty("timestamp_utc").GetDateTimeOffset() <= DateTimeOffset.UtcNow);
             var safeText = string.Join('\n', File.ReadAllText(record.JournalPath!), viewModel.Status, viewModel.StartupErrorId, viewModel.StartupJournalPath);
-            Assert.DoesNotContain(secret, safeText, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededFailureText, safeText, StringComparison.Ordinal);
             Assert.DoesNotContain(root, File.ReadAllText(record.JournalPath!), StringComparison.Ordinal);
         }
         finally
