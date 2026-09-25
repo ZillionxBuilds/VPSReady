@@ -119,7 +119,26 @@ same opaque operation ID advised verifying local state. The intermediate
 #19+#32 composite had corrected inline text but still used remote-state Activity
 advice, confirming the separate #30 dependency. These are local developer
 smoke checks, not independent QA, hosted evidence or an approved candidate.
-E3 for this presentation change and E5 real VPS were **NOT RUN/NOT TESTED**.
+E3 on the isolated PR #32 branch was **NOT RUN**; E5 real VPS was **NOT TESTED**.
+
+Follow-up E3 on that exact **developer-only** `27cd1c5` composite ran inside a
+disposable Ubuntu 24.04 ARM64/.NET SDK 10.0.400 container, with source mounted
+read-only, Docker bridge networking (not host networking), no published port,
+and a loopback-only OpenSSH daemon. `bash eng/run-local-contained-e3.sh` passed
+its production SSH.NET
+password/reconnect test (**1 PASS/0 FAIL/0 SKIP**) and the script's unknown-host
+fail-closed, known-host, wrong-password, stdout/stderr/exit and timeout checks.
+`bash eng/verify-artifact-safety.sh TestResults` passed inside the container;
+the host-side scan of the retained results also passed. The sanitized evidence
+is retained under ignored `artifacts/validation/combined-e3-27cd1c5/`:
+`e3-production-sshnet.trx` SHA-256
+`7e48391c455a952c637c709ff197830a3787953ba454379f19f18f5c016aff2f`,
+and `e3/local-contained-protocol.txt` SHA-256
+`3d4dad4fc0d23f017f3d53b6ac998b9311ff69f5fb2690aa090badde57602c1f`.
+The earlier broader `fd0aba1` composite had **2** E3 tests because it also
+included PR #17's generated-key/OpenSSH interoperability regression; the
+narrower `27cd1c5` includes only #19/#30/#32 and does not contain that test.
+Neither composite is a reviewed release candidate; E5 remains **NOT TESTED**.
 
 The temporary app bundle and publish output were closed and moved to macOS
 Trash (recoverable); the source branch and separate PRs remain. Rebuild from
