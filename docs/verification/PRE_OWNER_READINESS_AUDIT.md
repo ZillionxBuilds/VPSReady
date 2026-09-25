@@ -32,8 +32,9 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [uptime evidence PR #74](https://github.com/ZillionxBuilds/VPSReady/pull/74),
 [authorized-key fixture PR #76](https://github.com/ZillionxBuilds/VPSReady/pull/76),
 [UFW malformed-CIDR PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78),
-[stored SSH-port PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80), and
-[typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82)
+[stored SSH-port PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80),
+[typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82), and
+[reboot-required cancellation PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -107,6 +108,32 @@ evidence, not an approved or independently reviewed release candidate.
 Both PRs remain draft/unmerged with no hosted checks; native Windows/Linux,
 exact integrated-candidate E3/E4 and Owner Stage 3/5 remain **NOT RUN**.
 **REAL VPS: NOT TESTED.**
+
+### F08 reboot-required inspection terminal correction — 2026-09-25 22:37 UTC
+
+On exact release `9965c5b`, an E1 regression was **RED 0 PASS/1 FAIL**:
+when cancellation arrived after the read-only reboot-required command's
+`CommandCompleted` diagnostic, `RebootWorkflow.InspectRequiredAsync` still
+returned Succeeded and published `RebootSucceeded`. Focused
+[issue #83](https://github.com/ZillionxBuilds/VPSReady/issues/83) and draft
+[PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84) at
+`839daee6b8da2d834e04d5bb91fa4bf0ba698cab` add one preterminal
+cancellation check. Normal true/false and malformed/nonzero E1 cases plus
+stateful `c504-required-late-cancel` E2 guard the result, single terminal
+event, operation correlation and output omission. Reboot dispatch/reconnect
+logic and remote commands are unchanged; no real reboot occurred.
+
+On isolated #84, E0 locked restore/Release `-warnaserror` build/format/diff
+passed, E1 was **612 PASS/2 SKIP**, E2 **175 PASS/3 SKIP**, E3 **NOT RUN**
+(offline read-only), and unsigned macOS arm64 E4 publish/startup smoke passed.
+Local-only composite `a3a8c06e922194b2f5bde024189ccc866ae3e7e8` adds #84
+and PR #14's latest contrast tests to the previous pending-product composite
+without a cherry-pick conflict. On this exact local head, E0 passed, E1 was
+**879 PASS/3 SKIP**, E2 **214 PASS/3 SKIP**, and unsigned macOS arm64 E4
+publish, embedded SHA, artifact-safety scan and bounded startup smoke passed.
+E3 on this new head, hosted checks, native Windows/Linux, interactive UI,
+independent QA and approved integration are **NOT RUN/NOT VERIFIED**. Both
+trees remain outside release. Owner Stage 5/E5 **REAL VPS: NOT TESTED.**
 
 ### F06 shell-fixture and full-pending Linux checkpoint — 2026-09-25 21:30 UTC
 
@@ -1068,6 +1095,9 @@ and apt-upgrade-plan count evidence are still accepted by this unchanged
 release baseline; draft PR #80 and #82 correct these separate producer/parser
 paths. Do not treat the earlier F04 safety or F08 plan rows as complete until
 both corrections receive review, integration and exact-candidate validation.
+Read-only reboot-required inspection also has an exact-release late-cancel
+false success; draft PR #84 is the separate F08 correction. Its local
+composite PASS is not release or real-reboot evidence.
 
 F10 safety invariants apply across all rows. A green aggregate suite does not
 establish firewall lockout safety, real host-key handling, privilege behavior,
@@ -1124,6 +1154,11 @@ not a real package manager, reboot, hostname or timezone PASS:
 | AC5–7 explicit reboot, expected disconnect and bounded trusted reconnect | `RebootWorkflowTests` and `RebootWorkflowScenarioTests` cover confirmation, old/new boot identity, expected disconnect, retry deadline, cancellation, trust refusal and recovery verification. | Real reboot/access continuity and host-key revalidation remain Owner Stage 5 E5 NOT RUN. |
 | AC8 validated hostname/timezone and fresh verification | Baseline `HostnameChangeWorkflowTests`, `TimezoneChangeWorkflowTests` and matching scenarios cover invalid input and post-apply verification; PR #36 adds stale-state, removed-selection, failed-read, cross-transport, cancellation and safe-diagnostic regressions. | Release remains vulnerable to stale plans until reviewed correction integrates. Separate SSH commands retain a residual read/apply race; real Ubuntu mutation NOT RUN. |
 | AC9–10 cancellation state and safe correlated diagnostics | `SystemActionsViewModelTests`, `PackageIndexUpdateWorkflowScenarioTests`, `RebootWorkflowTests` and system-action scenario tests exercise cancellation/stale-plan clearing and diagnostic operation IDs; remote workflows use command catalog IDs and fixed safe summaries. Exact-release package-upgrade planning emits both Succeeded and Cancelled under one operation ID on late cancellation; PR #42 corrects this with red-to-green E1. | PR #42 is unmerged and not independently reviewed; exact combined candidate Activity/journal, privacy/export and Owner Stage 2/5/6 remain NOT RUN. |
+
+F08 AC9–10 update: exact release also reports success for a canceled
+read-only reboot-required inspection after command evidence. Draft PR #84
+adds E1/E2 RED-to-GREEN and single-terminal diagnostic coverage. It does not
+establish real reboot/reconnect safety or replace Owner Stage 5.
 
 ### F09 criterion walk on the release source
 
@@ -1233,6 +1268,11 @@ tracks the separate E5 gate.
   for typed SSH-port and apt-plan count metadata. Validate the #80/#82
   interaction on the exact reviewed candidate; the 871/213 local E1/E2
   composite is not hosted, native-platform or Owner evidence.
+- Obtain independent review of [PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84)
+  for the reboot-required read-only cancellation boundary. Preserve the
+  correlated single-terminal E2 case alongside package-plan PR #42; local
+  composite 879/214 E1/E2 is compatibility evidence, not release or real
+  reboot approval.
 - Obtain independent same-class review of [PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44)
   for identity-edit session invalidation, stale/in-flight host-trust refusal
   and interaction with #14/#19. Its isolated and local-composite passes are
