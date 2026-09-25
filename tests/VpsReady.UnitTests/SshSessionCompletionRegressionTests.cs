@@ -87,6 +87,10 @@ public sealed class SshSessionCompletionRegressionTests
             Assert.DoesNotContain("Password access remains unchanged.", vm.Status, StringComparison.Ordinal);
             Assert.Equal(outcome == "timeout" ? OperationErrorCode.Timeout : outcome == "stale" ? OperationErrorCode.Reconnect : OperationErrorCode.Cancelled, session.Returned.ErrorCode);
         }
+        if (!authentication && outcome == "cancel")
+        {
+            Assert.False(barrier.DeploymentSuccessObserved);
+        }
         if (outcome == "stale")
         {
             Assert.Equal(0, session.Dispatches);
@@ -103,13 +107,22 @@ public sealed class SshSessionCompletionRegressionTests
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool DeploymentSuccessObserved { get; private set; }
         public async Task PauseAsync()
         {
             Entered.TrySetResult();
             await Release.Task;
         }
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) =>
-            entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded ? PauseAsync() : Task.CompletedTask;
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            if (entry.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded)
+            {
+                DeploymentSuccessObserved = true;
+                return PauseAsync();
+            }
+
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class BarrierVerifier(CompletionBarrier barrier) : IKeyAuthenticationVerifier
