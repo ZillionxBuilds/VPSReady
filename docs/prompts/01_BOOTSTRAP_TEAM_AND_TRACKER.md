@@ -1,5 +1,7 @@
 # Prompt 01 — Bootstrap Blind Team and GitHub Tracker
 
+> Migration notice (2026-09-08): this document records **legacy provenance**, not executable task routing or current approval. Old issue/PR numbers and evidence belong to ZillionBuilds/VPSReady (1357079628); unavailable discussions are not restored. Use the canonical repository ZillionxBuilds/VPSReady (1361332816), the migration identity map, current Workpads and Prompt 03. Do not restart historical teams/phases. Current R19 evidence is in the migration report; REAL VPS: NOT TESTED.
+
 Run once from a trusted checkout of `ZillionBuilds/VPSReady` on branch `development`.
 
 ```text

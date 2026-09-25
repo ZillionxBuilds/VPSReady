@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VpsReady.Application/VpsReady.Application.csproj" />
+    <Project Path="src/VpsReady.Core/VpsReady.Core.csproj" />
+    <Project Path="src/VpsReady.Desktop/VpsReady.Desktop.csproj" />
+    <Project Path="src/VpsReady.Infrastructure/VpsReady.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj" />
+    <Project Path="tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj" />
+  </Folder>
+</Solution>

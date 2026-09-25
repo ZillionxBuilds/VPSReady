@@ -1,0 +1,6 @@
+{
+  "scenario_id": "scenario.permission-denied",
+  "kind": "permission",
+  "expected_error": "PERMISSION_DENIED",
+  "evidence": "E2"
+}

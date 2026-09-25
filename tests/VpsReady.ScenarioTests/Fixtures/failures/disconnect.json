@@ -1,0 +1,6 @@
+{
+  "scenario_id": "scenario.disconnect",
+  "kind": "disconnect",
+  "expected_error": "DISCONNECTED",
+  "evidence": "E2"
+}

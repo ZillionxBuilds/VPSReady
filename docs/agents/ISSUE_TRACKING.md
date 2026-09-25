@@ -141,4 +141,10 @@ Owner-test defects remain open until affected Owner retest passes or Owner expli
 
 ## 10. GitHub Project
 
-A GitHub Project is an optional view. Issues, labels, relationships and Workpads remain canonical. Project permission failure does not justify a second tracker.
+GitHub Issues, labels, relationships and Workpads remain canonical. When the existing VPSReady GitHub Project is accessible, it is the mandatory Owner-facing visual projection of that canonical state; it is not a second tracker.
+
+The Orchestrator owns Project workflow synchronization. For every meaningful transition it reconciles the Issue status label, canonical Workpad status, Project item Status, current role/assignee where available, and #1 when the change is milestone/release relevant. Worker handoffs request their next workflow state; they do not mutate Project status unless the Orchestrator explicitly delegates one operation.
+
+Reuse the existing VPSReady Project and its closest Status options; never create a duplicate Project, board, status tracker, or hierarchy merely to mirror this process. Add missing active issues as Project items without duplication. The normal mapping is Backlog for `BACKLOG`, Ready for `READY`/`ASSIGNED`, In Progress for `IN_PROGRESS`/failed recovery, Review for Orchestrator review/blind verification, QA for automation QA, Blocked for `BLOCKED`, Done for accepted/approved, and the nearest existing Owner/gate column for later gate states.
+
+The Agent Watchdog compares canonical Issue/Workpad state with Project item/status on every tick and repairs drift, recording `KANBAN_DRIFT_REPAIRED` with the issue and old/new status. If Project access or mutation fails, update the affected Workpad and #1 with `KANBAN_SYNC_FAILED`, attempted transition, canonical/desired states, API error, and retry action. Retry at the next reconciliation. Project-only permission failure does not justify a second tracker or stop unrelated product implementation.

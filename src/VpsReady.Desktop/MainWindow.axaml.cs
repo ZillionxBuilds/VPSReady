@@ -1,0 +1,335 @@
+using Avalonia.Controls;
+using Avalonia.Platform.Storage;
+using VpsReady.Application;
+
+namespace VpsReady.Desktop;
+
+public partial class MainWindow : Window
+{
+    private AppViewModel? viewModel;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+    }
+
+    public MainWindow(AppViewModel viewModel)
+        : this()
+    {
+        DataContext = viewModel;
+        this.viewModel = viewModel;
+        viewModel.SafeIssueReportReady += CopySafeIssueReportAsync;
+        viewModel.SupportBundleExportRequested += ExportSanitizedSupportBundleAsync;
+    }
+
+    private async void CopySafeIssueReportAsync(string report)
+    {
+        try
+        {
+            var clipboard = Clipboard;
+            if (clipboard is not null)
+            {
+                await clipboard.SetTextAsync(report);
+            }
+        }
+        catch
+        {
+            // The report remains local; the view model shows a user-safe status.
+        }
+    }
+
+    private async void ExportSanitizedSupportBundleAsync(string? runId)
+    {
+        try
+        {
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Choose a local folder for the sanitized support bundle",
+                AllowMultiple = false,
+            });
+            var folder = folders.Count == 0 ? null : folders[0];
+            var path = folder?.Path.LocalPath;
+            if (!string.IsNullOrWhiteSpace(path) && viewModel?.ActivityDiagnostics is not null)
+            {
+                await viewModel.ActivityDiagnostics.ExportSanitizedSupportBundleAsync(path, runId);
+            }
+        }
+        catch
+        {
+            // The view model retains a safe message; no bundle is uploaded or shared.
+        }
+    }
+
+    private async void TestConnectionAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var connection = viewModel?.ConnectionOverview;
+        if (connection is null)
+        {
+            return;
+        }
+
+        var hostBox = this.FindControl<TextBox>("ConnectionHost");
+        var portBox = this.FindControl<TextBox>("ConnectionPort");
+        var userBox = this.FindControl<TextBox>("ConnectionUser");
+        try
+        {
+            await connection.TestAsync(
+                hostBox?.Text,
+                portBox?.Text,
+                userBox?.Text,
+                timeout: null);
+        }
+        finally
+        {
+            connection.SecretInput.Clear();
+        }
+    }
+
+    private async void ViewPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh) { await ssh.ViewPublicKeyAsync(); }
+    }
+
+    private async void CopyPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh) { return; }
+        var text = await ssh.ReadPublicKeyForCopyAsync();
+        if (text is null) { return; }
+        try
+        {
+            if (Clipboard is not { } clipboard) { ssh.ReportPublicKeyCopy(false); return; }
+            await clipboard.SetTextAsync(text);
+            ssh.ReportPublicKeyCopy(true);
+        }
+        catch { ssh.ReportPublicKeyCopy(false); }
+    }
+
+    private async void AcceptUnknownHostKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            await connection.AcceptUnknownHostKeyAsync();
+        }
+    }
+
+    private async void ReplaceChangedHostKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            await connection.ReplaceChangedHostKeyAsync();
+        }
+    }
+
+    private async void RefreshFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.RefreshAsync();
+        }
+    }
+
+    private async void AddFirewallRuleAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.AddAsync();
+        }
+    }
+
+    private async void RemoveFirewallRuleAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.RemoveSelectedAsync();
+        }
+    }
+
+    private async void EnableFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.EnableAsync();
+        }
+    }
+
+    private async void DisableFirewallAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Firewall is { } firewall)
+        {
+            await firewall.DisableAsync();
+        }
+    }
+
+    private async void RefreshPackageIndexAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.RefreshPackageIndexAsync();
+        }
+    }
+
+    private async void PlanPackageUpgradeAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.PlanUpgradeAsync();
+        }
+    }
+
+    private async void ApplyPackageUpgradeAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.UpgradeAsync();
+        }
+    }
+
+    private async void InspectRebootRequiredAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.InspectRebootRequiredAsync();
+        }
+    }
+
+    private async void RebootSystemAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.RebootAsync();
+        }
+    }
+
+    private async void PlanHostnameAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.PlanHostnameAsync();
+        }
+    }
+
+    private async void ApplyHostnameAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.ApplyHostnameAsync();
+        }
+    }
+
+    private async void PlanTimezoneAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.PlanTimezoneAsync();
+        }
+    }
+
+    private async void ApplyTimezoneAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SystemActions is { } system)
+        {
+            await system.ApplyTimezoneAsync();
+        }
+    }
+
+    private async void GenerateSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh)
+        {
+            return;
+        }
+
+        var selected = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Choose a local private-key destination",
+            SuggestedFileName = "id_ed25519",
+        });
+        var path = selected?.Path.LocalPath;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await ssh.GenerateAsync(path);
+        }
+    }
+
+    private async void SelectSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is not { } ssh)
+        {
+            return;
+        }
+
+        var selected = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select a local private key",
+            AllowMultiple = false,
+        });
+        var path = selected.Count == 1 ? selected[0].Path.LocalPath : null;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            await ssh.SelectAsync(path);
+        }
+    }
+
+    private async void DeploySshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh)
+        {
+            await ssh.DeployAsync();
+        }
+    }
+
+    private async void VerifySshKeyAuthenticationAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh)
+        {
+            await ssh.VerifyKeyAuthenticationAsync();
+        }
+    }
+
+    private async void SaveSshConfigAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.SshManagement is { } ssh)
+        {
+            await ssh.SaveConfigAsync();
+        }
+    }
+
+    private void ConnectionPasswordKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        var connection = viewModel?.ConnectionOverview;
+        if (connection is null)
+        {
+            return;
+        }
+        if (PasswordInputKeys.Classify(e.Key, e.KeyModifiers) == PasswordInputKeyAction.Backspace)
+        {
+            connection.BackspaceSecretCharacter();
+            e.Handled = true;
+            return;
+        }
+        if (PasswordInputKeys.Classify(e.Key, e.KeyModifiers) == PasswordInputKeyAction.Clear)
+        {
+            connection.ClearSecretInput();
+            e.Handled = true;
+            return;
+        }
+        if (PasswordInputKeys.Classify(e.Key, e.KeyModifiers) == PasswordInputKeyAction.RejectPaste)
+        {
+            connection.RejectSecretPaste();
+            e.Handled = true;
+        }
+    }
+
+    private void ConnectionPasswordTextInput(object? sender, Avalonia.Input.TextInputEventArgs e)
+    {
+        // Avalonia supplies the composed text (layout, Shift and Caps Lock).
+        // Copy it immediately into clearable storage; never bind or retain the
+        // framework event string in a view model, diagnostic or persistent state.
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            connection.AppendSecretText(e.Text.AsSpan());
+            e.Handled = true;
+        }
+    }
+
+}

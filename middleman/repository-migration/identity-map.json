@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-09-08",
+  "status": "MIGRATION_PARTIAL",
+  "canonical_repository": {
+    "full_name": "ZillionxBuilds/VPSReady",
+    "id": 1361332816
+  },
+  "legacy_repository": {
+    "full_name": "ZillionBuilds/VPSReady",
+    "previously_observed_id": 1357079628,
+    "current_connector_access": "HTTP_404_NOT_PROOF_OF_DELETION"
+  },
+  "migration_coordinator": {
+    "issue_number": 1,
+    "url": "https://github.com/ZillionxBuilds/VPSReady/issues/1",
+    "warning": "NOT_THE_LEGACY_RELEASE_TRACKER"
+  },
+  "observed_refs_before_packet": {
+    "main": "6e058370d118186e399f450d528b9bc91c490049",
+    "development": "0367256e730473189b4e580336abe7f9e0db5563",
+    "release/0.1.0": "a4629b38cc00f13a4d93c676410d5b1ce14c5283"
+  },
+  "identity_key": [
+    "repository_id",
+    "kind",
+    "number"
+  ],
+  "active_purpose_mappings": [
+    {
+      "old_repository": "ZillionBuilds/VPSReady",
+      "kind": "issue",
+      "old_number": 1,
+      "purpose": "release_tracker",
+      "new_number": 2,
+      "new_url": "https://github.com/ZillionxBuilds/VPSReady/issues/2",
+      "status": "RECONSTRUCTED_CURRENT_PURPOSE",
+      "new_node_id": "I_kwDOUSRKUM8AAAABQRLtxA",
+      "workpad_url": "https://github.com/ZillionxBuilds/VPSReady/issues/2#issuecomment-5585172425",
+      "source": "Pinned migration packet; legacy API HTTP404 under Zillion225 2026-09-08; no historical comments restored"
+    },
+    {
+      "old_repository": "ZillionBuilds/VPSReady",
+      "kind": "issue",
+      "old_number": 149,
+      "purpose": "release_repair_parent",
+      "new_number": 3,
+      "new_url": "https://github.com/ZillionxBuilds/VPSReady/issues/3",
+      "status": "RECONSTRUCTED_CURRENT_PURPOSE",
+      "new_node_id": "I_kwDOUSRKUM8AAAABQRLvXg",
+      "workpad_url": "https://github.com/ZillionxBuilds/VPSReady/issues/3#issuecomment-5585172926",
+      "source": "Pinned migration packet; legacy API HTTP404 under Zillion225 2026-09-08; no historical comments restored"
+    },
+    {
+      "old_repository": "ZillionBuilds/VPSReady",
+      "kind": "issue",
+      "old_number": 160,
+      "purpose": "R19_validation",
+      "new_number": 4,
+      "new_url": "https://github.com/ZillionxBuilds/VPSReady/issues/4",
+      "status": "RECONSTRUCTED_CURRENT_PURPOSE",
+      "new_node_id": "I_kwDOUSRKUM8AAAABQRLw2Q",
+      "workpad_url": "https://github.com/ZillionxBuilds/VPSReady/issues/4#issuecomment-5585173333",
+      "source": "Pinned migration packet; legacy API HTTP404 under Zillion225 2026-09-08; no historical comments restored"
+    },
+    {
+      "old_repository": "ZillionBuilds/VPSReady",
+      "kind": "issue",
+      "old_number": 20,
+      "purpose": "owner_E5",
+      "new_number": 5,
+      "new_url": "https://github.com/ZillionxBuilds/VPSReady/issues/5",
+      "status": "RECONSTRUCTED_CURRENT_PURPOSE",
+      "new_node_id": "I_kwDOUSRKUM8AAAABQRLygw",
+      "workpad_url": "https://github.com/ZillionxBuilds/VPSReady/issues/5#issuecomment-5585173846",
+      "source": "Pinned migration packet; legacy API HTTP404 under Zillion225 2026-09-08; no historical comments restored"
+    },
+    {
+      "old_repository": "ZillionBuilds/VPSReady",
+      "kind": "pull_request",
+      "old_number": 156,
+      "purpose": "release_to_main_review_proposal",
+      "new_number": 6,
+      "new_url": "https://github.com/ZillionxBuilds/VPSReady/pull/6",
+      "status": "DRAFT_REVIEW_ONLY",
+      "new_node_id": "PR_kwDOUSRKUM8AAAABCq9rmA",
+      "source": "Purpose reconstructed from pinned migration packet; no review/approval copied"
+    }
+  ],
+  "historical_only": [
+    {
+      "kind": "pull_request",
+      "old_number": 159,
+      "status": "PREVIOUSLY_MERGED_DO_NOT_REPLAY",
+      "merge_sha": "7f9a4b05a290fc9dbb2c1fb76c44e90993c0f1ff"
+    },
+    {
+      "kind": "pull_request",
+      "old_number": 161,
+      "status": "PREVIOUSLY_MERGED_SOURCE_PRESENT",
+      "merge_sha": "a4629b38cc00f13a4d93c676410d5b1ce14c5283",
+      "head_sha": "81fe252c33404b80c632e511e036b089d7621abf"
+    },
+    {
+      "kind": "pull_request",
+      "old_number": 158,
+      "status": "PREVIOUSLY_CLOSED_UNMERGED",
+      "retained_branch": "docs/149-middleman-r16-r18",
+      "head_sha": "9f877840dcfb029eebc17325ba7e493a1a7261dd"
+    }
+  ],
+  "provenance_note": "Historical entries are prior Owner/reviewer conversation evidence plus preserved source, not a fresh export of inaccessible legacy discussions. Never infer approval or rewrite old comment authorship.",
+  "runtime_acceptance": "E0_E1_E2_LOCAL_PASS_E4_OSX_ARM64_PASS_HOSTED_OR_PLATFORM_VERIFICATION_PENDING",
+  "owner_E5": "NOT_RUN",
+  "main_promotion": "NOT_AUTHORIZED",
+  "documentation_sha": "9a879fde3a715d4ca7221d57fd1ad83702a59077"
+}

@@ -1,0 +1,309 @@
+name: Release Candidate CI
+
+on:
+  push:
+    branches:
+      - "release/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# This workflow deliberately produces evidence artifacts only. A successful
+# run is never a release decision and cannot create a ready-for-Owner status.
+concurrency:
+  group: release-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    name: Resolve immutable release candidate SHA
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.identity.outputs.source_sha }}
+    steps:
+      - id: identity
+        name: Require a release branch and capture its exact SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/heads/release/*) ;;
+            *) printf 'Release Candidate CI may run only from a release/* branch.\n' >&2; exit 1 ;;
+          esac
+          printf 'source_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Record immutable candidate provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "${{ steps.identity.outputs.source_sha }}"
+          jq -n --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF" --arg run "$GITHUB_RUN_ID" \
+            '{schema_version:1,source_sha:$sha,source_ref:$ref,run_id:$run,candidate_status:"BLIND_CI_ARTIFACTS_ONLY"}' \
+            > release-provenance.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-provenance-${{ steps.identity.outputs.source_sha }}
+          path: release-provenance.json
+          if-no-files-found: error
+          retention-days: 30
+
+  build:
+    name: Build exact candidate
+    needs: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore and build the immutable candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.identity.outputs.source_sha }}"
+          dotnet restore VpsReady.slnx --locked-mode
+          dotnet build VpsReady.slnx --configuration Release --no-restore -p:RunAnalyzersDuringBuild=true
+          jq -n --arg sha "${{ needs.identity.outputs.source_sha }}" \
+            '{schema_version:1,source_sha:$sha,evidence:"E0 build only",status:"PASS"}' > build-report.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-build-report-${{ needs.identity.outputs.source_sha }}
+          path: build-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+  test:
+    name: Test exact candidate
+    needs:
+      - identity
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Run E0, E1, and E2 without a remote target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.identity.outputs.source_sha }}"
+          dotnet restore VpsReady.slnx --locked-mode
+          dotnet build VpsReady.slnx --configuration Release --no-restore -p:RunAnalyzersDuringBuild=true
+          dotnet format VpsReady.slnx --verify-no-changes --no-restore
+          dotnet list VpsReady.slnx package --vulnerable --include-transitive
+          bash eng/verify-tracked-secrets.sh
+          bash eng/verify-packaging-profiles.sh
+          bash eng/verify-release-candidate-ci.sh
+          bash eng/verify-startup-smoke-suite.sh
+          pwsh -NoProfile -Command '$tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("eng/startup-smoke-package.ps1", [ref]$tokens, [ref]$errors); if ($errors.Count -ne 0) { throw "Startup-smoke script has PowerShell parser errors." }; ./eng/startup-smoke-package.ps1 -SelfTest'
+          dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
+          dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build --logger "trx;LogFileName=scenario.trx" --results-directory TestResults/scenario
+
+      - name: Reject unsafe retained reports
+        id: report_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh TestResults
+
+      - name: Retain only safe exact-SHA reports
+        if: always() && steps.report_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-test-reports-${{ needs.identity.outputs.source_sha }}
+          path: TestResults
+          if-no-files-found: ignore
+          retention-days: 30
+
+  package:
+    name: Package exact candidate (${{ matrix.rid }})
+    needs:
+      - identity
+      - build
+      - test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+          - os: macos-latest
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+          - os: windows-latest
+            rid: win-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.identity.outputs.source_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Package the exact SHA with build-only evidence
+        shell: pwsh
+        run: |
+          $actualSha = (git rev-parse HEAD).Trim()
+          if ($actualSha -ne '${{ needs.identity.outputs.source_sha }}') { throw 'Checked out source does not match the candidate SHA.' }
+          dotnet restore src/VpsReady.Desktop/VpsReady.Desktop.csproj --locked-mode
+          ./eng/package-artifact.ps1 -Rid '${{ matrix.rid }}' -CommitSha '${{ needs.identity.outputs.source_sha }}' -RunnerOs '${{ runner.os }}' -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Verify generated third-party notice inventory
+        shell: bash
+        run: >
+          bash eng/verify-third-party-notices.sh
+          --lock src/VpsReady.Desktop/packages.lock.json
+          --notice artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICES.md
+          --inventory artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICE_INVENTORY.json
+
+      - name: E4 bounded matching-host startup smoke
+        shell: pwsh
+        run: >
+          ./eng/startup-smoke-package.ps1
+          -Rid '${{ matrix.rid }}'
+          -ExpectedCommitSha '${{ needs.identity.outputs.source_sha }}'
+          -RunnerOs '${{ runner.os }}'
+          -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Reject unsafe retained startup-smoke report
+        id: startup_smoke_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh artifacts/startup-smoke
+
+      - name: Upload safe startup-smoke report
+        if: always() && steps.startup_smoke_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-startup-smoke-${{ matrix.rid }}-${{ needs.identity.outputs.source_sha }}
+          path: artifacts/startup-smoke/${{ matrix.rid }}/startup-smoke-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Reject unsafe retained package material
+        shell: bash
+        run: |
+          bash eng/verify-artifact-safety.sh artifacts/publish
+          test "$(find artifacts/packages -maxdepth 1 -name '*.zip' -type f | wc -l | tr -d ' ')" = 1
+          test "$(find artifacts/packages -maxdepth 1 -name '*.zip.sha256' -type f | wc -l | tr -d ' ')" = 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package-${{ matrix.rid }}-${{ needs.identity.outputs.source_sha }}
+          path: artifacts/packages
+          if-no-files-found: error
+          retention-days: 30
+
+  collect-evidence:
+    name: Collect exact-SHA release evidence
+    needs:
+      - identity
+      - build
+      - test
+      - package
+    if: ${{ needs.build.result == 'success' && needs.test.result == 'success' && needs.package.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-package-*-${{ needs.identity.outputs.source_sha }}
+          path: package-evidence
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-provenance-${{ needs.identity.outputs.source_sha }}
+          path: release-evidence
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-startup-smoke-*-${{ needs.identity.outputs.source_sha }}
+          path: startup-smoke-evidence
+
+      - name: Verify matching-host startup-smoke evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find startup-smoke-evidence -name startup-smoke-report.json -type f | sort)
+          test "${#reports[@]}" -eq 6
+          passing=0
+          for report in "${reports[@]}"; do
+            jq -e --arg sha '${{ needs.identity.outputs.source_sha }}' '
+              .schema_version == 1
+              and .evidence_class == "E4 Packaging/actual matching CI host"
+              and .source_sha == $sha
+              and .self_contained == true
+              and (.archive_sha256 | test("^[0-9a-f]{64}$"))
+              and (.app_version | test("^[0-9]+\\.[0-9]+\\.[0-9]+"))
+              and ((.status == "PASS" and .matching_host == true and .direct_apphost_no_dotnet_guard == "PASS" and .startup_observation == "PROCESS_RUNNING_AFTER_BOUNDED_WAIT" and (.cleanup == "PROCESS_EXITED_AFTER_BOUNDED_SHUTDOWN" or .cleanup == "PROCESS_TREE_CLEANED_AFTER_BOUNDED_SHUTDOWN"))
+                   or (.status == "NOT_RUN" and (.result_reason == "RUNNER_OS_MISMATCH" or .result_reason == "RUNNER_ARCHITECTURE_MISMATCH" or .result_reason == "HEADLESS_DISPLAY_UNAVAILABLE")))' "$report" >/dev/null
+            if jq -e '.status == "PASS"' "$report" >/dev/null; then passing=$((passing + 1)); fi
+          done
+          test "$passing" -ge 2
+
+      - name: Verify all immutable package checksums and manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find package-evidence -name '*.zip' -type f | sort)
+          test "${#archives[@]}" -eq 6
+          for archive in "${archives[@]}"; do
+            sidecar="$archive.sha256"
+            test -f "$sidecar"
+            (cd "$(dirname "$archive")" && sha256sum --check "$(basename "$sidecar")")
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICES.md' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICE_INVENTORY.json' >/dev/null
+            notice_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er --arg sha "${{ needs.identity.outputs.source_sha }}" '
+              select(.source_sha == $sha
+                and .self_contained == true
+                and .signing.status == "UNSIGNED"
+                and (.evidence.startup_smoked | startswith("NOT RUN"))
+                and .third_party_notices.path == "THIRD_PARTY_NOTICES.md"
+                and .third_party_notices.inventory_path == "THIRD_PARTY_NOTICE_INVENTORY.json"
+                and (.third_party_notices.runtime_package_count > 0)
+                and .third_party_notices.source_lock == "src/VpsReady.Desktop/packages.lock.json")
+              | .third_party_notices.sha256')"
+            actual_notice_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICES.md | sha256sum | awk '{print $1}')"
+            test "$actual_notice_sha" = "$notice_sha"
+            inventory_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er '.third_party_notices.inventory_sha256')"
+            actual_inventory_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICE_INVENTORY.json | sha256sum | awk '{print $1}')"
+            test "$actual_inventory_sha" = "$inventory_sha"
+          done
+          jq -n --arg sha "${{ needs.identity.outputs.source_sha }}" --arg run "$GITHUB_RUN_ID" \
+            '{schema_version:1,source_sha:$sha,run_id:$run,package_count:6,candidate_status:"BLIND_CI_ARTIFACTS_ONLY",release_decision:"NOT MADE"}' \
+            > release-evidence/release-candidate-manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence-${{ needs.identity.outputs.source_sha }}
+          path: release-evidence
+          if-no-files-found: error
+          retention-days: 30
