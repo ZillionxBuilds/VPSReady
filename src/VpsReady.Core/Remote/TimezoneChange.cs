@@ -7,6 +7,7 @@ public static class TimezoneChangeErrorCatalog
 {
     public const string Validation = "TIMEZONE_VALIDATION_FAILED";
     public const string Confirmation = "TIMEZONE_CONFIRMATION_REQUIRED";
+    public const string StalePlan = "TIMEZONE_PLAN_CHANGED";
     public const string Privilege = "TIMEZONE_PRIVILEGE_FAILED";
     public const string Command = "TIMEZONE_COMMAND_FAILED";
     public const string Parse = "TIMEZONE_PARSE_FAILED";
@@ -16,16 +17,32 @@ public static class TimezoneChangeErrorCatalog
     public const string Unexpected = "TIMEZONE_UNEXPECTED_FAILED";
 
     public static IReadOnlyCollection<string> All { get; } =
-        [Validation, Confirmation, Privilege, Command, Parse, Verification, Timeout, Cancelled, Unexpected];
+        [Validation, Confirmation, StalePlan, Privilege, Command, Parse, Verification, Timeout, Cancelled, Unexpected];
 }
 
 /// <summary>
 /// The raw timezone values are application data for the explicit plan/UI only.
 /// Its string representation deliberately cannot disclose them into a diagnostic sink.
 /// </summary>
-public sealed record TimezoneChangePlan(OperationResult Result, string? CurrentTimezone, string? SelectedTimezone)
+public sealed record TimezoneChangePlan
 {
-    public bool IsReady => Result.Succeeded && CurrentTimezone is not null && SelectedTimezone is not null;
+    private readonly IRemoteTransport? boundTransport;
+
+    public TimezoneChangePlan(OperationResult result, string? currentTimezone, string? selectedTimezone)
+    {
+        Result = result;
+        CurrentTimezone = currentTimezone;
+        SelectedTimezone = selectedTimezone;
+    }
+
+    internal TimezoneChangePlan(OperationResult result, string? currentTimezone, string? selectedTimezone, IRemoteTransport transport)
+        : this(result, currentTimezone, selectedTimezone) => boundTransport = transport ?? throw new ArgumentNullException(nameof(transport));
+
+    public OperationResult Result { get; }
+    public string? CurrentTimezone { get; }
+    public string? SelectedTimezone { get; }
+    public bool IsReady => Result.Succeeded && CurrentTimezone is not null && SelectedTimezone is not null && boundTransport is not null;
+    public bool IsForTransport(IRemoteTransport transport) => ReferenceEquals(boundTransport, transport);
 
     public override string ToString() => "TimezoneChangePlan [safe summary only]";
 }

@@ -7,6 +7,16 @@ stable-release announcement; exact verification belongs to the linked records.
 
 ## Unreleased — v0.1 Core Basic
 
+### System setting plan freshness (review branch)
+
+- Recheck the current hostname or timezone on the planned connection before a
+  confirmed change. Timezone changes also recheck the server's available list.
+- Refuse stale or unavailable evidence without starting the change, and guide
+  the user to review a new plan. Post-change verification remains required.
+
+See [issue #35](https://github.com/ZillionxBuilds/VPSReady/issues/35).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

@@ -451,6 +451,14 @@ public sealed class SystemActionsViewModel : ObservableObject, IDisposable
         {
             Status = "Package selection or versions changed, or could not be revalidated. No upgrade was started. Read a new plan and confirm it again.";
         }
+        else if (workflowErrorCode == HostnameChangeErrorCatalog.StalePlan)
+        {
+            Status = "The current hostname changed or this plan is no longer valid. No hostname change was started. Read a new plan and confirm it again.";
+        }
+        else if (workflowErrorCode == TimezoneChangeErrorCatalog.StalePlan)
+        {
+            Status = "The current timezone or available selections changed. No timezone change was started. Read a new plan and confirm it again.";
+        }
         State = result.Succeeded ? SystemActionsScreenState.Ready : result.Cancelled ? SystemActionsScreenState.Cancelled : SystemActionsScreenState.Failed;
     }
 
