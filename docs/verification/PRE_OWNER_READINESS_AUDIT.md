@@ -5,7 +5,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 `origin/release/0.1.0` at `9965c5bcdb445947d6bd593344fbade62d9c55a4`
 (2026-09-25). The newer [UI PR #14](https://github.com/ZillionxBuilds/VPSReady/pull/14),
 [key-naming PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17), and
-[connection/Activity PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
+[connection/Activity PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19), and
+[Overview PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21)
 are separate, unmerged changes. No result below proves their combined tree.
 
 ## Verdicts and exact baseline
@@ -38,7 +39,7 @@ acceptance criterion is checked against an exact candidate.
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
 | --- | --- | --- | --- |
 | F02 Connection, host trust, Test Connection | `MainWindow.axaml.cs` → `ConnectionOverviewViewModel` → `ConnectionSessionLifecycle` → `SshNetRemoteTransport`; `ConnectionInputValidation`, `KnownHostTrustStore` | `ConnectionInputValidationTests`, `ConnectionSessionLifecycleTests`, `ConnectionSessionLifecycleScenarioTests` | PARTIAL. Invalid-form gap has focused E1/E2/native macOS correction in unmerged [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19) ([#18](https://github.com/ZillionxBuilds/VPSReady/issues/18)); it is **not** release evidence. Recheck other failure classes and changed-host-key UI path; contained production-transport `sshd` test is skipped here; Owner Stage 1 NOT RUN. |
-| F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
+| F03 Overview | `ConnectionOverviewViewModel` → `ServerOverviewReader` and Ubuntu fact commands/parsers | `OverviewJourneyRegressionTests`, connection/overview presentation tests | PARTIAL. A deterministic cancellation/journal race emitted contradictory Succeeded and Cancelled terminal records for one operation ID; focused E1/E2 correction is in unmerged [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21) ([#20](https://github.com/ZillionxBuilds/VPSReady/issues/20)). Verify all 12 fields, partial failures, bounded output and current-session refresh at criterion level; Owner Stage 1 NOT RUN. |
 | F04 UFW firewall | `FirewallViewModel` → `FirewallManagement`, `UfwAllowRuleWorkflow`, `UfwSelectedRuleRemovalWorkflow`, `UfwToggleWorkflow`, `UfwRuleListRefresher` | UFW safety/property/selected-removal unit and scenario suites | PARTIAL. Recheck active SSH port and family-specific guardrails, stale selection, post-apply verification and recovery against current source; Owner Stage 3 NOT RUN. |
 | F05 Local Ed25519 keys | `SshManagementViewModel` → `Ed25519OpenSshKeyPairGenerator`, `ExistingOpenSshKeySelector`; desktop picker | Generator/selector, selected-identity and key-management scenario suites | PARTIAL on release: name is only implicit in OS Save picker. Explicit naming, collision/cancellation regressions and local OpenSSH interoperability are in unmerged PR #17; review and exact-candidate integration pending. Owner Stage 4 NOT RUN. |
 | F06 Public-key deployment and separate login | `SshManagementViewModel` → `PublicKeyDeploymentWorkflow` → Ubuntu authorized-key commands; separate `KeyAuthenticationVerificationWorkflow` | Deployment, selected-identity, key-authentication unit and scenario suites | PARTIAL. Recheck account ownership/permissions, idempotency and fail-closed separate-login results; contained protocol and Owner Stage 4 NOT RUN here. |
@@ -70,11 +71,14 @@ tracks the separate E5 gate.
 
 ## Open decisions and next audit work
 
-- Review PR #14 and #17 independently, then validate their integration on an
+- Review PR #14, #17, #19 and #21 independently, then validate their integration on an
   exact candidate. Do not self-merge to release/main or infer visual acceptance.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
   Its E1/E2/native macOS result is not combined-candidate evidence.
+- Obtain independent review of [PR #21](https://github.com/ZillionxBuilds/VPSReady/pull/21)
+  for F03 terminal-event consistency. Its local cancellation race proof is not
+  an exact combined-candidate or Owner result.
 - Walk every F02–F09 acceptance criterion in the active specification against
   implementation and tests; open focused repair issues for reproducible gaps.
 - Obtain legitimate hosted checks and required external review tracked by
