@@ -1,6 +1,13 @@
 # Owner Real-VPS Test Protocol for `release/*`
 
-Current routing: verify canonical repository `ZillionxBuilds/VPSReady` ID `1361332816` and `middleman/repository-migration/identity-map.json`. Release tracker is new #2; Owner evidence is new #5; new #1 is migration only. All legacy-number references below refer to their mapped purposes, never identically numbered new issues. All current stages remain NOT_RUN until attributable Owner evidence exists for the exact candidate.
+Current routing: verify canonical repository `ZillionxBuilds/VPSReady` ID
+`1361332816` and `middleman/repository-migration/identity-map.json`.
+The current [release tracker is #2](https://github.com/ZillionxBuilds/VPSReady/issues/2),
+[Owner E5 evidence belongs to #5](https://github.com/ZillionxBuilds/VPSReady/issues/5),
+and [#1 is the migration coordinator](https://github.com/ZillionxBuilds/VPSReady/issues/1),
+not the legacy release tracker. Use the identity map for historical references;
+do not reuse old numbers in the new repository. All Owner stages remain
+`NOT_RUN` until attributable evidence exists for the exact candidate.
 
 Status: Binding Owner-validation protocol for v0.1 candidates
 
@@ -124,11 +131,15 @@ Use only on the disposable test VPS.
 - confirm double-click/concurrent mutation protection;
 - inspect Activity for false success or missing verification;
 - export a final support bundle;
-- complete the Owner checklist in release tracker #1 or its Owner-test issue.
+- complete the Owner checklist in the current [release tracker #2](https://github.com/ZillionxBuilds/VPSReady/issues/2)
+  and record stage evidence in [Owner E5 issue #5](https://github.com/ZillionxBuilds/VPSReady/issues/5).
 
 ## 10. Reporting a failure
 
-Use the app's **Copy Safe Issue Report** and create a GitHub bug linked to release tracker #1 and the exact release commit.
+Use the app's **Copy Safe Issue Report** and create a GitHub bug linked to the
+current [release tracker #2](https://github.com/ZillionxBuilds/VPSReady/issues/2)
+and exact release commit. Link [Owner E5 issue #5](https://github.com/ZillionxBuilds/VPSReady/issues/5)
+when the failure occurred during the staged Owner test.
 
 Include:
 
