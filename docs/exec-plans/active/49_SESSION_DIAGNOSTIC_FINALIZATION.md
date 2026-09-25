@@ -61,7 +61,7 @@ Pause after the inner workflow returns but before `ApplicationSession` chooses t
 - [x] Known catalogued command IDs no longer falsely block sanitized ZIP export; only top-level event metadata is exempted. Nested context, free text and malformed JSON are tested.
 - [x] E0/E1/E2 and unsigned macOS arm64 E4 at earlier local head `54f65c2`; contained E3, Windows/Linux native and hosted checks NOT RUN.
 - [x] Local composite with exact open PR #21, #23 and #48 heads passed E0/E1/E2 and unsigned macOS arm64 publish; #21 reader conflict resolved in composite only.
-- [ ] Rerun E0–E4 and composite on final head after bundle-scan hardening.
+- [x] Reran E0/E1/E2 and unsigned macOS arm64 E4 after bundle-scan hardening on source head `317f5cd`; composite `483c787` also passed.
 - [ ] Draft PR and external independent review; no integration or Owner E5.
 
 ## 11. Decision log
@@ -87,4 +87,4 @@ Diagnostic persistence is asynchronous; a session can change after an accepted r
 
 ## 14. Outcomes and follow-up
 
-Local correction is not integrated. At `54f65c2`, locked restore, Release -warnaserror build, format and diff checks passed; E1 628 PASS/2 SKIP, E2 176 PASS/3 SKIP. Unsigned self-contained macOS arm64 publish and disconnected-process startup smoke passed; the process was intentionally interrupted, so clean UI exit was not verified. Local composite `92f26ca` with #21/#23/#48 passed E1 634 PASS/2 SKIP and E2 179 PASS/3 SKIP; E0 and macOS arm64 publish also passed. These counts precede the scan hardening; rerun on final head before review. E3 Docker-based local protocol, Windows/Linux native and hosted checks were NOT RUN. External independent review remains required. Track final commit/PR and evidence in the #49 Workpad. No real VPS or Owner E5 claim. Once reviewed, reconcile related drafts before any release gate; main promotion remains separate.
+Local correction is not integrated. At source head `317f5cd`, locked restore, Release -warnaserror build, format and diff checks passed; E1 630 PASS/2 SKIP, E2 176 PASS/3 SKIP. Unsigned self-contained macOS arm64 publish passed; a prior same-source head `54f65c2` remained alive in a disconnected-process startup smoke, then was intentionally interrupted (clean UI exit not verified). Local composite `483c787` with exact open #21/#23/#48 heads passed E1 636 PASS/2 SKIP and E2 179 PASS/3 SKIP; Release -warnaserror build, format/diff checks and unsigned macOS arm64 publish also passed. E3 Docker-based local protocol, Windows/Linux native and hosted checks were NOT RUN. External independent review remains required. Track final commit/PR and evidence in the #49 Workpad. No real VPS or Owner E5 claim. Once reviewed, reconcile related drafts before any release gate; main promotion remains separate.
