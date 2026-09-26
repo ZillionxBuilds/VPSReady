@@ -7,24 +7,38 @@ namespace VpsReady.UnitTests;
 public sealed class SessionOperationDiagnosticsTests
 {
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task MatchingTerminalCandidateRetainsAuthoritativeVerificationAndRecovery(bool succeeded)
+    [InlineData(OperationCompletion.Succeeded)]
+    [InlineData(OperationCompletion.Failed)]
+    [InlineData(OperationCompletion.Cancelled)]
+    public async Task MatchingTerminalCandidateRetainsAuthoritativeVerificationAndRecovery(OperationCompletion completion)
     {
         var sink = new RecordingSink();
         var correlation = CorrelationIds.Create("key_auth_verify");
         var finalization = SessionOperationDiagnostics.ForKeyAuthentication(correlation, sink);
-        var result = succeeded
-            ? OperationResult.Success(correlation.OperationId, OperationState.Unchanged)
-            : OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected,
-                OperationState.Unchanged, OperationVerification.Passed, OperationRecovery.Failed);
+        var result = completion switch
+        {
+            OperationCompletion.Succeeded => OperationResult.Success(correlation.OperationId, OperationState.Unchanged),
+            OperationCompletion.Failed => OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected,
+                OperationState.Unchanged, OperationVerification.Passed, OperationRecovery.Failed),
+            _ => OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged, OperationVerification.Passed),
+        };
         var candidate = new StructuredDiagnosticEvent(
-            succeeded ? DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded : DiagnosticEventCatalog.KeyAuthenticationVerificationFailed,
+            completion switch
+            {
+                OperationCompletion.Succeeded => DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded,
+                OperationCompletion.Failed => DiagnosticEventCatalog.KeyAuthenticationVerificationFailed,
+                _ => DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled,
+            },
             "SSH key authentication",
-            succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error,
+            completion == OperationCompletion.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Error,
             correlation.ForStep("verify"),
             DiagnosticPhase.Verify,
-            succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed,
+            completion switch
+            {
+                OperationCompletion.Succeeded => DiagnosticStatus.Succeeded,
+                OperationCompletion.Failed => DiagnosticStatus.Failed,
+                _ => DiagnosticStatus.Cancelled,
+            },
             "The candidate is awaiting the enclosing session result.",
             ErrorCode: result.ErrorCode?.ToStableCode());
 
