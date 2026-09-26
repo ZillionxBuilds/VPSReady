@@ -980,6 +980,34 @@ Hosted checks, native Windows/Linux, independent QA and an approved
 integrated candidate remain **NOT RUN**.
 E3 was **NOT RUN**; Owner Stage 3/E5 and **REAL VPS: NOT TESTED**.
 
+#### F04 current multi-correction local preflight — 2026-09-26
+
+The **unpublished local** `codex/15-f04-integration-preflight` at
+`3333643264f29f00bb648fa5f2ad87c5ad6ae217` starts from release
+`9965c5b`, retains the local #50/#54/#52 resolution `513d1d3`, and
+merges exact current draft heads #34 `1ef0f61`, #78 `048a7fd`, #80
+`aa8e5ef` and #82 `47207ff`. Three conflict sites needed explicit
+resolution: the toggle helper retains deferred session diagnostics,
+pre-terminal cancellation and the `EndPort is null` exact SSH-allow
+check; two adjacent test conflicts retain both range and malformed-port
+regressions. No source PR or release branch was changed.
+
+A new stateful cross-feature test,
+`scenario.f04.range-cancel-after-preflight`, selects a UDP range and
+cancels just after its fresh listing is returned by a token-ignoring
+transport. It passes **1/1**: no removal command, unchanged simulated
+rules, `Unchanged`/Cancelled and one terminal Cancelled without Success.
+The exact local composite passed E0 locked restore, Release warning-as-
+error build (zero warnings/errors), format and diff checks; E1 full
+**718 PASS/2 SKIP**, E2 full **190 PASS/3 SKIP**. E4 unsigned macOS
+arm64 self-contained publish, Mach-O, embedded exact SHA, artifact-safety
+scan and bounded live-process startup **PASS**; the process was
+deliberately stopped, not cleanly exited or interactively exercised.
+E3 does not prove real UFW behavior and was **NOT RUN** on this composite.
+Hosted checks, native Windows/Linux, independent review, an approved
+**all-repairs** candidate and Owner Stage 3/E5 remain **NOT RUN**.
+**REAL VPS: NOT TESTED**.
+
 ### F08 stale system-plan gap and focused correction — 2026-09-25
 
 Two stateful E2 regressions on the exact release source failed before any
@@ -1561,6 +1589,9 @@ tracks the separate E5 gate.
   PR #50. New-head local #34/#52 and #50/#54/#52 composites are not
   approved release or real-firewall evidence. The latter needs independent
   review of its locally resolved toggle helper before approved integration.
+  The later local F04 preflight `3333643` adds #78/#80/#82 and a
+  range-plus-cancellation scenario, but likewise needs reviewed conflict
+  resolution and an exact approved all-repairs candidate.
 - Obtain independent parser/safety review of [PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78)
   for F04 malformed CIDR output and fail-closed snapshot/selection behavior.
   Its local auto-merge with #34/#68 and E0/E1/E2 passes do not replace hosted
