@@ -158,6 +158,34 @@ QA, hosted/native Windows/Linux checks or approved release integration.
 Owner Stage 4/E5 and
 **REAL VPS: NOT TESTED**.
 
+### F05 named-key UI with current navigation and safety dependencies — 2026-09-26
+
+Local-only `codex/16-latest-ui-compatibility` at
+`e442942d87d0687f6493c194040253db98abae41` starts from unchanged
+release `9965c5b` and integrates current draft PR #14 (`ef9e4a4`),
+PR #17 (`db6289c`), PR #62 (`c8ff7b7`) and PR #66 (`958d913`). All four
+local merges were conflict-free, including the named-key XAML. Exact
+composite E0 locked restore, Release warning-as-error build (zero warnings/
+errors), format and diff checks **PASS**; E1 **647 PASS/3 declared SKIP**
+and E2 **174 PASS/3 declared SKIP**. E3 in disposable Ubuntu Noble ARM64
+Docker with loopback OpenSSH was **3 PASS/0 FAIL/0 SKIP**, including
+generated named-key authentication and wrong-key rejection; retained
+artifact-safety **PASS**. The first container preparation failed before
+testing because a worktree `.git` pointer referred outside the mount; the
+rerun used a Git archive snapshot and passed. No public SSH port, Owner
+material or real VPS was used.
+
+E4 unsigned self-contained macOS arm64 publish, Mach-O/embedded exact SHA,
+artifact-safety and bounded startup **PASS**. Native macOS UI/AX on this
+composite showed a legible selected SSH navigation row without the old visual
+tooltip and an editable key-name field. `../bad` showed validation and
+disabled Generate; `owner-key_2026` re-enabled it and opened the local-folder
+picker; Cancel returned without generation. No key was generated through
+this UI check. Native Windows/Linux desktop, hosted checks, independent QA,
+full all-repairs integration and Owner Stage 4/E5 remain **NOT RUN**.
+This local branch was not pushed or merged to release/main.
+**REAL VPS: NOT TESTED.**
+
 ### Owner navigation-hover report — 2026-09-25 22:27 UTC
 
 The Owner's screenshots show a visible navigation tooltip and unreadable
