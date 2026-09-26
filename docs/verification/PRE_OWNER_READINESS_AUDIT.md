@@ -1903,6 +1903,32 @@ named/direct-route regression passes, but resolved conflicts and local tests
 are not independent review, hosted checks, an approved candidate or E5.
 Native Windows and Owner key-generation Stage 4 remain NOT RUN.
 
+### F05 pre-commit journal-unavailable boundary — 2026-09-26
+
+The exact release also lets a local journal failure escape key generation:
+a deterministic sink rejecting both `LocalKeyGenerationStarted` and the
+subsequent `LocalKeyGenerationFailed` yielded E1 RED 0/1 with an uncaught
+`IOException` from the terminal write. No key files were created; the native
+Avalonia `async void` call path makes this an application-crash risk, but a
+native crash was NOT reproduced. [Issue #104](https://github.com/ZillionxBuilds/VPSReady/issues/104)
+and draft [PR #105](https://github.com/ZillionxBuilds/VPSReady/pull/105)
+stop before file mutation when the start record is unconfirmed, return a
+typed unchanged failure, and preserve failure/cancellation/recovery outcomes
+when their own terminal record cannot be persisted. The UI clears stale key
+selection and provides path-free inspection/retry guidance.
+
+Isolated PR #105 source `7fce17c` has E0 locked restore, zero-warning
+Release build and format PASS; E1 613 PASS/2 SKIP; E2 174 PASS/3 SKIP;
+E3 disposable Ubuntu ARM64 loopback OpenSSH 1 PASS; E4 unsigned macOS ARM64
+publish and five-second startup PASS (intentional termination, not an
+interactive UI or clean-exit check). A **local-only** all-open preflight
+`44225b0` combines #105, #103 and the named-key/cancellation repairs after
+conflict resolution: E0 build/format PASS, E1 947 PASS/3 SKIP, E2
+227 PASS/3 SKIP, E3 contained OpenSSH 3 PASS, E4 unsigned macOS ARM64
+publish/five-second startup PASS. Its focused combined cases pass 10/10.
+This is not independent review, hosted CI, an approved release candidate or
+Owner E5; native Windows and Owner Stage 4 remain NOT RUN.
+
 ## Owner protocol map
 
 All Owner stages are `NOT RUN` for E5, regardless of prior blind tests:
@@ -1933,6 +1959,10 @@ tracks the separate E5 gate.
   in PR #17/#101. Re-run the diagnostic-failure and named/direct-route
   regressions on the exact reviewed integrated candidate; do not mistake the
   local merge preflight or unsigned startup for Owner Stage 4 evidence.
+- Review PR #105 together with PR #103 because both extend the local key
+  result contract and adjacent generator/UI paths. Preserve distinct
+  post-commit success versus pre-commit failure/cancellation guidance and
+  rerun the combined journal-unavailable cases after approved integration.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
   Its E1/E2/native macOS result is not combined-candidate evidence.
