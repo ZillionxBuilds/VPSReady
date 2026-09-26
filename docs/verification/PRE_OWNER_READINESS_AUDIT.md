@@ -2016,6 +2016,18 @@ lacked the operator's `rg` command; a fresh rerun with `grep` passed. This is
 contained Linux E4 startup evidence, not physical Linux desktop QA, a clean
 exit, or a retained official package. The disposable container was removed.
 
+On that unchanged pushed head, direct local self-contained cross-publish also
+passed for `osx-x64`, `linux-x64`, `win-x64` and `win-arm64`. The four apphosts
+had the expected Mach-O x86-64, ELF x86-64, PE x86-64 and PE Aarch64 types;
+each managed Desktop assembly embedded the full `f2c72ee` source SHA and
+passed `eng/verify-artifact-safety.sh`. The macOS x64 process remained live
+under Rosetta translation on an ARM64 host before deliberate Ctrl-C. With the
+above macOS/Linux ARM64 checks, all six configured RIDs have exact-head local
+build/inspection evidence. The task-owned temporary outputs were removed
+after verification; these are rebuildable local cross-builds, **not** native
+Windows/Linux startup results, interactive review, clean-exit proof, or
+official candidate packages.
+
 Hosted checks, official candidate package/provenance, native Windows and
 physical Linux desktop validation, independent review and Owner Stage 0–6/E5
 remain **NOT RUN**.
