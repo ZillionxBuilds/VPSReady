@@ -2028,6 +2028,22 @@ after verification; these are rebuildable local cross-builds, **not** native
 Windows/Linux startup results, interactive review, clean-exit proof, or
 official candidate packages.
 
+The same exact pushed head was also archived into a task-owned disposable
+workspace and passed the repository's `eng/package-artifact.ps1` on local
+Linux ARM64 with SDK 10.0.400 and PowerShell 7.6.4. Its unsigned
+`linux-arm64` ZIP SHA-256 was
+`2b27d13ad8bec1281c547492b271cf1231d62a247bff0d5afa1165a75b4e402c`;
+the sidecar, ZIP integrity, all 229 manifest-listed file hashes, 28 exact
+locked runtime notices and artifact-safety scan passed. In a second
+disposable matching-host container with Xvfb, xauth and libfontconfig1,
+`eng/startup-smoke-package.ps1` passed its no-dotnet guard, bounded apphost
+liveness, bounded shutdown and sanitized report check. The base SDK image
+lacked `jq`, so notice verification ran with host `jq` after packaging; this
+was an operator-tool gap, not a package failure. This exercises the official
+**script path** locally, not GitHub-hosted release CI, physical Linux
+interactive QA, or an approved release-candidate artifact. Generated outputs
+were temporary and are not retained as downloadable evidence.
+
 Hosted checks, official candidate package/provenance, native Windows and
 physical Linux desktop validation, independent review and Owner Stage 0–6/E5
 remain **NOT RUN**.
