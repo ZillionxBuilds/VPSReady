@@ -1985,6 +1985,32 @@ PASS / 3 SKIP**, E2 **227 PASS / 3 SKIP**. E3/E4 on these new combined heads,
 hosted/native cross-platform checks, independent review, approved release
 integration and Owner E5 remain **NOT RUN**.
 
+### F05 diagnostic repairs on the pushed composite review head — 2026-09-26
+
+The existing draft [PR #101](https://github.com/ZillionxBuilds/VPSReady/pull/101)
+now points to `f2c72ee87a18748cc0459b49b1569444ce7a1b5e`. It merged the
+local #103/#105 preflight into its review branch; the merge tree `a06fdb5`
+exactly equals previously tested local `13f8115`. Focused draft PR #103 and
+PR #105 remain open for independent same-class review. Neither those PRs nor
+#101 were merged to release/main.
+
+On the **exact pushed #101 head**, E0 locked restore, Release
+warnings-as-errors build (zero warnings/errors), format and diff PASS; E1
+**954 PASS / 3 fixture SKIP**, E2 **227 PASS / 3 declared SKIP**. E3 used the
+tracked archive in disposable Ubuntu 24.04 ARM64 with loopback-only OpenSSH:
+SSH.NET **3 PASS / 0 FAIL / 0 SKIP** plus host-key, authentication, command
+result and timeout checks. The container had no published port or public SSH
+target; its TRX was not retained after cleanup. E4 unsigned self-contained
+macOS ARM64 publish, exact managed-assembly SHA and artifact-safety PASS; the
+apphost was live for about eight seconds before deliberate Ctrl-C. That is
+not a clean exit or interactive UI proof. The focused #17 native picker fault
+was not exercised in the UI.
+
+Hosted checks, official candidate package/provenance, native Windows/Linux
+execution, independent review and Owner Stage 0–6/E5 remain **NOT RUN**.
+This pushed draft branch is source corrections ready for external review,
+not an approved release candidate. `release/0.1.0` remains `9965c5b`.
+
 ## Owner protocol map
 
 All Owner stages are `NOT RUN` for E5, regardless of prior blind tests:
