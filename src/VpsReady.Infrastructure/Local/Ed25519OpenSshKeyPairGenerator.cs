@@ -137,13 +137,16 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 transactionDirectory = null;
 
                 var operation = OperationResult.Success(correlation.OperationId);
+                // The pair is now committed and verified. A late Cancel action
+                // must not turn this outcome into Unchanged or append a second
+                // contradictory terminal event after success is observed.
                 await PublishAsync(
                     DiagnosticEventCatalog.LocalKeyGenerationSucceeded,
                     correlation,
                     DiagnosticPhase.Verify,
                     DiagnosticStatus.Succeeded,
                     errorCode: null,
-                    cancellationToken).ConfigureAwait(false);
+                    CancellationToken.None).ConfigureAwait(false);
                 return LocalEd25519KeyGenerationResult.Success(
                     operation,
                     new LocalEd25519KeyPairLocation(paths.PrivateFinalPath, paths.PublicFinalPath));

@@ -175,6 +175,85 @@ public sealed class SshManagementViewModelTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LateCancellationAfterPairCommitKeepsGenerationVisibleWhenSelectionIsSkipped(bool named)
+    {
+        await using var workspace = new KeyWorkspace();
+        await using var session = new ApplicationSession();
+        var priorPath = Path.Combine(workspace.Root, "prior-key");
+        var prior = await new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink()).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(priorPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+        Assert.True(prior.Succeeded);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelOnKeySuccessSink(cancellation);
+        using var viewModel = new SshManagementViewModel(
+            session,
+            new Ed25519OpenSshKeyPairGenerator(diagnostics),
+            new ExistingOpenSshKeySelector(diagnostics),
+            new RecordingDeployment(),
+            new RecordingKeyAuthenticationVerifier(),
+            new RecordingConfigEditor(),
+            diagnostics);
+
+        await viewModel.SelectAsync(priorPath);
+        Assert.True(viewModel.HasSelectedKey);
+        viewModel.IsDeploymentConfirmed = true;
+        if (named)
+        {
+            await viewModel.GenerateNamedAsync(workspace.Root, Path.GetFileName(workspace.PrivateKeyPath), cancellation.Token);
+        }
+        else
+        {
+            await viewModel.GenerateAsync(workspace.PrivateKeyPath, cancellation.Token);
+        }
+
+        Assert.True(File.Exists(workspace.PrivateKeyPath));
+        Assert.True(File.Exists(workspace.PublicKeyPath));
+        Assert.False(viewModel.HasSelectedKey);
+        Assert.False(viewModel.IsDeploymentConfirmed);
+        Assert.Equal(SshManagementScreenState.Ready, viewModel.State);
+        Assert.Contains("generated and verified", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("Select existing local key", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain(workspace.Root, viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal(
+            Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationSucceeded).Correlation.OperationId,
+            viewModel.OperationId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationDuringAutomaticSelectionStillExplainsThatGenerationSucceeded(bool named)
+    {
+        await using var session = new ApplicationSession();
+        var selector = new BlockingSelector();
+        var privatePath = Path.Combine(Path.GetTempPath(), "synthetic-selected-key");
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Success(
+            OperationResult.Success("generate-opaque"),
+            new LocalEd25519KeyPairLocation(privatePath, privatePath + ".pub")));
+        using var viewModel = new SshManagementViewModel(
+            session, generator, selector, new RecordingDeployment(),
+            new RecordingKeyAuthenticationVerifier(), new RecordingConfigEditor());
+
+        var generation = named
+            ? viewModel.GenerateNamedAsync(Path.GetDirectoryName(privatePath)!, Path.GetFileName(privatePath))
+            : viewModel.GenerateAsync(privatePath);
+        await selector.Entered.Task;
+        viewModel.Cancel();
+        await generation;
+
+        Assert.Equal(SshManagementScreenState.Cancelled, viewModel.State);
+        Assert.False(viewModel.HasSelectedKey);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Cancelled, viewModel.ErrorCode);
+        Assert.Contains("generated and verified", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("Select existing local key", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain(privatePath, viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("Alias")]
     [InlineData("HostName")]
     [InlineData("UserName")]
