@@ -161,6 +161,29 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         Assert.All(events, item => Assert.True(DiagnosticEventCatalog.IsKnown(item.EventId)));
     }
 
+    [Theory]
+    [InlineData(DiagnosticPhase.Plan)]
+    [InlineData(DiagnosticPhase.Apply)]
+    public async Task CancellationBeforeSelectedRemovalDispatchDoesNotDeleteRule(DiagnosticPhase cancelAtPhase)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(Result("22"), Result(ActiveWithTarget), Result(string.Empty), Result(ActiveWithoutTarget));
+        var diagnostics = new CancellingSanitizedSink(cancellation, item =>
+            item.EventId == DiagnosticEventCatalog.OperationRunning && item.Phase == cancelAtPhase);
+        var workflow = new UfwSelectedRuleRemovalWorkflow(new RedactingDiagnosticSink(new FailClosedRedactor(), diagnostics));
+
+        var result = await workflow.RemoveAsync(
+            transport,
+            new UfwRuleRemovalIntent(Target(ActiveWithTarget).Identity, Confirmed: true),
+            cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
     [Fact]
     public async Task ConfirmedNonSshRangeRemovalRequiresFreshAbsenceProof()
     {
@@ -321,6 +344,22 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class CancellationIgnoringTransport(params RemoteCommandResult[] results) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> queuedResults = new(results);
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command,
+                queuedResults.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : queuedResults.Dequeue(),
+                CancellationToken.None);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class RecordingSanitizedSink : ISanitizedDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
@@ -328,6 +367,22 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Events.Add(diagnosticEvent);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CancellingSanitizedSink(CancellationTokenSource cancellation, Func<StructuredDiagnosticEvent, bool> shouldCancel) : ISanitizedDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+        public Task WriteSanitizedAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            Events.Add(diagnosticEvent);
+            if (shouldCancel(diagnosticEvent))
+            {
+                cancellation.Cancel();
+            }
+
             return Task.CompletedTask;
         }
     }
