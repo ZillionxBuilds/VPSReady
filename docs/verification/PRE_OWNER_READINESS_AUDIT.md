@@ -2054,8 +2054,30 @@ the reason and adds a RED-to-GREEN static guard. Its exact head `8848501`
 passed a separate local `linux-arm64` package-path check: the manifest in the
 ZIP retained `NOT RUN`, named the separate post-package report, and matched
 the exact source SHA; sidecar, ZIP integrity, 28 notices and safety passed.
-This does **not** transfer the `f2c72ee` startup result to `8848501` or
-integrate #107 into #101/release. Independent review and exact combined-head
+The older `f2c72ee` startup result cannot be transferred to `8848501`.
+
+Draft #101 now points to exact pushed composite
+`ff74d2d3ebf932acfd9c2cc32fdd4007090c916a`, merging #107 into the
+**review branch only**. Its merge tree differs from `f2c72ee` only in the two
+intended package profile/static-guard files. On `ff74d2d`, E0 locked restore,
+Release warnings-as-errors build (zero warnings/errors), format, static
+guards and diff passed; E1 **954 PASS / 3 declared SKIP**, and E2
+**227 PASS / 3 declared SKIP**. E3 production SSH.NET against disposable
+loopback-only Ubuntu ARM64 OpenSSH passed **3 / 3** plus host-key,
+authentication, command and timeout checks. Local Linux ARM64 E4 ran
+`eng/package-artifact.ps1`:
+unsigned ZIP SHA-256
+`3324b6517c70e7b74668b2206741951da7332acdd7e921e4dd19c466b45366f2`
+matched its sidecar; ZIP integrity, all 229 manifest hashes, 28 exact locked
+notices and artifact-safety passed. The manifest kept the corrected pre-smoke
+`NOT RUN` reason, while a separate exact-SHA matching-host Xvfb
+`eng/startup-smoke-package.ps1` report passed direct no-dotnet apphost,
+bounded liveness and bounded shutdown. Native macOS ARM64 direct publish
+embedded the same SHA and passed safety; its process remained live about ten
+seconds before deliberate Ctrl-C, not a clean-exit or interactive UI claim.
+All test/package outputs were task-owned and removed after inspection; there
+is no retained hosted artifact. Focused #107 remains open. Neither it nor
+#101 is merged to release/main; independent review and hosted candidate
 validation remain pending.
 
 Hosted checks, official candidate package/provenance, native Windows and
