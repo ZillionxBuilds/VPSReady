@@ -97,16 +97,19 @@ public sealed class RebootWorkflow : IRebootWorkflow
                 return await FailureAsync(correlation, privilege.Result.ErrorCode ?? OperationErrorCode.Privilege, RebootErrorCatalog.Privilege, DiagnosticPhase.Preflight, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             activePhase = DiagnosticPhase.Plan;
             activeCommandId = RemoteCommandCatalog.UbuntuBootIdentityRead;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, activeCommandId, null).ConfigureAwait(false);
             var before = await reconnectTransport.ReadBootIdentityAsync(policy.ConnectTimeout, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!before.IsAvailable || before.Token is null)
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Plan, activeCommandId, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
             }
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             activePhase = DiagnosticPhase.Apply;
             activeCommandId = apply.Id.Value;
             applyAttempted = true;
@@ -134,7 +137,8 @@ public sealed class RebootWorkflow : IRebootWorkflow
         }
         catch (OperationCanceledException)
         {
-            return await CancelledAsync(correlation, 0, RebootReconnectOutcome.Cancelled, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+            return await CancelledAsync(correlation, 0, applyAttempted ? RebootReconnectOutcome.Cancelled : RebootReconnectOutcome.NotStarted,
+                activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
