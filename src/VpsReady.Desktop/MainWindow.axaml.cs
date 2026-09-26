@@ -247,22 +247,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var requestedName = ssh.NewKeyName;
-        if (!VpsReady.Core.Local.LocalSshKeyNamePolicy.IsValid(requestedName))
+        await LocalKeyPickerFlow.GenerateAsync(ssh, ssh.NewKeyName, async () =>
         {
-            return;
-        }
-
-        var selected = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-        {
-            Title = "Choose a local folder for the named SSH key pair",
-            AllowMultiple = false,
+            var selected = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Choose a local folder for the named SSH key pair",
+                AllowMultiple = false,
+            });
+            return selected.Count == 1 ? selected[0].Path.LocalPath : null;
         });
-        var path = selected.Count == 1 ? selected[0].Path.LocalPath : null;
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            await ssh.GenerateNamedAsync(path, requestedName);
-        }
     }
 
     private async void SelectSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -272,16 +265,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var selected = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        await LocalKeyPickerFlow.SelectAsync(ssh, async () =>
         {
-            Title = "Select a local private key",
-            AllowMultiple = false,
+            var selected = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Select a local private key",
+                AllowMultiple = false,
+            });
+            return selected.Count == 1 ? selected[0].Path.LocalPath : null;
         });
-        var path = selected.Count == 1 ? selected[0].Path.LocalPath : null;
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            await ssh.SelectAsync(path);
-        }
     }
 
     private async void DeploySshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
