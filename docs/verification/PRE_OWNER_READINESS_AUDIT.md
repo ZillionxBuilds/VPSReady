@@ -20,6 +20,7 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [connection-identity PR #44](https://github.com/ZillionxBuilds/VPSReady/pull/44),
 [key-transaction PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46),
 [public-key deployment PR #48](https://github.com/ZillionxBuilds/VPSReady/pull/48),
+[session terminal diagnostics PR #50](https://github.com/ZillionxBuilds/VPSReady/pull/50),
 [selected-identity path PR #56](https://github.com/ZillionxBuilds/VPSReady/pull/56),
 [key-generation terminal PR #58](https://github.com/ZillionxBuilds/VPSReady/pull/58),
 [existing-key selection PR #60](https://github.com/ZillionxBuilds/VPSReady/pull/60),
@@ -41,6 +42,42 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
+
+### F06/F09 session terminal evidence with key journey — 2026-09-26 UTC
+
+Exact release-based draft [PR #50](https://github.com/ZillionxBuilds/VPSReady/pull/50)
+head `93622e089de5fda11850a2dac5d1b50dd95fde4f` retains the
+enclosing session's verification and recovery evidence when finalizing a
+matching terminal diagnostic. The correction was prompted by a new
+**RED 0 PASS/1 FAIL** interaction on #23/#48/#50: the separate key-auth
+minimum command passed, then candidate cleanup failed, returning Failed
+with `Verification=Passed`, but the final event had `Verification=null`.
+On the isolated #49 source, generic matching Success/Failed candidates were
+also **RED 0 PASS/2 FAIL**. Three Success/Failed/Cancelled terminal-evidence
+regressions are **GREEN 3/3**; the actual cleanup-failure interaction is
+**GREEN 1/1** on the local combined tree. The final event retains the
+outer operation ID and safe command/phase evidence without exposing the
+cleanup exception or key material.
+
+Isolated PR #50 exact-head E0 locked restore, Release warning-as-error
+build with zero warnings/errors, format/diff **PASS**; E1 **633 PASS/2
+declared SKIP**, E2 **176 PASS/3 declared SKIP**. Disposable Ubuntu Noble
+ARM64 loopback OpenSSH E3 **1 PASS/0 FAIL/0 SKIP**, with host-key, password,
+command and timeout checks **PASS**. Unsigned macOS arm64 E4 publish,
+Mach-O/embedded SHA and artifact-safety scan **PASS**. Native UI/clean exit,
+Windows/Linux hosts and hosted checks **NOT RUN**.
+
+The **local-only, unpushed** `codex/15-key-journey-preflight` at
+`2c1fd7bd6effef915be0fa30fe0c130334b3cdda` includes that exact PR
+head alongside #23/#48 and the F05/F07 key journey. Its one merge
+conflict retained both #23's verified-command cleanup result and #50's
+session-scoped correlation. Exact combined E0 build/format/diff **PASS**;
+E1 **710 PASS/3 SKIP**, E2 **185 PASS/3 SKIP**; contained E3 **3 PASS/0
+FAIL/0 SKIP**, including named-key login and wrong-key refusal. E4 macOS
+ARM64 publish/embedded SHA/artifact scan and disposable Linux ARM64
+publish/eight-second Xvfb startup **PASS**. This is not an approved,
+independently reviewed or hosted candidate. Owner Stage 4/E5 and
+**REAL VPS: NOT TESTED**.
 
 ### F05–F07 current key-journey compatibility preflight — 2026-09-26 UTC
 
