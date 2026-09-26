@@ -87,6 +87,18 @@ This is local-only evidence; **REAL VPS: NOT TESTED.**
 See [issue #29](https://github.com/ZillionxBuilds/VPSReady/issues/29).
 **REAL VPS: NOT TESTED.**
 
+### Local SSH-key error guidance (review branch)
+
+- Local key generation, selection, public-key revalidation and OpenSSH alias
+  errors now show file/config-specific next steps instead of falsely claiming
+  a server response or asking to refresh remote state. Uncertain local edits
+  still warn to inspect the chosen location and backup before retrying.
+- Preserve stable local key-selection error codes across public-key rechecks;
+  remote deployment and authentication warnings remain unchanged.
+
+See [issue #31](https://github.com/ZillionxBuilds/VPSReady/issues/31).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

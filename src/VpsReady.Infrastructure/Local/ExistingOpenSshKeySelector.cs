@@ -47,7 +47,8 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         PublicKeyDeploymentMaterial? material = null;
         if (!selectedKey.Succeeded)
         {
-            return new(OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged), null);
+            return new(OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged),
+                null, ExistingSshKeySelectionErrorCatalog.InvalidTarget);
         }
         var inspected = await InspectAsync(new ExistingSshKeySelectionRequest(selectedKey.Location!.PrivateKeyPath),
             correlation, selectedKey.Metadata!.Fingerprint,
@@ -57,7 +58,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             material?.Dispose();
             material = null;
         }
-        return new(inspected.Operation, material);
+        return new(inspected.Operation, material, inspected.SelectionErrorCode);
     }
 
     // The actual transport consumes this already-parsed key, never reopens a

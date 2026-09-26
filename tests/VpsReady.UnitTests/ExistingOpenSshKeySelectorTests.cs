@@ -63,6 +63,20 @@ public sealed class ExistingOpenSshKeySelectorTests
     }
 
     [Fact]
+    public void PublicReadResultAcceptsOnlyCataloguedLocalFailureCodes()
+    {
+        var failed = VpsReady.Core.Operations.OperationResult.Failure(
+            "local-read-opaque", VpsReady.Core.Operations.OperationErrorCode.Parse,
+            VpsReady.Core.Operations.OperationState.Unchanged);
+
+        Assert.Throws<ArgumentException>(() =>
+            new SelectedPublicKeyReadResult(failed, null, "PRIVATE_PATH_OR_UNTRUSTED_CODE"));
+        var safe = new SelectedPublicKeyReadResult(failed, null, ExistingSshKeySelectionErrorCatalog.Corrupt);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Corrupt, safe.SelectionErrorCode);
+        Assert.DoesNotContain("PRIVATE_PATH_OR_UNTRUSTED_CODE", safe.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SelectsAnEphemeralEd25519KeyWithOnlySafeMetadataAndCorrelatedDiagnostics()
     {
         await using var workspace = new KeyWorkspace();

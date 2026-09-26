@@ -99,14 +99,16 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             if (!read.Operation.Succeeded || material is null || cancellation.IsCancellationRequested)
             {
                 InvalidateSelection();
-                Complete(cancellation.IsCancellationRequested ? OperationResult.Cancellation(read.Operation.OperationId, OperationState.Unchanged) : read.Operation,
-                    null, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
+                CompleteLocal(cancellation.IsCancellationRequested ? OperationResult.Cancellation(read.Operation.OperationId, OperationState.Unchanged) : read.Operation,
+                    cancellation.IsCancellationRequested ? ExistingSshKeySelectionErrorCatalog.Cancelled : read.SelectionErrorCode,
+                    LocalSshAction.ReadPublicKey, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
                 return null;
             }
             var characters = material.CopyForUse();
             try
             {
-                Complete(read.Operation, null, "The validated public key is available for this explicit local view/copy action. Clipboard contents may be read by other applications.", SshManagementScreenState.Ready);
+                CompleteLocal(read.Operation, null, LocalSshAction.ReadPublicKey,
+                    "The validated public key is available for this explicit local view/copy action. Clipboard contents may be read by other applications.", SshManagementScreenState.Ready);
                 return new string(characters);
             }
             finally { Array.Clear(characters); }
@@ -279,13 +281,13 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             // The pair was committed. Cancellation must not leave a previous
             // key selected or conceal that the new local pair now exists.
             InvalidateSelection();
-            Complete(generated.Operation, null,
+            CompleteLocal(generated.Operation, null, LocalSshAction.GenerateKey,
                 "A local key pair was generated and verified. Automatic selection was cancelled. Select existing local key to continue.",
                 SshManagementScreenState.Ready);
             return;
         }
 
-        Complete(generated.Operation, generated.GenerationErrorCode, generated.Succeeded
+        CompleteLocal(generated.Operation, generated.GenerationErrorCode, LocalSshAction.GenerateKey, generated.Succeeded
             ? "A local key pair was generated and verified. Validating its safe selection metadata."
             : null,
             generated.Succeeded ? SshManagementScreenState.Working : null);
@@ -352,7 +354,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             if (materialResult.Material is null)
             {
                 InvalidateSelection();
-                Complete(materialResult.Operation, PublicKeyDeploymentErrorCatalog.InvalidInput);
+                CompleteLocal(materialResult.Operation, materialResult.SelectionErrorCode ?? PublicKeyDeploymentErrorCatalog.InvalidInput, LocalSshAction.ReadPublicKey);
                 Status += " Select the key again before confirming deployment.";
                 return;
             }
@@ -422,7 +424,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 if (validation.Material is null)
                 {
                     InvalidateSelection();
-                    Complete(validation.Operation, KeyAuthenticationVerificationErrorCatalog.InvalidInput);
+                    CompleteLocal(validation.Operation, validation.SelectionErrorCode ?? KeyAuthenticationVerificationErrorCatalog.InvalidInput, LocalSshAction.ReadPublicKey);
                     Status += " Select the key again before testing authentication.";
                     return;
                 }
@@ -505,7 +507,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 request,
                 CorrelationIds.Create("edit_ssh_config"),
                 cancellation.Token).ConfigureAwait(false);
-            Complete(result.Operation, result.ErrorCode, result.Succeeded
+            CompleteLocal(result.Operation, result.ErrorCode, LocalSshAction.EditConfig, result.Succeeded
                 ? "The local OpenSSH alias was verified. It does not change the current server session."
                 : null,
                 result.Succeeded ? SshManagementScreenState.Configured : null);
@@ -551,7 +553,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(SelectedKeyMetadata));
         }
 
-        Complete(selection.Operation, selection.SelectionErrorCode, selection.Succeeded
+        CompleteLocal(selection.Operation, selection.SelectionErrorCode, LocalSshAction.SelectKey, selection.Succeeded
             ? "The local key was validated. Deploy its public companion only after explicit confirmation."
             : null,
             selection.Succeeded ? SshManagementScreenState.KeySelected : null);
@@ -655,16 +657,28 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         OperationResult result,
         string? workflowErrorCode,
         string? succeededStatus = null,
-        SshManagementScreenState? succeededState = null)
+        SshManagementScreenState? succeededState = null,
+        string? failedStatus = null)
     {
         OperationId = result.OperationId;
         ErrorCode = workflowErrorCode ?? result.ErrorCode?.ToStableCode();
         Status = result.Succeeded
             ? succeededStatus ?? "The SSH key action completed and was verified. Review Activity & Diagnostics with this operation ID if needed."
-            : $"{result.UserMessage} {result.NextAction}";
+            : failedStatus ?? $"{result.UserMessage} {result.NextAction}";
         State = result.Succeeded
             ? succeededState ?? SshManagementScreenState.Ready
             : result.Cancelled ? SshManagementScreenState.Cancelled : SshManagementScreenState.Failed;
+    }
+
+    private void CompleteLocal(
+        OperationResult result,
+        string? workflowErrorCode,
+        LocalSshAction action,
+        string? succeededStatus = null,
+        SshManagementScreenState? succeededState = null)
+    {
+        Complete(result, workflowErrorCode, succeededStatus, succeededState,
+            result.Succeeded ? null : LocalSshStatusCatalog.DescribeFailure(action, workflowErrorCode, result));
     }
 
     private void CompletePreconditionFailure(string message)

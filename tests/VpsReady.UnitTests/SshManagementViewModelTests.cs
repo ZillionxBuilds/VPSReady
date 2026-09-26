@@ -254,6 +254,151 @@ public sealed class SshManagementViewModelTests
     }
 
     [Theory]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.InvalidTarget, OperationErrorCode.Validation, "regular local OpenSSH")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.Missing, OperationErrorCode.LocalIo, "not found")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.Permission, OperationErrorCode.LocalIo, "local file permissions")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.Corrupt, OperationErrorCode.Parse, "matching public companion")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.Encrypted, OperationErrorCode.Unsupported, "encrypted")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.Unsupported, OperationErrorCode.Unsupported, "format is not supported")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.LocalIo, OperationErrorCode.LocalIo, "local key could not be read")]
+    [InlineData(ExistingSshKeySelectionErrorCatalog.Cancelled, OperationErrorCode.Cancelled, "selection was cancelled")]
+    public async Task ExistingKeyFailuresUseActionableLocalStatusWithoutExposingPathOrClaimingServerState(
+        string selectionCode, OperationErrorCode error, string expectedText)
+    {
+        await using var session = new ApplicationSession();
+        var operation = error == OperationErrorCode.Cancelled
+            ? OperationResult.Cancellation("select-local-opaque", OperationState.Unchanged)
+            : OperationResult.Failure("select-local-opaque", error, OperationState.Unchanged);
+        var selector = new RecordingSelector(ExistingSshKeySelectionResult.Failure(operation, selectionCode));
+        using var vm = CreateViewModel(session, selector: selector);
+
+        await vm.SelectAsync("private-sensitive-key-path");
+
+        Assert.Equal(error == OperationErrorCode.Cancelled ? SshManagementScreenState.Cancelled : SshManagementScreenState.Failed, vm.State);
+        Assert.Contains(expectedText, vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("remote", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private-sensitive-key-path", vm.Status, StringComparison.Ordinal);
+        Assert.Equal(selectionCode, vm.ErrorCode);
+        Assert.Equal("select-local-opaque", vm.OperationId);
+        Assert.False(vm.HasSelectedKey);
+    }
+
+    [Theory]
+    [InlineData(LocalEd25519KeyGenerationErrorCatalog.Collision, OperationErrorCode.LocalIo, OperationState.Unchanged, "another name or folder")]
+    [InlineData(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery, OperationState.Unknown, "local key recovery")]
+    [InlineData(LocalEd25519KeyGenerationErrorCatalog.Cancelled, OperationErrorCode.Cancelled, OperationState.Unchanged, "generation was cancelled")]
+    public async Task LocalKeyGenerationFailuresNeverPresentRemoteRecoveryAdvice(
+        string generationCode, OperationErrorCode error, OperationState state, string expectedText)
+    {
+        await using var session = new ApplicationSession();
+        var operation = error == OperationErrorCode.Cancelled
+            ? OperationResult.Cancellation("generate-local-opaque", state)
+            : OperationResult.Failure("generate-local-opaque", error, state);
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(operation, generationCode));
+        using var vm = CreateViewModel(session, generator: generator);
+
+        await vm.GenerateAsync("private-sensitive-key-path");
+
+        Assert.Contains(expectedText, vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("remote", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private-sensitive-key-path", vm.Status, StringComparison.Ordinal);
+        Assert.Equal(generationCode, vm.ErrorCode);
+        Assert.Equal("generate-local-opaque", vm.OperationId);
+        if (state == OperationState.Unknown)
+        {
+            Assert.Contains("local state is not confirmed", vm.Status, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Theory]
+    [InlineData(OpenSshConfigEditErrorCatalog.InvalidConfig, OperationErrorCode.Parse, OperationState.Unchanged, "local OpenSSH config")]
+    [InlineData(OpenSshConfigEditErrorCatalog.Permission, OperationErrorCode.LocalIo, OperationState.Unknown, "local OpenSSH config")]
+    [InlineData(OpenSshConfigEditErrorCatalog.Cancelled, OperationErrorCode.Cancelled, OperationState.PartiallyApplied, "local OpenSSH config")]
+    public async Task LocalConfigFailuresKeepLocalStateWarningWithoutClaimingServerState(
+        string configCode, OperationErrorCode error, OperationState state, string expectedText)
+    {
+        await using var session = new ApplicationSession();
+        var operation = error == OperationErrorCode.Cancelled
+            ? OperationResult.Cancellation("config-local-opaque", state)
+            : OperationResult.Failure("config-local-opaque", error, state);
+        var config = new RecordingConfigEditor
+        {
+            Result = OpenSshConfigEditResult.Failure(operation, configCode),
+        };
+        using var vm = CreateViewModel(session, config: config);
+        await vm.SelectAsync("private-sensitive-key-path");
+        vm.Alias = "alias"; vm.HostName = "private-host.invalid"; vm.UserName = "private-user"; vm.Port = "22";
+        vm.IsConfigConfirmed = true;
+
+        await vm.SaveConfigAsync();
+
+        Assert.Equal(1, config.Calls);
+        Assert.Contains(expectedText, vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("remote", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private-sensitive-key-path", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-host.invalid", vm.Status, StringComparison.Ordinal);
+        Assert.Equal(configCode, vm.ErrorCode);
+        Assert.Equal("config-local-opaque", vm.OperationId);
+        if (state != OperationState.Unchanged)
+        {
+            Assert.Contains("local", vm.Status, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("inspect", vm.Status, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task RemoteKeyAuthenticationFailureRetainsRemoteServerGuidance()
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("private-host.invalid", 22, "private-user"), new NoopTransport());
+        var verifier = new RecordingKeyAuthenticationVerifier
+        {
+            Result = new KeyAuthenticationVerificationResult(
+                OperationResult.Failure("remote-failure-opaque", OperationErrorCode.Parse, OperationState.Unchanged),
+                KeyAuthenticationVerificationErrorCatalog.Verification),
+        };
+        using var vm = CreateViewModel(session, verifier: verifier);
+        await vm.SelectAsync("private-sensitive-key-path");
+
+        await vm.VerifyKeyAuthenticationAsync();
+
+        Assert.Equal(SshManagementScreenState.Failed, vm.State);
+        Assert.Contains("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("remote-failure-opaque", vm.OperationId);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Verification, vm.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FailedLocalPublicKeyRereadRetainsLocalErrorCodeAndNoRemoteAdvice()
+    {
+        await using var session = new ApplicationSession();
+        var selector = new RecordingSelector(SuccessSelection("private-sensitive-key-path"))
+        {
+            ReadResult = new SelectedPublicKeyReadResult(
+                OperationResult.Failure("public-read-local-opaque", OperationErrorCode.Parse, OperationState.Unchanged),
+                null,
+                ExistingSshKeySelectionErrorCatalog.Corrupt),
+        };
+        using var vm = CreateViewModel(session, selector: selector);
+        await vm.SelectAsync("private-sensitive-key-path");
+
+        var read = await vm.ReadPublicKeyForCopyAsync();
+
+        Assert.Null(read);
+        Assert.False(vm.HasSelectedKey);
+        Assert.Equal(SshManagementScreenState.Failed, vm.State);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Corrupt, vm.ErrorCode);
+        Assert.Equal("public-read-local-opaque", vm.OperationId);
+        Assert.Contains("local public key", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("server", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("remote", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private-sensitive-key-path", vm.Status, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("Alias")]
     [InlineData("HostName")]
     [InlineData("UserName")]
@@ -423,12 +568,12 @@ public sealed class SshManagementViewModelTests
 
     private static SshManagementViewModel CreateViewModel(
         IApplicationSession session,
+        ILocalEd25519KeyGenerator? generator = null,
         IExistingSshKeySelector? selector = null,
         IPublicKeyDeployment? deployment = null,
         IKeyAuthenticationVerifier? verifier = null,
         RecordingDiagnosticSink? diagnostics = null,
-        RecordingConfigEditor? config = null,
-        ILocalEd25519KeyGenerator? generator = null) => new(
+        RecordingConfigEditor? config = null) => new(
         session,
         generator ?? new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(OperationResult.Failure("generate-not-used", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget)),
         selector ?? new RecordingSelector(SuccessSelection("private-key-path")),
@@ -465,8 +610,9 @@ public sealed class SshManagementViewModelTests
     {
         // Explicit unit fixture payload. Production validation is exercised by
         // SelectedKeyIdentityRegressionTests with real generated disposable pairs.
+        public SelectedPublicKeyReadResult? ReadResult { get; set; }
         public Task<SelectedPublicKeyReadResult> ReadPublicKeyAsync(ExistingSshKeySelectionResult selectedKey, CorrelationIds correlation, CancellationToken cancellationToken) =>
-            Task.FromResult(new SelectedPublicKeyReadResult(OperationResult.Success(correlation.OperationId), new PublicKeyDeploymentMaterial("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest".AsSpan())));
+            Task.FromResult(ReadResult ?? new SelectedPublicKeyReadResult(OperationResult.Success(correlation.OperationId), new PublicKeyDeploymentMaterial("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest".AsSpan())));
 
         public int Calls { get; private set; }
         public virtual Task<ExistingSshKeySelectionResult> SelectAsync(ExistingSshKeySelectionRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
@@ -539,11 +685,12 @@ public sealed class SshManagementViewModelTests
     {
         public int Calls { get; private set; }
         public OpenSshConfigEditRequest? LastRequest { get; private set; }
+        public OpenSshConfigEditResult? Result { get; set; }
         public Task<OpenSshConfigEditResult> AddAliasAsync(OpenSshConfigEditRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
         {
             Calls++;
             LastRequest = request;
-            return Task.FromResult(OpenSshConfigEditResult.Success(OperationResult.Success("config-opaque", OperationState.Unchanged), OpenSshConfigEditDisposition.Created));
+            return Task.FromResult(Result ?? OpenSshConfigEditResult.Success(OperationResult.Success("config-opaque", OperationState.Unchanged), OpenSshConfigEditDisposition.Created));
         }
     }
 
