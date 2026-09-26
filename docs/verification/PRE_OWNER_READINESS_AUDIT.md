@@ -88,7 +88,7 @@ external review of their interaction, not permission to integrate them.
 | E1 unit | macOS arm64 and Ubuntu ARM64: 938 PASS, 3 declared SKIP on each. | Three host/contained prerequisites are separately classified. |
 | E2 stateful simulation | macOS arm64: 227 PASS, 3 declared SKIP. Ubuntu ARM64: 227 PASS, 3 declared SKIP when the built assembly ran nonroot on the container's native filesystem. | An earlier root/bind-mounted Linux run failed one mode-000 permission fixture because its file remained readable; that run is not counted as PASS. No production change was made for this harness artifact. |
 | E3 local protocol | Disposable Ubuntu Noble ARM64 loopback-only OpenSSH: 3/3 production SSH.NET tests PASS, including named-key matching/wrong-key refusal. Host-key, wrong-password, stdout/stderr/exit and timeout checks PASS. | `TestResults/e3-production-sshnet.trx` and `TestResults/e3/local-contained-protocol.txt`; no published port or real VPS. |
-| E4 local packaging/startup | Unsigned self-contained macOS arm64 publish embeds exact SHA and its process started before intentional termination. Unsigned Linux ARM64 publish embeds exact SHA and sustained Xvfb startup for five seconds before intentional timeout. | No clean-exit, interactive UI, official candidate archive, native Windows/x64 or hosted proof. |
+| E4 local packaging/startup | All six configured RIDs cross-published unsigned self-contained apphosts, with expected Mach-O/ELF/PE type and embedded exact SHA; retained-artifact scan PASS. Native macOS arm64 process started before intentional termination; contained Linux ARM64 sustained Xvfb startup for five seconds; osx-x64 sustained a translated Rosetta process until intentional termination. | Cross-publish and translated startup are not native Windows/Linux x64, clean-exit, interactive UI, official candidate archive or hosted proof. |
 | E5 Owner real VPS | **NOT TESTED.** | Owner Stage 0–6 and explicit promotion approval remain separate. |
 
 The first contained Linux build-wrapper attempt could not resolve the
@@ -96,6 +96,19 @@ macOS-hosted worktree Git metadata path inside Docker. A direct publish from
 the same SHA then passed; a separate restore attempt with an explicit RID was
 rejected by the existing lock-file contract before compilation. Neither
 setup failure is a product-test pass or a reason to weaken the lock file.
+The other four direct cross-publishes were osx-x64, linux-x64, win-x64 and
+win-arm64. Only osx-x64 received a translated local startup check; the other
+three have **no** startup proof. The official PowerShell candidate packager
+was **NOT RUN** because `pwsh` is unavailable on this host.
+
+GitHub reports Actions enabled for repository ID `1361332816` but registered
+workflow inventory **0** and historical run count **0**. Draft PR #101 and
+documentation PR #28 both report **no checks**. The default `main` tree has no
+`.github/workflows` files while the release branch has two; this is a likely
+workflow-registration explanation, **not** a verified sole cause. No Actions,
+protection, default-branch or account setting was changed. Hosted validation
+therefore remains **NOT RUN** rather than inferred PASS.
+
 The source is **not** `READY_FOR_OWNER_VPS_TEST` or `READY_FOR_MAIN`:
 semantic merges need external review, hosted Windows/macOS/Linux checks and
 official package evidence are still unverified, and release/main are
