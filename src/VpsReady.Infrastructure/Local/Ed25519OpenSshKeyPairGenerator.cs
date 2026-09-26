@@ -111,13 +111,35 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         string? transactionDirectory = null;
         try
         {
-            await PublishAsync(
-                DiagnosticEventCatalog.LocalKeyGenerationStarted,
-                correlation,
-                DiagnosticPhase.Validate,
-                DiagnosticStatus.Started,
-                errorCode: null,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await PublishAsync(
+                    DiagnosticEventCatalog.LocalKeyGenerationStarted,
+                    correlation,
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Started,
+                    errorCode: null,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // Journal failure precedes all file mutation. Do not create a
+                // private key if even the starting record cannot be trusted.
+                var failed = await FailAsync(
+                    correlation,
+                    LocalEd25519KeyGenerationErrorCatalog.LocalIo,
+                    OperationErrorCode.LocalIo,
+                    OperationState.Unchanged,
+                    OperationVerification.NotRun,
+                    OperationRecovery.NotRequired,
+                    CancellationToken.None,
+                    DiagnosticPhase.Validate).ConfigureAwait(false);
+                return failed.WithUnconfirmedDiagnostic();
+            }
 
             await RecoverMatchingTransactionsAsync(paths, cancellationToken).ConfigureAwait(false);
             ValidateNoCollision(paths);
@@ -276,14 +298,23 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         DiagnosticPhase phase = DiagnosticPhase.Apply)
     {
         var operation = OperationResult.Failure(correlation.OperationId, operationError, state, verification, recovery);
-        await PublishAsync(
-            DiagnosticEventCatalog.LocalKeyGenerationFailed,
-            correlation,
-            recovery == OperationRecovery.Failed ? DiagnosticPhase.Recovery : phase,
-            DiagnosticStatus.Failed,
-            generationErrorCode,
-            CancellationToken.None).ConfigureAwait(false);
-        return LocalEd25519KeyGenerationResult.Failure(operation, generationErrorCode);
+        var result = LocalEd25519KeyGenerationResult.Failure(operation, generationErrorCode);
+        try
+        {
+            await PublishAsync(
+                DiagnosticEventCatalog.LocalKeyGenerationFailed,
+                correlation,
+                recovery == OperationRecovery.Failed ? DiagnosticPhase.Recovery : phase,
+                DiagnosticStatus.Failed,
+                generationErrorCode,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return result.WithUnconfirmedDiagnostic();
+        }
+
+        return result;
     }
 
     private async Task<LocalEd25519KeyGenerationResult> CancelAsync(
@@ -292,14 +323,23 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         OperationVerification verification)
     {
         var operation = OperationResult.Cancellation(correlation.OperationId, state, verification);
-        await PublishAsync(
-            DiagnosticEventCatalog.LocalKeyGenerationCancelled,
-            correlation,
-            DiagnosticPhase.Recovery,
-            DiagnosticStatus.Cancelled,
-            OperationErrorCode.Cancelled.ToStableCode(),
-            CancellationToken.None).ConfigureAwait(false);
-        return LocalEd25519KeyGenerationResult.Failure(operation, LocalEd25519KeyGenerationErrorCatalog.Cancelled);
+        var result = LocalEd25519KeyGenerationResult.Failure(operation, LocalEd25519KeyGenerationErrorCatalog.Cancelled);
+        try
+        {
+            await PublishAsync(
+                DiagnosticEventCatalog.LocalKeyGenerationCancelled,
+                correlation,
+                DiagnosticPhase.Recovery,
+                DiagnosticStatus.Cancelled,
+                OperationErrorCode.Cancelled.ToStableCode(),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return result.WithUnconfirmedDiagnostic();
+        }
+
+        return result;
     }
 
     private Task PublishAsync(

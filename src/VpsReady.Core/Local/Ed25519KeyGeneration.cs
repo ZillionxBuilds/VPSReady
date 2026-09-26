@@ -74,8 +74,9 @@ public sealed class LocalEd25519KeyPairLocation
 /// <summary>
 /// Application-facing local key-generation result. Successful results expose
 /// only locations; failed results retain a stable safe error code and typed
-/// operation outcome. A committed pair may also carry a safe warning if its
-/// terminal diagnostic could not be confirmed. No result exposes key bytes.
+/// operation outcome. A committed pair or a failed/cancelled attempt may
+/// carry a warning if Activity persistence cannot be confirmed. No result
+/// exposes an exception or key bytes.
 /// </summary>
 public sealed class LocalEd25519KeyGenerationResult
 {
@@ -142,6 +143,9 @@ public sealed class LocalEd25519KeyGenerationResult
 
         return new LocalEd25519KeyGenerationResult(operation, keyPair: null, generationErrorCode);
     }
+
+    public LocalEd25519KeyGenerationResult WithUnconfirmedDiagnostic() =>
+        new(Operation, KeyPair, GenerationErrorCode, LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed);
 
     public override string ToString() => "LocalEd25519KeyGenerationResult [safe summary only]";
 }

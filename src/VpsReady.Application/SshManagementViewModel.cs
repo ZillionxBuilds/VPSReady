@@ -278,12 +278,20 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             cancellationToken).ConfigureAwait(false);
         if (generated.DiagnosticWarningCode is not null)
         {
-            // The pair exists, but Activity may not contain its terminal
-            // record. Require an explicit fresh selection before deployment.
             InvalidateSelection();
-            CompleteLocal(generated.Operation, generated.DiagnosticWarningCode, LocalSshAction.GenerateKey,
-                "A local key pair was generated and verified, but its Activity record could not be confirmed. Inspect the chosen folder and Select existing local key before deployment; do not generate the same name again.",
-                SshManagementScreenState.Ready);
+            if (generated.Succeeded)
+            {
+                // A committed pair needs an explicit fresh selection before deployment.
+                CompleteLocal(generated.Operation, generated.DiagnosticWarningCode, LocalSshAction.GenerateKey,
+                    "A local key pair was generated and verified, but its Activity record could not be confirmed. Inspect the chosen folder and Select existing local key before deployment; do not generate the same name again.",
+                    SshManagementScreenState.Ready);
+            }
+            else
+            {
+                CompleteLocal(generated.Operation, generated.GenerationErrorCode, LocalSshAction.GenerateKey);
+                Status += " The local Activity record could not be confirmed. Inspect the chosen folder before retrying; do not assume a key was created or select an unverified key for deployment.";
+            }
+
             return;
         }
 

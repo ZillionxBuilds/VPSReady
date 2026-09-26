@@ -544,6 +544,38 @@ public sealed class SshManagementViewModelTests
     }
 
     [Fact]
+    public async Task UnconfirmedFailureJournalClearsPriorKeyAndShowsPathFreeRecoveryGuidance()
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("private-host.example", 22, "private-user"), new NoopTransport());
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+            OperationResult.Failure("generate-opaque", OperationErrorCode.LocalIo, OperationState.Unchanged),
+            LocalEd25519KeyGenerationErrorCatalog.LocalIo).WithUnconfirmedDiagnostic());
+        var selector = new RecordingSelector(SuccessSelection("prior-private-key"));
+        using var vm = new SshManagementViewModel(session, generator, selector,
+            new RecordingDeployment(), new RecordingKeyAuthenticationVerifier(), new RecordingConfigEditor());
+
+        await vm.SelectAsync("prior-private-key");
+        vm.IsDeploymentConfirmed = true;
+        Assert.True(vm.CanDeploy);
+
+        await vm.GenerateAsync("synthetic-new-private-key");
+
+        Assert.Equal(1, generator.Calls);
+        Assert.Equal(1, selector.Calls);
+        Assert.False(vm.HasSelectedKey);
+        Assert.False(vm.IsDeploymentConfirmed);
+        Assert.False(vm.CanDeploy);
+        Assert.Equal(SshManagementScreenState.Failed, vm.State);
+        Assert.Equal("generate-opaque", vm.OperationId);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.LocalIo, vm.ErrorCode);
+        Assert.Contains("Activity", vm.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Inspect the chosen folder", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic-new-private-key", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-host.example", vm.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task FailedSeparateVerificationNeverReportsKeyAuthenticationSuccessOrChangesCurrentSession()
     {
         await using var session = new ApplicationSession();
