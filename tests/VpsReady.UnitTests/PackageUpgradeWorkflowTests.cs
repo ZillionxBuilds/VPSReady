@@ -47,6 +47,30 @@ public sealed class PackageUpgradeWorkflowTests
         Assert.False(result.Result.Succeeded);
         Assert.Empty(replacement.Commands);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationAroundPlanSuccessProducesOneConsistentTerminalEvent(bool successRecorded)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink(entry =>
+        {
+            if (entry.EventId == (successRecorded ? DiagnosticEventCatalog.PackageUpgradePlanned : DiagnosticEventCatalog.CommandCompleted))
+            {
+                cancellation.Cancel();
+            }
+        });
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(new Transport(Ok("upgrade_plan_packages=1:" + new string('a', 64))), cancellation.Token);
+
+        var terminals = sink.Events.Where(entry => entry.EventId is DiagnosticEventCatalog.PackageUpgradePlanned or DiagnosticEventCatalog.PackageUpgradeCancelled).ToArray();
+        Assert.Single(terminals);
+        Assert.Equal(successRecorded, plan.IsReady);
+        Assert.Equal(successRecorded ? DiagnosticEventCatalog.PackageUpgradePlanned : DiagnosticEventCatalog.PackageUpgradeCancelled, terminals[0].EventId);
+        Assert.Equal(sink.Events[0].Correlation.OperationId, terminals[0].Correlation.OperationId);
+    }
+
     [Fact]
     public void CatalogAllowsOnlyTheNormalBoundedUpgrade()
     {
@@ -157,9 +181,9 @@ public sealed class PackageUpgradeWorkflowTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class Sink : IDiagnosticSink
+    private sealed class Sink(Action<StructuredDiagnosticEvent>? onWrite = null) : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); onWrite?.Invoke(entry); return Task.CompletedTask; }
     }
 }
