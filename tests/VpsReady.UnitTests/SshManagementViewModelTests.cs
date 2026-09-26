@@ -11,6 +11,41 @@ namespace VpsReady.UnitTests;
 public sealed class SshManagementViewModelTests
 {
     [Fact]
+    public async Task NamedGenerationWithProductionGeneratorAndSelectorSelectsVerifiedPairWithoutDeploying()
+    {
+        await using var workspace = new KeyWorkspace();
+        await using var session = new ApplicationSession();
+        var diagnostics = new RecordingDiagnosticSink();
+        var deployment = new RecordingDeployment();
+        using var viewModel = CreateViewModel(
+            session,
+            generator: new Ed25519OpenSshKeyPairGenerator(diagnostics),
+            selector: new ExistingOpenSshKeySelector(diagnostics),
+            deployment: deployment,
+            diagnostics: diagnostics);
+        const string chosenName = "owner_named_key_2026";
+        var privatePath = Path.Combine(workspace.Root, chosenName);
+
+        viewModel.NewKeyName = chosenName;
+        Assert.True(viewModel.CanGenerateKey);
+        await viewModel.GenerateNamedAsync(workspace.Root, viewModel.NewKeyName);
+
+        Assert.True(File.Exists(privatePath));
+        Assert.True(File.Exists(privatePath + ".pub"));
+        Assert.Equal(SshManagementScreenState.KeySelected, viewModel.State);
+        Assert.True(viewModel.HasSelectedKey);
+        Assert.Equal("ed25519", viewModel.SelectedKeyMetadata?.Algorithm);
+        Assert.StartsWith("SHA256:", viewModel.SelectedKeyMetadata?.Fingerprint);
+        Assert.False(viewModel.IsDeploymentConfirmed);
+        Assert.False(viewModel.CanDeploy);
+        Assert.Equal(0, deployment.Calls);
+        Assert.DoesNotContain(workspace.Root, viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains(workspace.Root, StringComparison.Ordinal));
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationSucceeded);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.ExistingKeySelectionSucceeded);
+    }
+
+    [Fact]
     public async Task NamedGenerationUsesChosenFolderAndNameThenSelectsWithoutPublishingItsPath()
     {
         var root = CreateTemporaryDirectory();
