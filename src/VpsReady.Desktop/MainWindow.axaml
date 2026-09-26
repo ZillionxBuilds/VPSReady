@@ -248,18 +248,18 @@
               <TextBlock Classes="section-title" Text="SSH connection" />
               <StackPanel Spacing="5">
                 <TextBlock Classes="field-label" Text="Host or IP address" />
-                <TextBox x:Name="ConnectionHost" AutomationProperties.Name="Host or IP address" />
+                <TextBox x:Name="ConnectionHost" AutomationProperties.Name="Host or IP address" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                 <TextBlock Classes="field-hint" Text="For example, example.com or 203.0.113.10" />
               </StackPanel>
               <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
                 <StackPanel Spacing="5">
                   <TextBlock Classes="field-label" Text="SSH port" />
-                  <TextBox x:Name="ConnectionPort" AutomationProperties.Name="SSH port" />
+                  <TextBox x:Name="ConnectionPort" AutomationProperties.Name="SSH port" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                   <TextBlock Classes="field-hint" Text="Blank uses 22" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Spacing="5">
                   <TextBlock Classes="field-label" Text="Username" />
-                  <TextBox x:Name="ConnectionUser" AutomationProperties.Name="Username" />
+                  <TextBox x:Name="ConnectionUser" AutomationProperties.Name="Username" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                 </StackPanel>
               </Grid>
               <StackPanel Spacing="5">

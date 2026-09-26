@@ -99,6 +99,17 @@ See [issue #29](https://github.com/ZillionxBuilds/VPSReady/issues/29).
 See [issue #31](https://github.com/ZillionxBuilds/VPSReady/issues/31).
 **REAL VPS: NOT TESTED.**
 
+### Connection identity and host-key review (review branch)
+
+- Changing the connection host, port or username invalidates the previous
+  verified session before another server action can use it.
+- Invalid connection details, disconnects and cancelled tests clear stale
+  host-key review decisions. A new connection still requires explicit trust,
+  authentication and verification.
+
+See [issue #43](https://github.com/ZillionxBuilds/VPSReady/issues/43).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

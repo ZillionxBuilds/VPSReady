@@ -18,6 +18,8 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private readonly object cancellationGate = new();
     private CancellationTokenSource? connectionCancellation;
     private CancellationTokenSource? overviewCancellation;
+    private CancellationTokenSource? hostTrustCancellation;
+    private long identityRevision;
     private string? observedSessionId;
     private IReadOnlyList<OverviewFactRow> facts = UnknownRows();
     private string status = "No server is connected.";
@@ -40,6 +42,10 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         DisconnectCommand = new DelegateCommand(() => _ = DisconnectAsync());
         lifecycle.ProgressChanged += (_, progress) =>
         {
+            lock (cancellationGate)
+            {
+                if (connectionCancellation?.IsCancellationRequested == true) { return; }
+            }
             OperationId = progress.OperationId;
             ErrorCode = progress.ErrorCode;
             State = progress.State switch
@@ -58,7 +64,8 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public ICommand CancelConnectionCommand { get; }
     public ICommand CancelRefreshCommand { get; }
     public bool IsConnecting => connectionCancellation is not null;
-    public bool CanTestConnection => !IsConnecting;
+    public bool CanTestConnection => !IsConnecting && hostTrustCancellation is null;
+    public bool CanEditConnectionIdentity => hostTrustCancellation is null;
     public bool IsRefreshing => overviewCancellation is not null;
     public bool CanRefresh => HasConnectedSession && !IsRefreshing;
     public IReadOnlyList<OverviewFactRow> Facts { get => facts; private set => SetProperty(ref facts, value); }
@@ -128,25 +135,31 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         CancellationTokenSource cancellation;
         lock (cancellationGate)
         {
-            if (connectionCancellation is not null) { return; }
+            if (connectionCancellation is not null || hostTrustCancellation is not null) { return; }
             connectionCancellation = cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         }
+        var revision = Volatile.Read(ref identityRevision);
         OnPropertyChanged(nameof(IsConnecting));
         OnPropertyChanged(nameof(CanTestConnection));
         try
         {
             OperationId = null;
             ErrorCode = null;
+            SetHostTrustReview(null);
             using var transient = SecretInput.TakeForSubmission();
             OnPropertyChanged(nameof(SecretDisplay));
             var validation = ConnectionInputValidator.Validate(host, port, user, transient.Characters, timeout);
             if (!validation.IsValid)
             {
                 var correlation = CorrelationIds.Create("validate");
+                var disconnected = await DisconnectLifecycleSafelyAsync().ConfigureAwait(false);
+                if (revision != Volatile.Read(ref identityRevision)) { return; }
                 OperationId = correlation.OperationId;
                 ErrorCode = OperationErrorCode.Validation.ToStableCode();
                 State = ConnectionScreenState.Failed;
-                Status = DescribeValidationErrors(validation.Errors);
+                Status = DescribeValidationErrors(validation.Errors) + (disconnected
+                    ? string.Empty
+                    : " The previous session is unavailable, but connection cleanup did not finish. Restart the app before reconnecting.");
                 await ReportValidationFailureAsync(correlation).ConfigureAwait(false);
                 return;
             }
@@ -155,6 +168,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
             Status = "Testing the SSH connection…";
             State = ConnectionScreenState.Testing;
             var result = await lifecycle.TestConnectionAsync(input, cancellation.Token).ConfigureAwait(false);
+            if (revision != Volatile.Read(ref identityRevision)) { return; }
             OperationId = result.OperationId;
             ErrorCode = result.Result.ErrorCode?.ToStableCode();
             State = result.Result.Succeeded ? ConnectionScreenState.Connected : result.Result.ErrorCode == OperationErrorCode.HostTrust ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
@@ -239,28 +253,49 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
             return;
         }
 
-        State = ConnectionScreenState.Testing;
-        var result = replaceChanged
-            ? await lifecycle.ReplacePendingChangedHostKeyAsync(cancellationToken).ConfigureAwait(false)
-            : await lifecycle.AcceptPendingUnknownHostKeyAsync(cancellationToken).ConfigureAwait(false);
-        OperationId = result.OperationId;
-        ErrorCode = result.ErrorCode?.ToStableCode();
-        if (result.Succeeded)
+        CancellationTokenSource reviewCancellation;
+        lock (cancellationGate)
         {
-            SetHostTrustReview(null);
-            State = ConnectionScreenState.Disconnected;
-            Status = "The reviewed host key was saved. Re-enter the password and test the connection; no session has been created yet.";
+            if (connectionCancellation is not null || hostTrustCancellation is not null) { return; }
+            hostTrustCancellation = reviewCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         }
-        else
+        var revision = Volatile.Read(ref identityRevision);
+        OnPropertyChanged(nameof(CanTestConnection));
+        OnPropertyChanged(nameof(CanEditConnectionIdentity));
+        try
         {
-            SetHostTrustReview(lifecycle.PendingHostTrustReview);
-            State = HasHostTrustReview ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
-            Status = result.UserMessage;
-        }
+            if (HostTrustReview is null || HostTrustReview.IsChanged != replaceChanged || reviewCancellation.IsCancellationRequested) { return; }
+            State = ConnectionScreenState.Testing;
+            var result = replaceChanged
+                ? await lifecycle.ReplacePendingChangedHostKeyAsync(reviewCancellation.Token).ConfigureAwait(false)
+                : await lifecycle.AcceptPendingUnknownHostKeyAsync(reviewCancellation.Token).ConfigureAwait(false);
+            if (revision != Volatile.Read(ref identityRevision)) { return; }
+            OperationId = result.OperationId;
+            ErrorCode = result.ErrorCode?.ToStableCode();
+            if (result.Succeeded)
+            {
+                SetHostTrustReview(null);
+                State = ConnectionScreenState.Disconnected;
+                Status = "The reviewed host key was saved. Re-enter the password and test the connection; no session has been created yet.";
+            }
+            else
+            {
+                SetHostTrustReview(lifecycle.PendingHostTrustReview);
+                State = HasHostTrustReview ? ConnectionScreenState.TrustRequired : ConnectionScreenState.Failed;
+                Status = result.UserMessage;
+            }
 
-        OverviewStatus = "Unknown — no remote facts are available until a later connection test is verified.";
-        OverviewState = ConnectionScreenState.Unknown;
-        OnPropertyChanged(nameof(HasConnectedSession));
+            OverviewStatus = "Unknown — no remote facts are available until a later connection test is verified.";
+            OverviewState = ConnectionScreenState.Unknown;
+            OnPropertyChanged(nameof(HasConnectedSession));
+        }
+        finally
+        {
+            lock (cancellationGate) { hostTrustCancellation = null; }
+            reviewCancellation.Dispose();
+            OnPropertyChanged(nameof(CanTestConnection));
+            OnPropertyChanged(nameof(CanEditConnectionIdentity));
+        }
     }
 
     private void RefreshSessionState()
@@ -346,6 +381,50 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public void CancelConnection() { lock (cancellationGate) { connectionCancellation?.Cancel(); } }
     public void CancelRefresh() { lock (cancellationGate) { overviewCancellation?.Cancel(); } }
 
+    /// <summary>Called as soon as host, port, or user text changes, before another page can use the old session.</summary>
+    public Task InvalidateForIdentityEditAsync() => InvalidateConnectionAsync("Connection details changed. Test the connection again before using server actions.");
+
+    private async Task InvalidateConnectionAsync(string nextStatus)
+    {
+        var revision = Interlocked.Increment(ref identityRevision);
+        ClearSecretInput();
+        CancelConnection();
+        CancelRefresh();
+        lock (cancellationGate) { hostTrustCancellation?.Cancel(); }
+        SetHostTrustReview(null);
+        Facts = UnknownRows();
+        OverviewState = ConnectionScreenState.Unknown;
+        OverviewStatus = "Unknown — remote facts require a new verified session and refresh.";
+        OperationId = null;
+        ErrorCode = null;
+        State = ConnectionScreenState.Disconnected;
+
+        var disconnected = await DisconnectLifecycleSafelyAsync().ConfigureAwait(false);
+        if (revision != Volatile.Read(ref identityRevision)) { return; }
+        RefreshSessionState();
+        Status = disconnected
+            ? nextStatus
+            : "The previous session is unavailable, but connection cleanup did not finish. Restart the app before reconnecting.";
+    }
+
+    private async Task<bool> DisconnectLifecycleSafelyAsync()
+    {
+        try
+        {
+            await lifecycle.DisconnectAsync().ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            // A disposed or failed lifecycle must not leave a reusable old session.
+            // ApplicationSession clears its snapshot before transport disposal.
+            try { await session.DisconnectAsync().ConfigureAwait(false); }
+            catch { /* The snapshot is invalidated before disposal can fail. */ }
+            // Never surface a raw transport or endpoint exception in the UI.
+            return false;
+        }
+    }
+
     private static readonly string[] FactLabels = ["Distribution / version", "Kernel / architecture", "Hostname", "Uptime", "Remote user", "Privilege", "CPU", "Memory", "Root disk", "Server SSH port", "Firewall availability", "Firewall status"];
     private static OverviewFactRow[] UnknownRows() => FactLabels.Select(label => new OverviewFactRow(label, "Unknown", false)).ToArray();
     private static IReadOnlyList<OverviewFactRow> Rows(ServerFactsSnapshot snapshot) =>
@@ -366,14 +445,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private static OverviewFactRow Row<T>(int index, ServerFact<T> fact, Func<T, string> format) =>
         new(FactLabels[index], fact.IsKnown ? format(fact.Value!) : "Unknown", fact.IsKnown);
 
-    private async Task DisconnectAsync()
-    {
-        ClearSecretInput();
-        CancelConnection();
-        CancelRefresh();
-        await lifecycle.DisconnectAsync().ConfigureAwait(false);
-        RefreshSessionState();
-    }
+    public Task DisconnectAsync() => InvalidateConnectionAsync("No server is connected.");
 
     private void SetHostTrustReview(HostTrustReview? value)
     {
