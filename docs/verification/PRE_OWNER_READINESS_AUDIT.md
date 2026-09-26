@@ -114,16 +114,18 @@ six focused E1 tests are GREEN. Pre-dispatch cancellation returns
 `Cancelled/Unchanged` without an Apply command; after an Apply attempt it
 remains `Cancelled/Unknown` with no false success. Two new E2 stateful-host
 tests confirm pre-Apply cancellation leaves hostname/timezone unchanged and
-emits one correlated Cancelled terminal. Isolated source head
-`2a89b280c59f251d29ad53b53d3bd6ab34d42a57` passed E0 locked restore,
+emits one correlated Preflight/Cancelled terminal without an Apply command ID.
+This phase/command attribution was refined in the follow-up source commit.
+Isolated source head `eb8b31273f6dc9ef43808ace0c66a75efbd7b3f1`
+passed E0 locked restore,
 Release `-warnaserror` build (0 warnings/errors), format and diff checks;
 E1 614 PASS/2 declared SKIP; E2 176 PASS/3 declared SKIP. E3 was NOT RUN
 for the isolated settings fix. E4 unsigned self-contained macOS arm64 publish
 passed with embedded exact source SHA. E5 **REAL VPS: NOT TESTED**.
 
 The **local-only, unpushed** F08 composite at
-`d11dcff1bee7fd3ac690eaf0c3eb1edee20b799e` adds #96 to the prior
-`d478704` preflight. Its manual test conflict resolution retains #35 fresh
+`b1fd875825d92651af541678cb52959e5c34b173` adds the full #96 head
+to the prior `d478704` preflight. Its manual conflict resolution retains #35 fresh
 plan validation plus #95 cancellation regressions; production uses the
 reviewed target from the fresh plan. Exact clean composite E0 locked restore,
 Release `-warnaserror` build (0 warnings/errors), format and diff PASS;
@@ -1767,7 +1769,7 @@ tracks the separate E5 gate.
 - Obtain independent same-class review of [PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96)
   for hostname/timezone Apply and Verify cancellation boundaries. Preserve
   #35 fresh-plan checks with #95 pre-dispatch and post-verify regressions;
-  the `d11dcff` local conflict resolution and E0–E4 passes are compatibility
+  the `b1fd875` local conflict resolution and E0–E4 passes are compatibility
   evidence, not an approved candidate or real settings mutation proof.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
   for F04 pre-terminal and pre-dispatch cancellation across
