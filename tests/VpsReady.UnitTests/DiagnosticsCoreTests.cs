@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Infrastructure.Diagnostics;
@@ -7,6 +9,35 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class DiagnosticsCoreTests
 {
+    [Theory]
+    [InlineData(DiagnosticDataClassification.HostIdentifier, "203.0.113.7", "HOST")]
+    [InlineData(DiagnosticDataClassification.UserName, "ubuntu", "USER")]
+    public void PublicIdentityPseudonymsCannotBeReproducedFromAnUnkeyedDictionary(
+        DiagnosticDataClassification classification,
+        string rawIdentity,
+        string marker)
+    {
+        var firstRedactor = new FailClosedRedactor();
+        var secondRedactor = new FailClosedRedactor();
+
+        var first = firstRedactor.Redact(rawIdentity, classification).SafeText;
+        var repeated = firstRedactor.Redact(rawIdentity, classification).SafeText;
+        var independent = secondRedactor.Redact(rawIdentity, classification).SafeText;
+        var unkeyedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(rawIdentity));
+        var guessableToken = $"[{marker}-{Convert.ToHexString(unkeyedDigest.AsSpan(0, 6))}]";
+
+        Assert.StartsWith($"[{marker}-", first, StringComparison.Ordinal);
+        Assert.Equal(first, repeated);
+        Assert.NotEqual(guessableToken, first);
+        Assert.NotEqual(first, independent);
+        Assert.NotEqual(first, secondRedactor.Redact(first, classification).SafeText);
+        Assert.DoesNotContain(rawIdentity, first, StringComparison.Ordinal);
+        Assert.DoesNotContain(rawIdentity, independent, StringComparison.Ordinal);
+
+        var forgedToken = $"[{marker}-0000000000000000-0000000000000000]";
+        Assert.NotEqual(forgedToken, firstRedactor.Redact(forgedToken, classification).SafeText);
+    }
+
     [Fact]
     public void CorrelationFactoryCreatesOpaqueLinkedIdentifiersAndActivityStates()
     {
