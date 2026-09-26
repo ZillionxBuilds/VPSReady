@@ -289,6 +289,15 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
             return false;
         }
 
+        // IdentityFile expands OpenSSH tokens and environment variables. A
+        // selected literal filename must never silently target another file.
+        // Backslash is a normal filename character on POSIX, not a separator.
+        if (value.Contains('%') || value.Contains("${", StringComparison.Ordinal)
+            || (!OperatingSystem.IsWindows() && value.Contains('\\')))
+        {
+            return false;
+        }
+
         try
         {
             var fullPath = Path.GetFullPath(value);
