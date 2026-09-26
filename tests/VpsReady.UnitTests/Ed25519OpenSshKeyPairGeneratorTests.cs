@@ -100,6 +100,28 @@ public sealed class Ed25519OpenSshKeyPairGeneratorTests
     }
 
     [Fact]
+    public async Task MalformedAbsoluteTargetReturnsSafeValidationResultInsteadOfThrowing()
+    {
+        await using var workspace = new KeyWorkspace();
+        var invalidPath = workspace.Root + Path.DirectorySeparatorChar + "invalid\0key";
+        var diagnostics = new CollectingDiagnosticSink();
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+        var result = await new Ed25519OpenSshKeyPairGenerator(diagnostics).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(invalidPath),
+            correlation,
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.InvalidTarget, result.GenerationErrorCode);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(workspace.Root));
+        var failure = Assert.Single(diagnostics.Events);
+        Assert.Equal(DiagnosticEventCatalog.LocalKeyGenerationFailed, failure.EventId);
+        Assert.Equal(correlation.OperationId, failure.Correlation.OperationId);
+        Assert.DoesNotContain(invalidPath, failure.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UsesTheCentralRedactionBoundaryWithoutOfferingKeyPathsOrMaterialToDiagnostics()
     {
         await using var workspace = new KeyWorkspace();
