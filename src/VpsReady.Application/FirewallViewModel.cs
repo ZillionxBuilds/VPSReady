@@ -450,7 +450,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
             return "The active SSH port has no validated server-side evidence. Refresh before removing a TCP rule.";
         }
 
-        if (current.Protocol == UfwRuleProtocol.Tcp && current.Port == serverSshPort)
+        if (current.Protocol == UfwRuleProtocol.Tcp && serverSshPort is { } activePort && current.ContainsPort(activePort))
         {
             return "The selected rule affects the active SSH port and cannot be removed by the normal flow.";
         }
@@ -567,9 +567,12 @@ public sealed record FirewallRuleRow(
     int Port,
     UfwRuleAction Action,
     UfwIpFamily Family,
-    string Source)
+    string Source,
+    int? EndPort = null)
 {
-    public string Display => $"#{Number} {Action} {Protocol.ToString().ToUpperInvariant()} {Port} from {Source} ({Family})";
+    public string Display => $"#{Number} {Action} {Protocol.ToString().ToUpperInvariant()} {PortDisplay} from {Source} ({Family})";
 
-    public static FirewallRuleRow FromRule(UfwRule rule) => new(rule.Identity, rule.Number, rule.Protocol, rule.Port, rule.Action, rule.Family, rule.Source);
+    public string PortDisplay => EndPort is { } end ? $"{Port}:{end}" : Port.ToString(CultureInfo.InvariantCulture);
+
+    public static FirewallRuleRow FromRule(UfwRule rule) => new(rule.Identity, rule.Number, rule.Protocol, rule.Port, rule.Action, rule.Family, rule.Source, rule.EndPort);
 }

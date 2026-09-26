@@ -33,6 +33,21 @@ public sealed class UfwStoredSshTests
     public void MissingEitherRequiredFamilyNeverProvesSafety(bool allow4, bool allow6) =>
         Assert.False(UfwStoredSshParser.Parse(StoredUfwFixture.Create(allow4: allow4, allow6: allow6))!.HasRequiredAllows);
 
+    [Fact]
+    public void ValidExtraRangeDoesNotBlockStoredSafetyButCannotStandInForExactSshAllow()
+    {
+        const string range = "-A ufw-user-input -p tcp -m multiport --dports 1000:2000 -s 10.0.0.0/8 -j ACCEPT\n";
+        Assert.True(UfwStoredSshParser.Parse(StoredUfwFixture.Create(rules4: range + StoredUfwFixture.Allow(false, 22)))!.HasRequiredAllows);
+        Assert.False(UfwStoredSshParser.Parse(StoredUfwFixture.Create(rules4: range))!.HasRequiredAllows);
+    }
+
+    [Theory]
+    [InlineData("-A ufw-user-input -p tcp -m multiport --dports 2000:1000 -j ACCEPT\n")]
+    [InlineData("-A ufw-user-input -p tcp -m multiport --dports 1000:65536 -j ACCEPT\n")]
+    [InlineData("-A ufw-user-input -p tcp -m multiport --dports 1000:2000 -j DROP\n")]
+    public void InvalidOrBlockingRangeFailsStoredSafetyClosed(string range) =>
+        Assert.Null(UfwStoredSshParser.Parse(StoredUfwFixture.Create(rules4: range + StoredUfwFixture.Allow(false, 22))));
+
     [Theory]
     [InlineData("-A ufw-user-input -p tcp --dport 22 -j DROP\n")]
     [InlineData("-A ufw-user-input -p tcp --dport 22 -j REJECT\n")]

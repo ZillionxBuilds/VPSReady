@@ -68,7 +68,19 @@ public static class UfwStoredSshParser
             // limit, jump, interface restriction or unknown extension is not
             // evidence of safe reachability, even if a later broad allow exists.
             var match = Regex.Match(line, $@"^-A {prefix}-user-(input|output|forward) -p (tcp|udp|all)(?: -d ([0-9a-fA-F:./]+))?(?: --dport ([0-9]+))?(?: -s ([0-9a-fA-F:./]+))? -j ACCEPT$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
-            if (!match.Success || !IsAnyOrNetwork(match.Groups[3].Value, ipv6) || !IsAnyOrNetwork(match.Groups[5].Value, ipv6)) { return false; }
+            if (!match.Success)
+            {
+                // UFW writes a single port interval with the multiport form.
+                // Accept only a bounded ordinary ACCEPT range as a known user
+                // rule; it never substitutes for an exact SSH-port allow.
+                var range = Regex.Match(line, $@"^-A {prefix}-user-(input|output|forward) -p (tcp|udp)(?: -d ([0-9a-fA-F:./]+))? -m multiport --dports ([0-9]+):([0-9]+)(?: -s ([0-9a-fA-F:./]+))? -j ACCEPT$", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100));
+                if (!range.Success || !IsAnyOrNetwork(range.Groups[3].Value, ipv6) || !IsAnyOrNetwork(range.Groups[6].Value, ipv6)
+                    || !int.TryParse(range.Groups[4].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var start)
+                    || !int.TryParse(range.Groups[5].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
+                    || start < 1 || end <= start || end > 65535) { return false; }
+                continue;
+            }
+            if (!IsAnyOrNetwork(match.Groups[3].Value, ipv6) || !IsAnyOrNetwork(match.Groups[5].Value, ipv6)) { return false; }
             if (match.Groups[4].Success && (!int.TryParse(match.Groups[4].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var p) || p is < 1 or > 65535)) { return false; }
             if (match.Groups[1].Value == "input" && match.Groups[2].Value == "tcp"
                 && match.Groups[4].Value == port.ToString(CultureInfo.InvariantCulture)

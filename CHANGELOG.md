@@ -46,6 +46,17 @@ Local OpenSSH/config evidence is not a real-VPS test. **REAL VPS: NOT TESTED.**
 See [issue #35](https://github.com/ZillionxBuilds/VPSReady/issues/35).
 **REAL VPS: NOT TESTED.**
 
+### Firewall port-range compatibility (review branch)
+
+- Show existing numbered UFW TCP/UDP port ranges instead of treating the whole
+  listing as unreadable. Confirmed removal stays bound to the exact interval,
+  family, source, protocol and action, with a fresh absence check.
+- Prevent normal removal of any TCP interval containing the active SSH port;
+  a range never substitutes for an exact SSH allow rule.
+
+See [issue #33](https://github.com/ZillionxBuilds/VPSReady/issues/33).
+This is blind/local verification only; **REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

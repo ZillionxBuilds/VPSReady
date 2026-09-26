@@ -26,6 +26,15 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         [ 1] 22/tcp                     ALLOW IN    Anywhere
         """;
 
+    private const string ActiveWithRange = """
+        Status: active
+
+             To                         Action      From
+             --                         ------      ----
+        [ 1] 22/tcp                     ALLOW IN    Anywhere
+        [ 2] 1000:2000/udp              ALLOW IN    Anywhere
+        """;
+
     [Fact]
     public void IntentRequiresExplicitConfirmationAndCanonicalOpaqueSelection()
     {
@@ -58,6 +67,57 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         Assert.Contains("ufw --force delete 'allow' from '0.0.0.0/0' to any port '8443' proto 'tcp'", shell, StringComparison.Ordinal);
         Assert.DoesNotContain("number=", command.SafeArgumentSummary, StringComparison.Ordinal);
         Assert.DoesNotContain("rule_id", command.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CatalogBuildsBoundedRangeDeletionWithoutRawIdentityOrDisplayNumber()
+    {
+        Assert.True(UfwRuleRemovalRequest.TryCreate(Target(ActiveWithRange), out var request));
+
+        var command = UbuntuFirewallCommandCatalog.CreateSelectedRuleRemovalRequest(request!);
+        var shell = UbuntuFirewallCommandCatalog.RequireShellCommand(command);
+
+        Assert.Equal("action=allow family=ipv4 port=1000:2000 protocol=udp source=0.0.0.0/0", command.SafeArgumentSummary);
+        Assert.Contains("ufw --force delete 'allow' from '0.0.0.0/0' to any port '1000:2000' proto 'udp'", shell, StringComparison.Ordinal);
+        Assert.DoesNotContain("rule_id", command.SafeArgumentSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("number=", command.SafeArgumentSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CatalogKeepsIpv6SourceAndDenyActionBoundToRangeDeletion()
+    {
+        var listing = "Status: active\n\nTo Action From\n-- ------ ----\n[ 1] 1000:2000/tcp (v6) DENY IN 2001:db8::/32 (v6)";
+        Assert.True(UfwRuleRemovalRequest.TryCreate(Target(listing), out var request));
+
+        var command = UbuntuFirewallCommandCatalog.CreateSelectedRuleRemovalRequest(request!);
+        var shell = UbuntuFirewallCommandCatalog.RequireShellCommand(command);
+
+        Assert.Equal("action=deny family=ipv6 port=1000:2000 protocol=tcp source=2001:db8::/32", command.SafeArgumentSummary);
+        Assert.Contains("ufw --force delete 'deny' from '2001:db8::/32' to any port '1000:2000' proto 'tcp'", shell, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("1000:999")]
+    [InlineData("1000:1000")]
+    [InlineData("1000:65536")]
+    [InlineData("1000:2000:3000")]
+    public void CatalogRejectsMalformedOrUntrustedRangeMetadata(string port)
+    {
+        var command = RemoteCommand.Create(
+            RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove),
+            [new("action", "allow"), new("family", "ipv4"), new("port", port), new("protocol", "tcp"), new("source", "0.0.0.0/0")],
+            TimeSpan.FromSeconds(15), OutputCapturePolicy.MetadataOnly, maximumOutputBytes: 0);
+
+        Assert.Throws<ArgumentException>(() => UbuntuFirewallCommandCatalog.RequireShellCommand(command));
+    }
+
+    [Fact]
+    public void RemoteCommandRejectsShellInjectionBeforeCreatingRemovalMetadata()
+    {
+        Assert.Throws<ArgumentException>(() => RemoteCommand.Create(
+            RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove),
+            [new("action", "allow"), new("family", "ipv4"), new("port", "1000:2000' ; echo unsafe"), new("protocol", "tcp"), new("source", "0.0.0.0/0")],
+            TimeSpan.FromSeconds(15), OutputCapturePolicy.MetadataOnly, maximumOutputBytes: 0));
     }
 
     [Fact]
@@ -99,6 +159,50 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         var events = diagnostics.Events.Where(item => item.Correlation.OperationId == result.Result.OperationId).ToArray();
         Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, events[^1].EventId);
         Assert.All(events, item => Assert.True(DiagnosticEventCatalog.IsKnown(item.EventId)));
+    }
+
+    [Fact]
+    public async Task ConfirmedNonSshRangeRemovalRequiresFreshAbsenceProof()
+    {
+        var selected = Target(ActiveWithRange);
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithRange), Result(string.Empty), Result(ActiveWithoutTarget));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).RemoveAsync(transport, new UfwRuleRemovalIntent(selected.Identity, Confirmed: true));
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal("action=allow family=ipv4 port=1000:2000 protocol=udp source=0.0.0.0/0", transport.Commands[2].SafeArgumentSummary);
+        Assert.DoesNotContain(result.Snapshot!.Rules, rule => Equals(rule.Identity, selected.Identity));
+        Assert.Equal(DiagnosticEventCatalog.OperationSucceeded, diagnostics.Events[^1].EventId);
+    }
+
+    [Fact]
+    public async Task ChangingOnlyRangeEndMakesSelectionStaleBeforeApply()
+    {
+        var selected = Target(ActiveWithRange);
+        var changed = ActiveWithRange.Replace("1000:2000", "1000:2001", StringComparison.Ordinal);
+        var transport = new RecordingTransport(Result("22"), Result(changed));
+
+        var result = await Workflow(new RecordingSanitizedSink()).RemoveAsync(transport, new UfwRuleRemovalIntent(selected.Identity, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.True(result.IsStale);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
+    }
+
+    [Fact]
+    public async Task DuplicateSemanticRangeRowsFailBeforeApply()
+    {
+        var duplicate = ActiveWithRange + "\n[ 3] 1000:2000/udp              ALLOW IN    Anywhere";
+        var selected = Target(duplicate);
+        var transport = new RecordingTransport(Result("22"), Result(duplicate));
+
+        var result = await Workflow(new RecordingSanitizedSink()).RemoveAsync(transport, new UfwRuleRemovalIntent(selected.Identity, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
     }
 
     [Fact]
@@ -144,6 +248,37 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         Assert.True(result.IsActiveSshProtected);
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
+    }
+
+    [Theory]
+    [InlineData("1:22/tcp ALLOW IN Anywhere")]
+    [InlineData("21:23/tcp DENY IN 10.0.0.0/8")]
+    [InlineData("22:23/tcp (v6) REJECT IN Anywhere (v6)")]
+    public async Task TcpRangeContainingActiveSshPortIsAlwaysProtected(string row)
+    {
+        var listing = "Status: active\n\nTo Action From\n-- ------ ----\n[ 1] " + row;
+        var selected = Target(listing);
+        var transport = new RecordingTransport(Result("22"), Result(listing));
+
+        var result = await Workflow(new RecordingSanitizedSink()).RemoveAsync(transport, new UfwRuleRemovalIntent(selected.Identity, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.True(result.IsActiveSshProtected);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
+    }
+
+    [Fact]
+    public async Task RangeVerificationMismatchNeverReportsSuccess()
+    {
+        var selected = Target(ActiveWithRange);
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithRange), Result(string.Empty), Result(ActiveWithRange), Result(ActiveWithoutTarget));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).RemoveAsync(transport, new UfwRuleRemovalIntent(selected.Identity, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
     [Fact]
