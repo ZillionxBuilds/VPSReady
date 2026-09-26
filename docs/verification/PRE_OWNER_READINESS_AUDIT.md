@@ -943,6 +943,37 @@ toggle-success helper conflict; that composition was not pushed or approved.
 Independent review, exact approved-candidate checks and Owner Stage 3 remain
 pending. E3 on these branches was **NOT RUN**; E5 **REAL VPS: NOT TESTED**.
 
+#### F04 pre-dispatch cancellation follow-up — 2026-09-26
+
+Same-class review of the existing #51/#52 source found a second boundary:
+an in-flight read or sanitized Plan/Apply callback could cancel the caller
+while a transport still returned a result. Before correction, add/remove and
+toggle paths could dispatch a mutation after cancellation, or classify a
+never-dispatched write as `PartiallyApplied`. Seven new E1 cases were **RED
+0 PASS/7 FAIL** on the relevant previous source, then **GREEN 7/7** on
+draft PR #52 head `a76929af67e4576f336e80638da8b5606322066b`.
+Checks now precede mutation dispatch and follow command results; a write
+already attempted remains conservatively `PartiallyApplied`. The earlier
+terminal and post-success guards remain. A new stateful E2 case,
+`scenario.c305.cancel-before-enable-dispatch`, leaves simulated UFW
+inactive after stored SSH-policy verification and cancellation, while
+reporting prior SSH allow writes as partially applied. No UFW command,
+active-SSH-port policy or confirmation behavior changed.
+
+On this exact isolated head, E0 locked restore, Release `-warnaserror`
+build (zero warnings/errors), format and diff checks **PASS**; E1 full
+**621 PASS/2 SKIP**, E2 full **175 PASS/3 SKIP**. E4 unsigned macOS arm64
+self-contained publish, embedded SHA, Mach-O inspection, artifact-safety
+scan and bounded process startup **PASS**; interactive UI and clean exit
+were **NOT VERIFIED**. A disposable local merge of exact PR #34 head
+`1ef0f617176e6f2b5c1087a4730ea4b80cc962e0` with this #52 head
+was conflict-free: E0 build/format/diff **PASS**, E1 **656 PASS/2 SKIP**,
+E2 **183 PASS/3 SKIP**. It was not pushed or approved. The separate
+#50/#54/#52 combination must be rerun against this new #52 head; older
+composite counts above do not prove it. Hosted checks, native Windows/Linux,
+independent QA and an approved integrated candidate remain **NOT RUN**.
+E3 was **NOT RUN**; Owner Stage 3/E5 and **REAL VPS: NOT TESTED**.
+
 ### F08 stale system-plan gap and focused correction — 2026-09-25
 
 Two stateful E2 regressions on the exact release source failed before any
@@ -1374,6 +1405,12 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 | AC8–9 active SSH port protection before enable/remove | Baseline `UfwToggleWorkflowTests`, `UfwStoredSshTests`, `UfwSafetyPropertyScenarioTests`, `UfwSelectedRuleRemovalWorkflowScenarioTests` require validated server-port evidence and both needed families; PR #34 blocks any TCP interval containing that port and excludes ranges from exact-allow evidence. | Independent active-access check belongs to Owner E5; no lockout proof here. |
 | AC10–12 verify, cancel/failure, stateful fault matrix | `UfwToggleWorkflowScenarioTests`, `UfwAllowRuleWorkflowScenarioTests`, `UfwSafetyPropertyScenarioTests` cover fresh verification, recovery, privilege failure and phase faults. PR #52 adds five RED-to-GREEN pre-terminal cancellation regressions; PR #54 adds a 5-path session-authority E1 matrix, Activity/journal/report lookup and local #50/#54/#52 E0/E1/E2 interaction evidence. | PR #52 and #54 remain unmerged and #54 depends on #50; one toggle helper conflict requires reviewed resolution. Exact approved candidate, supported hosts and Owner Stage 3 NOT RUN. |
 
+F04 AC11 follow-up: the newer isolated PR #52 head `a76929a` additionally
+has seven RED-to-GREEN pre-dispatch cancellation cases and one stateful
+cancel-before-enable case. The earlier #50/#54/#52 interaction evidence is
+for the older #52 head and must be rerun before an integrated-candidate
+claim. None of these blind checks proves real UFW lockout safety.
+
 ### F05–F07 criterion walk on the release source
 
 | Criteria | Source and named blind evidence | Remaining boundary |
@@ -1509,11 +1546,14 @@ tracks the separate E5 gate.
   Its E1/E2 state classifications and macOS publish do not prove real apt
   behavior; combine with #42 on an approved exact candidate before Owner Stage 5.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
-  for F04 pre-terminal cancellation across add/remove/enable/disable/refresh.
+  for F04 pre-terminal and pre-dispatch cancellation across
+  add/remove/enable/disable/refresh, including `Unchanged` before dispatch
+  and `PartiallyApplied` after a write attempt.
   Also review stacked [PR #54](https://github.com/ZillionxBuilds/VPSReady/pull/54)
   for #53 post-terminal session authority and correlation, after dependency
-  PR #50. Local #34/#52 and #50/#54/#52 composites are not approved release
-  or real-firewall evidence; resolve their toggle helper conflict explicitly.
+  PR #50. New-head local #34/#52 and older-head #50/#54/#52 composites are
+  not approved release or real-firewall evidence; rerun the latter against
+  the new #52 head and resolve its toggle helper conflict explicitly.
 - Obtain independent parser/safety review of [PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78)
   for F04 malformed CIDR output and fail-closed snapshot/selection behavior.
   Its local auto-merge with #34/#68 and E0/E1/E2 passes do not replace hosted
