@@ -24,7 +24,7 @@ public sealed class UfwRuleListRefresher
         UfwSnapshot previous,
         CancellationToken cancellationToken = default)
     {
-        var correlation = CorrelationIds.Create("ufw_rule_list_refresh");
+        var correlation = new WorkflowDiagnosticContext(CorrelationIds.Create("ufw_rule_list_refresh"), null);
         return await RefreshCoreAsync(transport, previous, correlation, cancellationToken).ConfigureAwait(false);
     }
 
@@ -33,12 +33,27 @@ public sealed class UfwRuleListRefresher
     /// a user-triggered refresh. This preserves the existing refresh behavior
     /// while projecting a typed outcome rather than remote text or exceptions.
     /// </summary>
-    public async Task<UfwRuleRefreshOperationResult> RefreshOperationAsync(
+    public Task<UfwRuleRefreshOperationResult> RefreshOperationAsync(
         IRemoteTransport transport,
         UfwSnapshot previous,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RefreshOperationCoreAsync(transport, previous, null, cancellationToken);
+
+    public Task<UfwRuleRefreshOperationResult> RefreshOperationAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        RefreshOperationCoreAsync(transport, previous, sessionDiagnostics, cancellationToken);
+
+    private async Task<UfwRuleRefreshOperationResult> RefreshOperationCoreAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
-        var correlation = CorrelationIds.Create("ufw_rule_list_refresh");
+        var correlation = new WorkflowDiagnosticContext(
+            sessionDiagnostics?.Correlation ?? CorrelationIds.Create("ufw_rule_list_refresh"), sessionDiagnostics);
         try
         {
             var refresh = await RefreshCoreAsync(transport, previous, correlation, cancellationToken).ConfigureAwait(false);
@@ -70,7 +85,7 @@ public sealed class UfwRuleListRefresher
     private async Task<UfwRuleRefreshResult> RefreshCoreAsync(
         IRemoteTransport transport,
         UfwSnapshot previous,
-        CorrelationIds correlation,
+        WorkflowDiagnosticContext correlation,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(transport);
@@ -132,7 +147,7 @@ public sealed class UfwRuleListRefresher
     };
 
     private async Task ReportAsync(
-        CorrelationIds correlation,
+        WorkflowDiagnosticContext correlation,
         string eventId,
         DiagnosticPhase phase,
         DiagnosticStatus status,
@@ -144,7 +159,7 @@ public sealed class UfwRuleListRefresher
     {
         try
         {
-            await diagnostics.WriteAsync(
+            await correlation.WriteAsync(diagnostics,
                 new StructuredDiagnosticEvent(
                     eventId,
                     "Firewall",
@@ -156,8 +171,7 @@ public sealed class UfwRuleListRefresher
                     commandId,
                     errorCode?.ToStableCode(),
                     ActionName,
-                    ExitCode: exitCode),
-                cancellationToken).ConfigureAwait(false);
+                    ExitCode: exitCode)).ConfigureAwait(false);
         }
         catch
         {

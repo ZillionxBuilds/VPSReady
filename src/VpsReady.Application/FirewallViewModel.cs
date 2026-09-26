@@ -196,7 +196,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
     {
         var port = int.TryParse(AddPort, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedPort) ? parsedPort : 0;
         var input = new UfwAllowRuleInput(IsTcp ? UfwRuleProtocol.Tcp : UfwRuleProtocol.Udp, port, AddSource, IsIpv4 ? UfwIpFamily.Ipv4 : UfwIpFamily.Ipv6);
-        return RunMutationAsync("add", (transport, token) => firewall.AddAsync(transport, input, token), cancellationToken);
+        return RunMutationAsync("add", (transport, diagnosticScope, token) => firewall.AddAsync(transport, input, diagnosticScope, token), cancellationToken);
     }
 
     public async Task RemoveSelectedAsync(CancellationToken cancellationToken = default)
@@ -214,19 +214,19 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         }
 
         var intent = new UfwRuleRemovalIntent(SelectedRule?.Identity, IsRemoveConfirmed);
-        await RunMutationAsync("remove", (transport, token) => firewall.RemoveAsync(transport, intent, token), cancellationToken).ConfigureAwait(false);
+        await RunMutationAsync("remove", (transport, diagnosticScope, token) => firewall.RemoveAsync(transport, intent, diagnosticScope, token), cancellationToken).ConfigureAwait(false);
     }
 
     public Task EnableAsync(CancellationToken cancellationToken = default)
     {
         var confirmed = IsEnableConfirmed;
-        return RunMutationAsync("enable", (transport, token) => firewall.EnableAsync(transport, confirmed, token), cancellationToken);
+        return RunMutationAsync("enable", (transport, diagnosticScope, token) => firewall.EnableAsync(transport, confirmed, diagnosticScope, token), cancellationToken);
     }
 
     public Task DisableAsync(CancellationToken cancellationToken = default)
     {
         var confirmed = IsDisableConfirmed;
-        return RunMutationAsync("disable", (transport, token) => firewall.DisableAsync(transport, confirmed, token), cancellationToken);
+        return RunMutationAsync("disable", (transport, diagnosticScope, token) => firewall.DisableAsync(transport, confirmed, diagnosticScope, token), cancellationToken);
     }
 
     public void Cancel()
@@ -251,16 +251,19 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
             var currentGeneration = ++generation;
             var previous = snapshot;
             InvalidateListing();
+            var correlation = CorrelationIds.Create("firewall_refresh") with { SessionId = expectedSession! };
+            var operationDiagnostics = SessionOperationDiagnostics.ForFirewall(correlation, diagnostics, "refresh");
             FirewallRefreshOperationResult? completed = null;
             var result = await session.RunOperationForSessionAsync(
-                NewSessionOperationId("refresh"),
+                correlation.OperationId,
                 OperationTimeout,
                 async (transport, token) =>
                 {
-                    completed = await firewall.RefreshAsync(transport, previous, token).ConfigureAwait(false);
+                    completed = await firewall.RefreshAsync(transport, previous, operationDiagnostics, token).ConfigureAwait(false);
                     return completed.Result;
                 },
                 expectedSession!, cancellation.Token).ConfigureAwait(false);
+            await operationDiagnostics.FinalizeAsync(result).ConfigureAwait(false);
 
             if (!MayPublish(expectedSession, currentGeneration)) { return; }
             if (completed is not null && ReferenceEquals(result, completed.Result) && !cancellation.IsCancellationRequested
@@ -290,7 +293,7 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
 
     private async Task RunMutationAsync(
         string action,
-        Func<IRemoteTransport, CancellationToken, Task<FirewallOperationResult>> execute,
+        Func<IRemoteTransport, SessionOperationDiagnostics, CancellationToken, Task<FirewallOperationResult>> execute,
         CancellationToken callerCancellation)
     {
         ArgumentNullException.ThrowIfNull(execute);
@@ -305,16 +308,19 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
             if (!IsCurrentSession(expectedSession)) { return; }
             var currentGeneration = ++generation;
             InvalidateListing();
+            var correlation = CorrelationIds.Create($"firewall_{action}") with { SessionId = expectedSession! };
+            var operationDiagnostics = SessionOperationDiagnostics.ForFirewall(correlation, diagnostics, action);
             FirewallOperationResult? completed = null;
             var result = await session.RunOperationForSessionAsync(
-                NewSessionOperationId(action),
+                correlation.OperationId,
                 OperationTimeout,
                 async (transport, token) =>
                 {
-                    completed = await execute(transport, token).ConfigureAwait(false);
+                    completed = await execute(transport, operationDiagnostics, token).ConfigureAwait(false);
                     return completed.Result;
                 },
                 expectedSession!, cancellation.Token).ConfigureAwait(false);
+            await operationDiagnostics.FinalizeAsync(result).ConfigureAwait(false);
 
             if (!MayPublish(expectedSession, currentGeneration)) { return; }
             if (completed is { Snapshot: not null, SnapshotIsCurrent: true }
@@ -543,8 +549,6 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
         }
         OnOperationAvailabilityChanged();
     }
-
-    private static string NewSessionOperationId(string action) => $"firewall-ui-{action}-{Guid.NewGuid():N}";
 
     public void Dispose()
     {

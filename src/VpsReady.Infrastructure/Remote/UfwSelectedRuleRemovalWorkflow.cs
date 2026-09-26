@@ -24,13 +24,28 @@ public sealed class UfwSelectedRuleRemovalWorkflow
         this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
     }
 
-    public async Task<UfwRuleRemovalOperationResult> RemoveAsync(
+    public Task<UfwRuleRemovalOperationResult> RemoveAsync(
         IRemoteTransport transport,
         UfwRuleRemovalIntent? intent,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        RemoveCoreAsync(transport, intent, null, cancellationToken);
+
+    public Task<UfwRuleRemovalOperationResult> RemoveAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent? intent,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        RemoveCoreAsync(transport, intent, sessionDiagnostics, cancellationToken);
+
+    private async Task<UfwRuleRemovalOperationResult> RemoveCoreAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent? intent,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(transport);
-        var correlation = CorrelationIds.Create("ufw_selected_rule_remove");
+        var correlation = new WorkflowDiagnosticContext(
+            sessionDiagnostics?.Correlation ?? CorrelationIds.Create("ufw_selected_rule_remove"), sessionDiagnostics);
         var listCommand = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.UbuntuUfwRuleListRead);
         var sessionPortCommand = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.SshSessionPortRead);
         await ReportAsync(correlation, DiagnosticEventCatalog.OperationStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, "Selected firewall-rule removal started.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
@@ -150,7 +165,7 @@ public sealed class UfwSelectedRuleRemovalWorkflow
         }
     }
 
-    private async Task<UfwRuleRemovalOperationResult> FailureAfterApplyAsync(CorrelationIds correlation, IRemoteTransport transport, RemoteCommand listCommand, OperationErrorCode originalError, CancellationToken cancellationToken)
+    private async Task<UfwRuleRemovalOperationResult> FailureAfterApplyAsync(WorkflowDiagnosticContext correlation, IRemoteTransport transport, RemoteCommand listCommand, OperationErrorCode originalError, CancellationToken cancellationToken)
     {
         await ReportAsync(correlation, DiagnosticEventCatalog.OperationRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, "The selected rule removal was not verified; refreshing firewall state without further mutation.", CancellationToken.None, listCommand.Id.Value, originalError).ConfigureAwait(false);
         try
@@ -170,7 +185,7 @@ public sealed class UfwSelectedRuleRemovalWorkflow
         }
     }
 
-    private async Task<UfwRuleListRead> ReadAsync(CorrelationIds correlation, DiagnosticPhase phase, IRemoteTransport transport, RemoteCommand command, CancellationToken cancellationToken)
+    private async Task<UfwRuleListRead> ReadAsync(WorkflowDiagnosticContext correlation, DiagnosticPhase phase, IRemoteTransport transport, RemoteCommand command, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var result = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
@@ -179,14 +194,14 @@ public sealed class UfwSelectedRuleRemovalWorkflow
         return UbuntuServerFactParser.ParseUfwRuleList(result);
     }
 
-    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId) =>
+    private async Task ReportCommandAsync(WorkflowDiagnosticContext correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId) =>
         await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", CancellationToken.None, commandId, result.Succeeded ? null : OperationErrorCode.Command, result.Duration, result.ExitCode).ConfigureAwait(false);
 
-    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
+    private async Task ReportAsync(WorkflowDiagnosticContext correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
     {
         try
         {
-            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Firewall", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, errorCode?.ToStableCode(), ActionName, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery), cancellationToken).ConfigureAwait(false);
+            await correlation.WriteAsync(diagnostics, new StructuredDiagnosticEvent(eventId, "Firewall", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, errorCode?.ToStableCode(), ActionName, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery)).ConfigureAwait(false);
         }
         catch
         {
