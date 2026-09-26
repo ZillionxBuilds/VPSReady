@@ -200,6 +200,17 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 new LocalEd25519KeyGenerationRequest(privateKeyPath),
                 CorrelationIds.Create("generate_key"),
                 cancellation.Token).ConfigureAwait(false);
+            if (generated.DiagnosticWarningCode is not null)
+            {
+                // The pair exists, but Activity may not contain its terminal
+                // record. Require an explicit fresh selection before deployment.
+                InvalidateSelection();
+                Complete(generated.Operation, generated.DiagnosticWarningCode,
+                    "A local key pair was generated and verified, but its Activity record could not be confirmed. Inspect the chosen folder and Select existing local key before deployment; do not generate the same name again.",
+                    SshManagementScreenState.Ready);
+                return;
+            }
+
             Complete(generated.Operation, generated.GenerationErrorCode, generated.Succeeded
                 ? "A local key pair was generated and verified. Validating its safe selection metadata."
                 : null,
