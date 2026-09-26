@@ -1880,6 +1880,29 @@ unmerged PRs:
 | AC15 and AC17 startup/failure ID-to-journal correlation | Current release `AppViewModel.CreateSafeStartupFailure` and `MinimalSafeStartupJournal.TryRecord` produce unrelated records; invalid Connection form lacks a correlated validation event, while production journal metadata blocks persistence. Focused E1/E2 corrections are in unmerged PR #19 and #25. | Native forced-startup-failure UI/export, combined candidate correlation and Owner Stage 2/6 NOT RUN. |
 | AC1/4/17 actionable local failure recovery | Current release `StructuredDiagnosticEvent.ToActivityEntry` chooses the same remote-state next step for local key/config failures. Unmerged PR #30 adds explicit local-only event-ID classification; unmerged PR #32 gives inline local-file guidance and preserves the selector code during public-key reread. E1/E2 and a developer-composite macOS flow cover both surfaces. | Exact isolated native invalid-key flow depends on unmerged production journal repair PR #19. Independent review, exact integrated candidate, Windows/Linux native and Owner Stage 2/6 NOT RUN. |
 
+### F05 committed-key diagnostic persistence boundary — 2026-09-26
+
+On the exact current release `9965c5b`, a deterministic sink rejecting the
+terminal `LocalKeyGenerationSucceeded` write left both verified Ed25519 files
+in place but returned `Unchanged` (E1 RED 0/1). This differs from the late
+cancellation addressed by [PR #58](https://github.com/ZillionxBuilds/VPSReady/pull/58).
+[Issue #102](https://github.com/ZillionxBuilds/VPSReady/issues/102) and draft
+[PR #103](https://github.com/ZillionxBuilds/VPSReady/pull/103) keep the
+committed `Applied` outcome, mark Activity persistence unconfirmed, avoid a
+contradictory failure event and require a fresh local-key selection before
+deployment. No key material or path is put in the UI warning.
+
+On isolated PR #103 source `a7c9df9`, E0 Release build/format PASS, E1
+611 PASS/2 SKIP, E2 174 PASS/3 SKIP, E3 disposable Ubuntu ARM64 loopback
+OpenSSH 1 PASS and E4 unsigned macOS ARM64 publish/startup PASS (not an
+interactive UI check). A **local-only** merge preflight `859a61e` combines
+#103 with the all-open composite `2459a35`: E0 build/format PASS, E1
+942 PASS/3 SKIP, E2 227 PASS/3 SKIP, E3 contained OpenSSH 3 PASS and E4
+unsigned macOS ARM64 publish plus five-second startup PASS. Its
+named/direct-route regression passes, but resolved conflicts and local tests
+are not independent review, hosted checks, an approved candidate or E5.
+Native Windows and Owner key-generation Stage 4 remain NOT RUN.
+
 ## Owner protocol map
 
 All Owner stages are `NOT RUN` for E5, regardless of prior blind tests:
@@ -1906,6 +1929,10 @@ tracks the separate E5 gate.
 - Review #31 inline local-key correction in PR #32 before claiming complete
   F05/F09 readiness; #30 Activity and #19 journal repairs are separate
   dependencies.
+- Review PR #103 independently together with PR #58 and the named-key flow
+  in PR #17/#101. Re-run the diagnostic-failure and named/direct-route
+  regressions on the exact reviewed integrated candidate; do not mistake the
+  local merge preflight or unsigned startup for Owner Stage 4 evidence.
 - Obtain independent review of [PR #19](https://github.com/ZillionxBuilds/VPSReady/pull/19)
   for F02 invalid-input correlation and the F09 production journal repair.
   Its E1/E2/native macOS result is not combined-candidate evidence.
