@@ -274,6 +274,7 @@ public sealed class PackageUpgradeWorkflowTests
     [InlineData("2")]
     [InlineData("upgrade_plan_packages=2upgrade_plan_packages=")]
     [InlineData("upgrade_plan_packages=2\nupgrade_plan_packages=3")]
+    [InlineData("upgrade_plan_packages=2\0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     public async Task MalformedPlanRecordsFailClosedBeforeConfirmationCanReachApply(string output)
     {
         var transport = new Transport(Ok(output));

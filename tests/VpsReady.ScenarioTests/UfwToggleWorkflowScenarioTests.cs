@@ -50,6 +50,26 @@ public sealed class UfwToggleWorkflowScenarioTests
         Assert.Contains(state.Ufw.Rules, rule => rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == state.Ssh.ActiveSshPort && rule.IpFamily == ScenarioIpFamily.Ipv4);
         Assert.Contains(state.Ufw.Rules, rule => rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == state.Ssh.ActiveSshPort && rule.IpFamily == ScenarioIpFamily.Ipv6);
         Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+    }
+
+    [Fact]
+    public async Task MalformedSessionPortEvidenceBlocksFirewallEnableBeforeMutation()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.session-port-nul");
+        state.Ufw.Rules.Clear();
+        var faults = new ScenarioFaultPlan();
+        faults.Inject(DiagnosticPhase.Preflight, ScenarioFaultKind.PartialOutput, "c305-session-port-nul", RemoteCommandCatalog.SshSessionPortRead, standardOutput: "22\0");
+        var host = new DeterministicScenarioHost(state, faults);
+        var transport = new PhasedScenarioTransport(host);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead], transport.CommandIds);
+        Assert.Equal(ScenarioUfwStatus.Inactive, state.Ufw.Status);
+        Assert.Empty(state.Ufw.Rules);
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
