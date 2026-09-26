@@ -78,6 +78,15 @@ Local tests and native macOS review are not real-VPS proof. **REAL VPS: NOT TEST
 See [issue #24](https://github.com/ZillionxBuilds/VPSReady/issues/24).
 This is local-only evidence; **REAL VPS: NOT TESTED.**
 
+### Local Activity recovery guidance (review branch)
+
+- Failed or cancelled local key and OpenSSH-config operations now point users
+  to local state, while remote actions keep their remote-state safety warning.
+  Activity guidance remains fixed and does not include key paths or secrets.
+
+See [issue #29](https://github.com/ZillionxBuilds/VPSReady/issues/29).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

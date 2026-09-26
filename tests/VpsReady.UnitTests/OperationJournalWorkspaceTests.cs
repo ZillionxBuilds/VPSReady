@@ -299,6 +299,53 @@ public sealed class OperationJournalWorkspaceTests
     }
 
     [Fact]
+    public async Task LocalKeyFailureJournalProjectsLocalGuidanceWithoutLeakingItsPath()
+    {
+        var root = CreateTemporaryDirectory();
+        const string seededPath = "/private/local-key-test-path";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            redactor.RegisterSensitiveValue(seededPath);
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "localguide", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.LocalKeyGenerationFailed,
+                    "Local SSH key",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Failed,
+                    $"Generation failed at {seededPath}",
+                    ErrorCode: "LOCAL_KEY_TARGET_COLLISION",
+                    Action: "Generate local SSH key"),
+                CancellationToken.None);
+
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal("Review the error and verify the local state before retrying.", entry.NextSafeAction);
+            Assert.Equal(correlation.OperationId, entry.OperationId);
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            Assert.DoesNotContain(seededPath, entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededPath, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededPath, report, StringComparison.Ordinal);
+            Assert.DoesNotContain("verify the remote state", entry.NextSafeAction, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
     {
         var root = CreateTemporaryDirectory();

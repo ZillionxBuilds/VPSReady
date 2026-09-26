@@ -10,6 +10,45 @@ namespace VpsReady.ScenarioTests;
 public sealed class StructuredDiagnosticsScenarioTests
 {
     [Fact]
+    public async Task SanitizedLocalAndRemoteFailuresKeepTheirOwnActivityGuidance()
+    {
+        await using var services = ScenarioComposition.Create("scenario.local-activity-guidance");
+        var redactor = services.GetRequiredService<IRedactor>();
+        var sink = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        const string seededPath = "/private/scenario-local-key-path";
+        redactor.RegisterSensitiveValue(seededPath);
+
+        foreach (var eventId in new[]
+                 {
+                     DiagnosticEventCatalog.LocalKeyGenerationFailed,
+                     DiagnosticEventCatalog.OpenSshConfigEditFailed,
+                     DiagnosticEventCatalog.PublicKeyDeploymentFailed,
+                 })
+        {
+            await sink.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    eventId,
+                    "SSH",
+                    DiagnosticLevel.Error,
+                    CorrelationIds.Create("verify"),
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    $"Failed at {seededPath}",
+                    Action: "Review SSH action"),
+                CancellationToken.None);
+        }
+
+        var entries = recorder.Events.Select(item => item.ToActivityEntry()).ToArray();
+        Assert.Equal(3, entries.Length);
+        Assert.All(entries[..2], entry => Assert.Equal(
+            "Review the error and verify the local state before retrying.", entry.NextSafeAction));
+        Assert.Equal("Review the error and verify the remote state before retrying.", entries[2].NextSafeAction);
+        Assert.DoesNotContain(seededPath, string.Join("\n", entries.Select(item => item.NextSafeAction)), StringComparison.Ordinal);
+        Assert.DoesNotContain(seededPath, recorder.ToJsonLines(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ScenarioPipelineCorrelatesEveryPhaseAndKeepsSeededSecretsOutOfActivityAndJsonl()
     {
         await using var services = ScenarioComposition.Create("scenario.c104.redaction");
