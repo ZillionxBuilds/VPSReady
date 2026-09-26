@@ -42,6 +42,46 @@ are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
 
+### F05–F07 current key-journey compatibility preflight — 2026-09-26 UTC
+
+The **local-only, unpushed** `codex/15-key-journey-preflight` head
+`db15e2050bb11108eb288e9c3c975335e72ba832` starts from current release
+`9965c5b` via the exact #14/#17/#62/#66 UI and named-key heads. It then
+combines the current draft heads for transaction recovery #46, generation
+terminal handling #58, existing-key selection #60/#64, deployment #48,
+separate key authentication #23, OpenSSH alias identity #27/#56/#88 and
+shell fixture #76. All listed heads are ancestors of this exact tree.
+The #58 conflict was resolved in the shared generation path so named and
+direct generation retain both collision guidance and post-commit cancellation
+semantics. Four focused direct/named cancellation cases passed. This is
+compatibility evidence, **not** a reviewed or approved candidate.
+
+- E0 on macOS arm64: locked restore, Release `-warnaserror` solution build
+  with zero warnings/errors, format verification and diff check **PASS**.
+  E1 full Unit **684 PASS/3 declared SKIP**; E2 full Scenario **183
+  PASS/3 declared SKIP**.
+- E3 in disposable Ubuntu Noble ARM64 Docker: local loopback OpenSSH
+  production SSH.NET suite **3 PASS/0 FAIL/0 SKIP**, including named-key
+  authentication and wrong-key refusal. Unknown-host refusal, trusted-host
+  match, password and command-result checks, wrong password and timeout
+  **PASS**. No public port, Owner credential or real host mutation. The
+  container was removed; no retained TRX artifact is claimed.
+- E4: unsigned osx-arm64 self-contained publish **PASS**; Mach-O architecture
+  and embedded exact SHA checked. Native macOS startup/UI on this composite
+  **NOT RUN**. Linux ARM64 self-contained publish and bounded eight-second
+  Xvfb startup in a disposable Docker container **PASS** after installing
+  `libfontconfig1`. The first wrapper attempt failed before publish because
+  the copied worktree's `.git` pointer referred to a host-only path; an
+  explicit locked restore/publish with the exact SHA then passed. Physical
+  Linux and Windows hosts, official packages and hosted checks **NOT RUN**.
+
+Same-class review rejected one exploratory post-terminal cancellation
+hypothesis: a selector that already published authoritative Success must not
+be re-labelled Cancelled merely because the caller token changed afterward.
+The experimental guard/tests were withdrawn before any commit or push; #60
+remains unchanged. Independent QA, reviewed all-repairs integration, Owner
+Stage 4/E5 and **REAL VPS: NOT TESTED**.
+
 ### F07 selected-key freshness before alias creation — 2026-09-26 UTC
 
 Exact release `9965c5b` accepts a previously selected private-key path for
