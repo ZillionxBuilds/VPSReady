@@ -44,12 +44,27 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         DiagnosticEnvironment environment,
         IDiagnosticFolderOpener folderOpener)
     {
+        ArgumentNullException.ThrowIfNull(redactor);
+        ArgumentNullException.ThrowIfNull(environment);
         this.platformPaths = platformPaths;
         this.redactor = redactor;
         this.clock = clock;
-        this.environment = environment;
+        // Environment values reach the journal, report, bundle and manifest.
+        // Sanitize once before any of those surfaces can observe them; merely
+        // checking WasOmitted would miss replacement-only redactions.
+        this.environment = environment with
+        {
+            AppVersion = SanitizeEnvironmentValue(redactor, environment.AppVersion),
+            BuildSha = SanitizeEnvironmentValue(redactor, environment.BuildSha),
+            LocalOs = SanitizeEnvironmentValue(redactor, environment.LocalOs),
+            LocalArchitecture = SanitizeEnvironmentValue(redactor, environment.LocalArchitecture),
+            ArtifactRid = environment.ArtifactRid is null ? null : SanitizeEnvironmentValue(redactor, environment.ArtifactRid),
+        };
         this.folderOpener = folderOpener;
     }
+
+    private static string SanitizeEnvironmentValue(IRedactor redactor, string value) =>
+        Safe(redactor.Redact(value).SafeText);
 
     public async Task WriteSanitizedAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
     {
