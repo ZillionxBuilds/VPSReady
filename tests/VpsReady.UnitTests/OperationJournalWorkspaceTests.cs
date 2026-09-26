@@ -259,6 +259,46 @@ public sealed class OperationJournalWorkspaceTests
     }
 
     [Fact]
+    public async Task ConnectionFormFailureReachesLocalActivityAndJournalWithOpaqueCorrelation()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "uncommitted-9965c5bc", System.Runtime.InteropServices.RuntimeInformation.OSDescription, "Arm64", "osx-arm64"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = CorrelationIds.Create("validate");
+            await sink.WriteAsync(new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                "Connection",
+                DiagnosticLevel.Error,
+                correlation,
+                DiagnosticPhase.Validate,
+                DiagnosticStatus.Failed,
+                "Enter a valid host or IP address. Enter an SSH port from 1 to 65535. Enter a username without spaces. Enter a password using the password field. Correct the indicated fields, then try again.",
+                ErrorCode: OperationErrorCode.Validation.ToStableCode(),
+                Action: "TestConnection",
+                OutputPolicy: OutputCapturePolicy.None), CancellationToken.None);
+
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal(correlation.OperationId, entry.OperationId);
+            Assert.Equal(ActivityState.Failed, entry.State);
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.Contains(correlation.OperationId, journal, StringComparison.Ordinal);
+            Assert.Contains("VALIDATION_FAILED", journal, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
     {
         var root = CreateTemporaryDirectory();

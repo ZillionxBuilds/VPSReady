@@ -1,4 +1,5 @@
 using VpsReady.Application;
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
@@ -7,6 +8,65 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class ConnectionOverviewPresentationTests
 {
+    [Theory]
+    [InlineData("bad host.example", "22", "safe-user", true, "host")]
+    [InlineData("safe.example", "70000", "safe-user", true, "port")]
+    [InlineData("safe.example", "22", "bad user", true, "username")]
+    [InlineData("safe.example", "22", "safe-user", false, "password")]
+    public async Task InvalidConnectionFieldsHaveSafeActionAndCorrelatedFailureWithoutTransport(
+        string host, string port, string user, bool enterPassword, string field)
+    {
+        var lifecycle = new FakeLifecycle(OperationResult.Success("op_unexpected"));
+        var diagnostics = new CollectingDiagnosticSink();
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, new ApplicationSession(), diagnostics: diagnostics);
+        if (enterPassword) { viewModel.AppendSecretText("secret-marker".AsSpan()); }
+
+        await viewModel.TestAsync(host, port, user, TimeSpan.FromSeconds(1));
+
+        Assert.Equal(ConnectionScreenState.Failed, viewModel.State);
+        Assert.StartsWith("op_", viewModel.OperationId);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.Contains(field, viewModel.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("try again", viewModel.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(host, viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain(user, viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-marker", viewModel.Status, StringComparison.Ordinal);
+        Assert.Equal(0, lifecycle.ConnectionAttempts);
+        var entry = Assert.Single(diagnostics.Events);
+        Assert.Equal(DiagnosticEventCatalog.OperationFailed, entry.EventId);
+        Assert.Equal(DiagnosticPhase.Validate, entry.Phase);
+        Assert.Equal("VALIDATION_FAILED", entry.ErrorCode);
+        Assert.Equal(viewModel.OperationId, entry.Correlation.OperationId);
+        Assert.Null(entry.CommandId);
+        Assert.DoesNotContain(host, entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(user, entry.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-marker", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvalidTimeoutHasSafeGuidanceAndValidRetryClearsStaleError()
+    {
+        var lifecycle = new FakeLifecycle(OperationResult.Success("op_verified"));
+        var diagnostics = new CollectingDiagnosticSink();
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, new ApplicationSession(), diagnostics: diagnostics);
+        viewModel.AppendSecretCharacter('s');
+        await viewModel.TestAsync("safe.example", "22", "safe-user", TimeSpan.Zero);
+        Assert.Contains("timeout", viewModel.Status, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        var invalidOperationId = viewModel.OperationId;
+        Assert.Equal(0, lifecycle.ConnectionAttempts);
+
+        viewModel.AppendSecretCharacter('s');
+        await viewModel.TestAsync("safe.example", "22", "safe-user", TimeSpan.FromSeconds(1));
+
+        Assert.Equal(1, lifecycle.ConnectionAttempts);
+        Assert.Equal(ConnectionScreenState.Connected, viewModel.State);
+        Assert.Equal("op_verified", viewModel.OperationId);
+        Assert.NotEqual(invalidOperationId, viewModel.OperationId);
+        Assert.Null(viewModel.ErrorCode);
+        Assert.Single(diagnostics.Events);
+    }
+
     [Fact]
     public async Task ConnectionOverviewViewModelMapsTestingTrustFailureConnectedAndUnknownWithoutExposingIdentity()
     {
@@ -21,6 +81,7 @@ public sealed class ConnectionOverviewPresentationTests
         Assert.Equal(ConnectionScreenState.TrustRequired, viewModel.State);
         Assert.Equal(ConnectionScreenState.Unknown, viewModel.OverviewState);
         Assert.Equal("op_opaque", viewModel.OperationId);
+        Assert.Equal("HOST_TRUST_REQUIRED", viewModel.ErrorCode);
         Assert.DoesNotContain("safe.example", viewModel.Status, StringComparison.Ordinal);
     }
 
@@ -39,6 +100,7 @@ public sealed class ConnectionOverviewPresentationTests
         Assert.Equal(ConnectionScreenState.Connected, viewModel.State);
         Assert.Equal(ConnectionScreenState.Unknown, viewModel.OverviewState);
         Assert.Equal("op_verified", viewModel.OperationId);
+        Assert.Null(viewModel.ErrorCode);
     }
 
     [Fact]
@@ -119,6 +181,7 @@ public sealed class ConnectionOverviewPresentationTests
         public event EventHandler<ConnectionTestProgress>? ProgressChanged;
 
         public char[] ReceivedCharacters { get; private set; } = [];
+        public int ConnectionAttempts { get; private set; }
 
         public bool AcceptedUnknown { get; private set; }
 
@@ -126,6 +189,7 @@ public sealed class ConnectionOverviewPresentationTests
 
         public Task<ConnectionTestResult> TestConnectionAsync(ValidatedConnectionInput input, CancellationToken cancellationToken = default)
         {
+            ConnectionAttempts++;
             ReceivedCharacters = new char[input.Password.Length];
             input.Password.CopyTo(ReceivedCharacters);
             return Task.FromResult(new ConnectionTestResult(result.OperationId, result, false));
@@ -144,5 +208,16 @@ public sealed class ConnectionOverviewPresentationTests
             Task.FromResult(OperationResult.Failure("op_trust_review", OperationErrorCode.HostTrust));
 
         public void Publish(string operationId, ConnectionTestProgressState state) => ProgressChanged?.Invoke(this, new ConnectionTestProgress(operationId, state));
+    }
+
+    private sealed class CollectingDiagnosticSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+        public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            Events.Add(diagnosticEvent);
+            return Task.CompletedTask;
+        }
     }
 }

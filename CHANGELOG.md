@@ -57,6 +57,18 @@ See [issue #35](https://github.com/ZillionxBuilds/VPSReady/issues/35).
 See [issue #33](https://github.com/ZillionxBuilds/VPSReady/issues/33).
 This is blind/local verification only; **REAL VPS: NOT TESTED.**
 
+### Connection validation and local Activity (review branch)
+
+- Invalid connection fields now show field-specific next steps, a fresh opaque
+  operation ID, and a stable validation code without opening SSH or repeating
+  submitted values in diagnostics.
+- Fixed local Activity recording in production builds: the numeric assembly
+  version is now marked as version metadata so fail-closed redaction does not
+  mistake it for a server address and reject the journal event.
+
+See [issue #18](https://github.com/ZillionxBuilds/VPSReady/issues/18).
+Local tests and native macOS review are not real-VPS proof. **REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,
