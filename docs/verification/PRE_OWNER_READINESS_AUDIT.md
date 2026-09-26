@@ -1950,8 +1950,8 @@ passed all **3/3** SSH.NET tests and its loopback host-key, wrong-key/password,
 command-result and timeout checks. No public SSH target or VPS was used.
 
 An unsigned self-contained `osx-arm64` publish of that same clean head passed
-on macOS ARM64; the Mach-O apphost and managed assemblies contain the exact
-revision. The retained artifact safety scan passed, and the process remained
+on macOS ARM64; the apphost is Mach-O ARM64 and the managed assemblies embed
+the exact revision. The retained artifact safety scan passed, and the process remained
 running for about nine seconds before deliberate Ctrl-C termination. This is
 E4 publish/startup observation, **not** clean-exit or interactive UI proof.
 The apphost SHA-256 was
