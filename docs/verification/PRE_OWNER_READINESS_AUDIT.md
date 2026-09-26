@@ -1929,6 +1929,37 @@ publish/five-second startup PASS. Its focused combined cases pass 10/10.
 This is not independent review, hosted CI, an approved release candidate or
 Owner E5; native Windows and Owner Stage 4 remain NOT RUN.
 
+### F05 exact local all-open recheck after named-key route regression — 2026-09-26
+
+Draft source PR #101 now includes commit `12b9d97`, which adds an E1 test of
+`SshManagementViewModel.GenerateNamedAsync` with the **production** Ed25519
+generator and existing-key selector together. On a disposable local directory,
+the chosen name produces the private/public pair and selected Ed25519
+fingerprint metadata. The test also verifies that deployment remains disabled
+without a confirmed session and that UI status/diagnostic messages omit the
+local path. This covers a composition boundary that the earlier recording-fake
+ViewModel test and separate production E3 test did not cover together.
+
+After locally combining #101, #103 and #105, the clean **unpublished**
+integration preflight is `9dcaae2d05fec92b7876fcf8f003bac4880aef5e`.
+Its exact-head Release warnings-as-errors build, format and diff checks pass;
+E1 is **948 PASS / 3 fixture SKIP**, E2 **227 PASS / 3 declared SKIP**.
+The exact tracked `git archive` was exercised in a disposable Ubuntu 24.04
+ARM64 container with no published ports: `eng/run-local-contained-e3.sh`
+passed all **3/3** SSH.NET tests and its loopback host-key, wrong-key/password,
+command-result and timeout checks. No public SSH target or VPS was used.
+
+An unsigned self-contained `osx-arm64` publish of that same clean head passed
+on macOS ARM64; the Mach-O apphost and managed assemblies contain the exact
+revision. The retained artifact safety scan passed, and the process remained
+running for about nine seconds before deliberate Ctrl-C termination. This is
+E4 publish/startup observation, **not** clean-exit or interactive UI proof.
+The apphost SHA-256 was
+`4bea29a1a223431a25d35ef6e114525b9506ea2d616fc8356d0e003e192e3f75`.
+Windows/Linux native execution, official candidate packaging, hosted checks,
+independent review, approved release integration and Owner Stage 0–6/E5 remain
+**NOT RUN**. The current release is still `9965c5b` without these repairs.
+
 ## Owner protocol map
 
 All Owner stages are `NOT RUN` for E5, regardless of prior blind tests:
