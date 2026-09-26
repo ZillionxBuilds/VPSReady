@@ -385,14 +385,20 @@ public sealed class ShellNavigationItem : ObservableObject
 
     public string Label => Page.NavigationLabel;
 
-    public string Hint => $"Open {Label}";
+    public string Hint => IsSelected ? $"Current page: {Label}" : $"Open {Label}";
 
     public ICommand NavigateCommand { get; }
 
     public bool IsSelected
     {
         get => isSelected;
-        internal set => SetProperty(ref isSelected, value);
+        internal set
+        {
+            if (SetProperty(ref isSelected, value))
+            {
+                OnPropertyChanged(nameof(Hint));
+            }
+        }
     }
 }
 
@@ -410,50 +416,51 @@ public sealed record ShellPageViewModel(
     public bool IsSshManagementPage => Page == ShellPage.SshKeysAndConfig;
     public bool IsSystemActionsPage => Page == ShellPage.System;
     public bool IsPlaceholderPage => !Enum.IsDefined(Page);
-    public bool IsConnectionSurfacePage => Page is ShellPage.Connection or ShellPage.Overview;
+    public bool IsConnectionPage => Page == ShellPage.Connection;
+    public bool IsOverviewPage => Page == ShellPage.Overview;
 
     public static ShellPageViewModel Create(ShellPage page) => page switch
     {
         ShellPage.Connection => new(
             page,
             "Connection",
-            "Connect when you are ready",
-            "VPSReady starts disconnected. Connection details and credentials are not shown or saved by this shell.",
+            "Connection",
+            "Enter a server and test SSH. Review unknown or changed host keys before trusting them.",
             "Test connection",
             "Enter connection details, test SSH and explicitly review unknown or changed host keys."),
         ShellPage.Overview => new(
             page,
             "Overview",
             "Server overview",
-            "Connect to a server to inspect its Ubuntu facts. This page never fabricates local values as remote data.",
+            "Inspect server facts from a verified connection.",
             "Refresh overview",
             "Connect to a server before refreshing the overview."),
         ShellPage.Firewall => new(
             page,
             "Firewall",
             "Firewall",
-            "Firewall changes will be presented with an explicit plan and verification before any remote action is available.",
+            "Review verified rules before changing access.",
             "Manage firewall",
             "Connect to a server before managing its firewall."),
         ShellPage.SshKeysAndConfig => new(
             page,
             "SSH Keys & Config",
             "SSH keys and config",
-            "Key material is intentionally not displayed in the shell. Connection-dependent actions remain locked while disconnected.",
+            "Manage local keys and aliases. Private keys are never displayed.",
             "Manage SSH access",
             "Connect to a server before managing SSH access."),
         ShellPage.System => new(
             page,
             "System",
             "System actions",
-            "System changes use a read, plan, explicit confirmation, apply and verification journey. Reboot recovery is bounded and revalidates host identity.",
+            "Review each plan and confirm before applying. Reboot recovery revalidates host identity.",
             "Manage system",
             "Connect to a server before managing system settings."),
         ShellPage.ActivityAndDiagnostics => new(
             page,
             "Activity & Diagnostics",
             "Activity and diagnostics",
-            "Activity will show safe, correlated operation results. There is no remote activity in this disconnected session.",
+            "Review operation results and prepare a safe report.",
             "Export diagnostics",
             "Select a local operation to export its sanitized support bundle."),
         _ => throw new ArgumentOutOfRangeException(nameof(page), page, "Unknown shell page.")
