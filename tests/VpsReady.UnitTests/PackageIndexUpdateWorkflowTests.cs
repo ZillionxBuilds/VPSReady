@@ -206,6 +206,55 @@ public sealed class PackageIndexUpdateWorkflowTests
         Assert.DoesNotContain(sink.Events, item => item.CommandId == RemoteCommandCatalog.UbuntuAptIndexUpdate);
     }
 
+    [Fact]
+    public async Task ThrownPreflightTimeoutCannotClaimPackageIndexMayHaveChanged()
+    {
+        var sink = new RecordingSink();
+        var transport = new SequenceTransport();
+
+        var result = await new PackageIndexUpdateWorkflow(new ThrowingPreflight(), sink).UpdateAsync(transport);
+
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Empty(transport.Commands);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateFailed);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.Null(terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task VerifyTimeoutAttributesFailureToVerifyCommandAfterIndexApply()
+    {
+        var sink = new RecordingSink();
+        var transport = new TimeoutOnVerifyTransport();
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink).UpdateAsync(transport);
+
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate, RemoteCommandCatalog.UbuntuAptIndexVerify], transport.Commands);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateFailed);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexVerify, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task VerifyNetworkFailureKeepsIndexUncertainAndDiagnosticsSafe()
+    {
+        var sink = new RecordingSink();
+        var transport = new TimeoutOnVerifyTransport(new RemoteTransportException(RemoteTransportFailureKind.Network));
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink).UpdateAsync(transport);
+
+        Assert.Equal(OperationErrorCode.Network, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateFailed);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexVerify, terminal.CommandId);
+        Assert.Null(terminal.StandardOutput);
+        Assert.Null(terminal.StandardError);
+    }
+
     private static RemoteCommandResult Success(string output) => new(0, output, string.Empty, TimeSpan.Zero);
 
     private sealed class AllowedPreflight : IPrivilegePreflight
@@ -224,6 +273,28 @@ public sealed class PackageIndexUpdateWorkflowTests
                 new PrivilegeCapability(true, SudoCapability.NotRequired), null));
         }
     }
+
+    private sealed class ThrowingPreflight : IPrivilegePreflight
+    {
+        public Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CorrelationIds? correlation = null, CancellationToken cancellationToken = default) =>
+            Task.FromException<PrivilegePreflightResult>(new TimeoutException());
+    }
+
+    private sealed class TimeoutOnVerifyTransport(Exception? failure = null) : IRemoteTransport
+    {
+        public List<string> Commands { get; } = [];
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            return command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexVerify
+                ? Task.FromException<RemoteCommandResult>(failure ?? new TimeoutException())
+                : VpsReady.Tests.ProductionOutput.CaptureAsync(command, Success("ignored"), cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class SequenceTransport(params RemoteCommandResult[] responses) : IRemoteTransport
     {
         private readonly Queue<RemoteCommandResult> responses = new(responses);

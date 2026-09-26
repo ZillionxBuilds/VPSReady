@@ -15,8 +15,8 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         var correlation = CorrelationIds.Create("apt_index_update");
         var update = UbuntuPackageCommandCatalog.CreateUpdateRequest();
         var applyAttempted = false;
-        var cancellationPhase = DiagnosticPhase.Preflight;
-        string? cancellationCommandId = null;
+        var activePhase = DiagnosticPhase.Preflight;
+        string? activeCommandId = null;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
@@ -30,8 +30,8 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, update.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             applyAttempted = true;
-            cancellationPhase = DiagnosticPhase.Apply;
-            cancellationCommandId = update.Id.Value;
+            activePhase = DiagnosticPhase.Apply;
+            activeCommandId = update.Id.Value;
             var applied = await transport.ExecuteAsync(update, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, update.Id.Value).ConfigureAwait(false);
             // Apt may already have changed the cache; cancellation cannot claim rollback.
@@ -46,8 +46,8 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             var verify = UbuntuPackageCommandCatalog.CreateVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            cancellationPhase = DiagnosticPhase.Verify;
-            cancellationCommandId = verify.Id.Value;
+            activePhase = DiagnosticPhase.Verify;
+            activeCommandId = verify.Id.Value;
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -63,20 +63,20 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateCancelled, cancellationPhase, DiagnosticStatus.Cancelled, cancellationCommandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateCancelled, activePhase, DiagnosticStatus.Cancelled, activeCommandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
             return new PackageIndexUpdateResult(cancelled, PackageIndexUpdateErrorCatalog.Cancelled);
         }
         catch (TimeoutException)
         {
-            return await FailAsync(correlation, OperationErrorCode.Timeout, PackageIndexUpdateErrorCatalog.Timeout, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            return await FailAsync(correlation, OperationErrorCode.Timeout, PackageIndexUpdateErrorCatalog.Timeout, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await FailAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageIndexUpdateErrorCatalog.Timeout : PackageIndexUpdateErrorCatalog.Command, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            return await FailAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageIndexUpdateErrorCatalog.Timeout : PackageIndexUpdateErrorCatalog.Command, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch
         {
-            return await FailAsync(correlation, OperationErrorCode.Unexpected, PackageIndexUpdateErrorCatalog.Unexpected, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            return await FailAsync(correlation, OperationErrorCode.Unexpected, PackageIndexUpdateErrorCatalog.Unexpected, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
     }
 
