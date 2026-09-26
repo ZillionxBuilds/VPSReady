@@ -1,3 +1,4 @@
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
@@ -15,9 +16,21 @@ public interface IFirewallManagement
         UfwSnapshot previous,
         CancellationToken cancellationToken = default);
 
+    Task<FirewallRefreshOperationResult> RefreshAsync(
+        IRemoteTransport transport,
+        UfwSnapshot previous,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default);
+
     Task<FirewallOperationResult> AddAsync(
         IRemoteTransport transport,
         UfwAllowRuleInput input,
+        CancellationToken cancellationToken = default);
+
+    Task<FirewallOperationResult> AddAsync(
+        IRemoteTransport transport,
+        UfwAllowRuleInput input,
+        SessionOperationDiagnostics sessionDiagnostics,
         CancellationToken cancellationToken = default);
 
     Task<FirewallOperationResult> RemoveAsync(
@@ -25,7 +38,24 @@ public interface IFirewallManagement
         UfwRuleRemovalIntent intent,
         CancellationToken cancellationToken = default);
 
+    Task<FirewallOperationResult> RemoveAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent intent,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default);
+
     Task<FirewallOperationResult> EnableAsync(
+        IRemoteTransport transport,
+        bool confirmed,
+        CancellationToken cancellationToken = default);
+
+    Task<FirewallOperationResult> EnableAsync(
+        IRemoteTransport transport,
+        bool confirmed,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default);
+
+    Task<FirewallOperationResult> DisableAsync(
         IRemoteTransport transport,
         bool confirmed,
         CancellationToken cancellationToken = default);
@@ -33,6 +63,7 @@ public interface IFirewallManagement
     Task<FirewallOperationResult> DisableAsync(
         IRemoteTransport transport,
         bool confirmed,
+        SessionOperationDiagnostics sessionDiagnostics,
         CancellationToken cancellationToken = default);
 }
 

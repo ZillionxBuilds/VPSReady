@@ -304,6 +304,11 @@ public sealed class FirewallViewModelTests
             LastDisableConfirmation = confirmed;
             return Task.FromResult(new FirewallOperationResult(OperationResult.Success("disable-opaque"), UfwSnapshot.StateOnly(UfwFirewallState.Inactive)));
         }
+        public Task<FirewallRefreshOperationResult> RefreshAsync(IRemoteTransport transport, UfwSnapshot previous, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => RefreshAsync(transport, previous, cancellationToken);
+        public Task<FirewallOperationResult> AddAsync(IRemoteTransport transport, UfwAllowRuleInput input, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => AddAsync(transport, input, cancellationToken);
+        public Task<FirewallOperationResult> RemoveAsync(IRemoteTransport transport, UfwRuleRemovalIntent intent, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => RemoveAsync(transport, intent, cancellationToken);
+        public Task<FirewallOperationResult> EnableAsync(IRemoteTransport transport, bool confirmed, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => EnableAsync(transport, confirmed, cancellationToken);
+        public Task<FirewallOperationResult> DisableAsync(IRemoteTransport transport, bool confirmed, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => DisableAsync(transport, confirmed, cancellationToken);
     }
 
     private sealed class RecordingDiagnosticSink : IDiagnosticSink
@@ -336,6 +341,11 @@ public sealed class FirewallViewModelTests
         public Task<FirewallOperationResult> RemoveAsync(IRemoteTransport transport, UfwRuleRemovalIntent intent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<FirewallOperationResult> EnableAsync(IRemoteTransport transport, bool confirmed, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<FirewallOperationResult> DisableAsync(IRemoteTransport transport, bool confirmed, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<FirewallRefreshOperationResult> RefreshAsync(IRemoteTransport transport, UfwSnapshot previous, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => RefreshAsync(transport, previous, cancellationToken);
+        public Task<FirewallOperationResult> AddAsync(IRemoteTransport transport, UfwAllowRuleInput input, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => AddAsync(transport, input, cancellationToken);
+        public Task<FirewallOperationResult> RemoveAsync(IRemoteTransport transport, UfwRuleRemovalIntent intent, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => RemoveAsync(transport, intent, cancellationToken);
+        public Task<FirewallOperationResult> EnableAsync(IRemoteTransport transport, bool confirmed, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => EnableAsync(transport, confirmed, cancellationToken);
+        public Task<FirewallOperationResult> DisableAsync(IRemoteTransport transport, bool confirmed, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => DisableAsync(transport, confirmed, cancellationToken);
     }
 
     private sealed class NoopTransport : IRemoteTransport
