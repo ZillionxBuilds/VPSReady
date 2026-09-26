@@ -37,11 +37,52 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82),
 [reboot-required cancellation PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84),
 [root-disk byte-evidence PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86),
-[selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88), and
-[package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90)
+[selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88),
+[package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90), and
+[package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
+
+### F08 package cancellation and system-action compatibility — 2026-09-26 UTC
+
+Same-class review of F08 found two distinct false-success boundaries on the
+unchanged release product tree. [#89/PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90)
+now checks cancellation after successful package-index verify command evidence
+but before terminal success: focused E1 was RED 0/1, then GREEN 1/1 at source
+head `e1a7883a2dae9f893ad3f4cecfc496a590ebf2a2`. It returns
+`Cancelled/Unknown`, one correlated Verify/verify-command terminal and no
+success. Isolated full E1: 613 PASS/2 declared SKIP; E2: 177 PASS/3 declared
+SKIP; E0 and unsigned local macOS arm64 E4 passed. E3 was NOT RUN for the apt
+workflow; E5 REAL VPS: NOT TESTED.
+
+Separate [#91/PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92)
+corrects `PackageUpgradeWorkflow.UpgradeAsync`, not the PlanAsync terminal
+boundary in #41/#42. Exact-release E1 was RED 0/2 when cancellation arrived
+with apt-apply or reboot-required command evidence; the correction also covers
+upgrade-verify evidence. At source head
+`67cc3366ce18c0db621b0024ccd56228d686aa3d`, focused E1 is GREEN 3/3,
+full E1 611 PASS/2 declared SKIP and E2 175 PASS/3 declared SKIP. Stateful
+`c503-post-apply-cancel` proves that mutation may already have occurred, so
+the result is `Cancelled/Unknown` with no later verify dispatch and one
+correlated Apply terminal. E0 and unsigned local macOS arm64 E4 passed; E3
+was NOT RUN for the apt workflow; E5 REAL VPS: NOT TESTED. A delayed UI
+regression was updated to require package-workflow cancellation, not a late
+success that the view model merely ignores.
+
+The **local-only, unpushed** F08 preflight at
+`50d342bb6085b4bd40416be1413ad31e580b4bac` combines the previous key/F06
+composite with current #36/#42/#84/#90/#92 heads. The only #92 merge conflict
+was in adjacent tests; both #42 planning and #92 apply cancellations were
+retained. Exact clean composite: E0 locked restore, Release `-warnaserror`
+build with 0 warnings/errors, format and diff PASS; E1 737 PASS/3 declared
+SKIP; E2 193 PASS/3 declared SKIP. E3 passed 3/3 against disposable Ubuntu
+Noble Linux ARM64 loopback-only OpenSSH in Docker, with no published ports or
+real VPS. E4 unsigned self-contained macOS arm64 Mach-O publish passed and
+embeds that exact composite SHA. Native interactive Mac UI, physical
+Windows/Linux, hosted checks, independent QA and Owner E5 are NOT RUN or
+NOT VERIFIED. This is collision preflight, **not** an approved integrated
+release candidate or `READY_FOR_OWNER_VPS_TEST`.
 
 ### F06/F09 session terminal evidence with key journey — 2026-09-26 UTC
 
@@ -1655,8 +1696,16 @@ tracks the separate E5 gate.
   E1 and macOS publish are not an integrated-candidate or real apt proof.
 - Obtain independent review of [PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90)
   for package-index pre-apply, post-apply and verify cancellation boundaries.
+  Include the post-verify diagnostic cancellation regression at head `e1a7883`.
   Its E1/E2 state classifications and macOS publish do not prove real apt
   behavior; combine with #42 on an approved exact candidate before Owner Stage 5.
+- Obtain independent same-class review of [PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92)
+  for package-upgrade apply, upgrade-verify and reboot-read cancellation
+  boundaries, partial-state `Unknown`, phase/command attribution and delayed
+  System-actions UI behavior. Preserve both #42 PlanAsync and #92 UpgradeAsync
+  regressions when resolving their adjacent test conflict. The local F08
+  composite E0–E4 compatibility check is not approved integration or real apt
+  proof; Owner Stage 5 remains NOT RUN.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
   for F04 pre-terminal and pre-dispatch cancellation across
   add/remove/enable/disable/refresh, including `Unchanged` before dispatch
