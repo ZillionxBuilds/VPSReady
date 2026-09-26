@@ -14,6 +14,9 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         ArgumentNullException.ThrowIfNull(transport);
         var correlation = CorrelationIds.Create("apt_index_update");
         var update = UbuntuPackageCommandCatalog.CreateUpdateRequest();
+        var applyAttempted = false;
+        var activePhase = DiagnosticPhase.Preflight;
+        string? activeCommandId = null;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
@@ -24,6 +27,9 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             }
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, update.Id.Value, null).ConfigureAwait(false);
+            activePhase = DiagnosticPhase.Apply;
+            activeCommandId = update.Id.Value;
+            applyAttempted = true;
             var applied = await transport.ExecuteAsync(update, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, update.Id.Value).ConfigureAwait(false);
             if (!applied.Succeeded)
@@ -34,6 +40,8 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
 
             var verify = UbuntuPackageCommandCatalog.CreateVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            activePhase = DiagnosticPhase.Verify;
+            activeCommandId = verify.Id.Value;
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
             if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
@@ -53,15 +61,15 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         }
         catch (TimeoutException)
         {
-            return await FailAsync(correlation, OperationErrorCode.Timeout, PackageIndexUpdateErrorCatalog.Timeout, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            return await FailAsync(correlation, OperationErrorCode.Timeout, PackageIndexUpdateErrorCatalog.Timeout, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await FailAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageIndexUpdateErrorCatalog.Timeout : PackageIndexUpdateErrorCatalog.Command, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            return await FailAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageIndexUpdateErrorCatalog.Timeout : PackageIndexUpdateErrorCatalog.Command, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch
         {
-            return await FailAsync(correlation, OperationErrorCode.Unexpected, PackageIndexUpdateErrorCatalog.Unexpected, DiagnosticPhase.Apply, update.Id.Value, OperationState.Unknown).ConfigureAwait(false);
+            return await FailAsync(correlation, OperationErrorCode.Unexpected, PackageIndexUpdateErrorCatalog.Unexpected, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
     }
 

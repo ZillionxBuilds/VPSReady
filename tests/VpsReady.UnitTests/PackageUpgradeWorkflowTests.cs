@@ -47,6 +47,99 @@ public sealed class PackageUpgradeWorkflowTests
         Assert.False(result.Result.Succeeded);
         Assert.Empty(replacement.Commands);
     }
+
+    [Theory]
+    [InlineData("timeout", OperationErrorCode.Timeout)]
+    [InlineData("network", OperationErrorCode.Network)]
+    [InlineData("unexpected", OperationErrorCode.Unexpected)]
+    public async Task InitialPlanExceptionIdentifiesThePlanCommandWithoutMutation(string failure, OperationErrorCode expectedError)
+    {
+        var sink = new Sink();
+        Exception exception = failure switch
+        {
+            "timeout" => new TimeoutException(),
+            "network" => new RemoteTransportException(RemoteTransportFailureKind.Network),
+            _ => new InvalidOperationException("untrusted remote detail"),
+        };
+        var transport = new TimeoutAtCommandTransport(RemoteCommandCatalog.UbuntuAptUpgradePlan, failOccurrence: 1)
+        {
+            Failure = exception,
+        };
+
+        var plan = await new PackageUpgradeWorkflow(new AllowedPreflight(), sink).PlanAsync(transport);
+
+        Assert.False(plan.IsReady);
+        Assert.Equal(expectedError, plan.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, plan.Result.State);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptUpgradePlan], transport.Commands.Select(command => command.Id.Value));
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.PackageUpgradeFailed);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptUpgradePlan, terminal.CommandId);
+        Assert.Equal(plan.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.DoesNotContain(sink.Events, entry => entry.Message.Contains("untrusted remote detail", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RevalidationTimeoutIsAttributedToPlanWithoutUpgradeMutation()
+    {
+        var sink = new Sink();
+        var transport = new TimeoutAtCommandTransport(RemoteCommandCatalog.UbuntuAptUpgradePlan, failOccurrence: 2,
+            Ok("upgrade_plan_packages=1:" + new string('a', 64)));
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport);
+
+        var result = await workflow.UpgradeAsync(transport, plan, confirmed: true);
+
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuAptUpgradeApply);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.PackageUpgradeFailed);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptUpgradePlan, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task UpgradeVerifyTimeoutIsAttributedToVerifyCommand()
+    {
+        var sink = new Sink();
+        var planResponse = Ok("upgrade_plan_packages=1:" + new string('a', 64));
+        var transport = new TimeoutAtCommandTransport(RemoteCommandCatalog.UbuntuAptUpgradeVerify, failOccurrence: 1,
+            planResponse, planResponse, Ok("done"));
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport);
+
+        var result = await workflow.UpgradeAsync(transport, plan, confirmed: true);
+
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuAptUpgradeApply);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.PackageUpgradeFailed);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptUpgradeVerify, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task RebootStateReadUnexpectedFailureIsAttributedToItsVerifyCommand()
+    {
+        var sink = new Sink();
+        var planResponse = Ok("upgrade_plan_packages=1:" + new string('a', 64));
+        var transport = new TimeoutAtCommandTransport(RemoteCommandCatalog.UbuntuRebootRequiredRead, failOccurrence: 1,
+            planResponse, planResponse, Ok("done"), Ok("package_upgrade=verified"))
+        {
+            Failure = new InvalidOperationException("untrusted remote detail")
+        };
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport);
+
+        var result = await workflow.UpgradeAsync(transport, plan, confirmed: true);
+
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.PackageUpgradeFailed);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuRebootRequiredRead, terminal.CommandId);
+        Assert.DoesNotContain(sink.Events, entry => entry.Message.Contains("untrusted remote detail", StringComparison.Ordinal));
+    }
     [Fact]
     public void CatalogAllowsOnlyTheNormalBoundedUpgrade()
     {
@@ -154,6 +247,27 @@ public sealed class PackageUpgradeWorkflowTests
         private readonly Queue<RemoteCommandResult> results = new(results);
         public List<RemoteCommand> Commands { get; } = [];
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Dequeue(), cancellationToken); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class TimeoutAtCommandTransport(string failCommandId, int failOccurrence, params RemoteCommandResult[] results) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> results = new(results);
+        private int matchingCommands;
+        public List<RemoteCommand> Commands { get; } = [];
+        public Exception? Failure { get; init; }
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            if (command.Id.Value == failCommandId && ++matchingCommands == failOccurrence)
+            {
+                return Task.FromException<RemoteCommandResult>(Failure ?? new TimeoutException());
+            }
+
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Dequeue(), cancellationToken);
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
