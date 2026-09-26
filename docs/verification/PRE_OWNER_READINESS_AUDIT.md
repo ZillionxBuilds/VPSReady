@@ -1255,8 +1255,11 @@ Desktop DLL embedded the same source SHA:
 
 The retained-output safety scan passed for those four local folders. Together
 with the exact-composite macOS arm64 and contained Linux ARM64 publishes
-above, all six configured RIDs have local build/type/SHA evidence. The four
-cross-published RIDs were **NOT startup-smoked** on native hosts; official
+above, all six configured RIDs have local build/type/SHA evidence. The
+`osx-x64` apphost stayed active for five seconds under Rosetta on macOS arm64
+without console output, then was deliberately stopped with Ctrl-C; this is
+not a clean-exit, interactive UI or native Intel Mac claim. The other three
+cross-published RIDs were **NOT startup-smoked**; official
 PowerShell candidate packaging was **NOT RUN** (`pwsh` unavailable). There is
 no hosted check, signed/manifested candidate, independent QA or Owner E5
 claim. These are ignored developer outputs, not retained release artifacts.
