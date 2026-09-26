@@ -30,6 +30,30 @@ public sealed class NavigationContrastTests
             $"{labelSelector} foreground {foreground} is not readable on {surfaceSelector} background {background}.");
     }
 
+    [Fact]
+    public void NavigationLabelPinsReadableForegroundWhenThemeChangesButtonHoverState()
+    {
+        XDocument window = LoadMarkup("MainWindow.axaml");
+        XElement button = Assert.Single(window.Descendants(), element =>
+            element.Name.LocalName == "Button" && (string?)element.Attribute("Classes") == "nav");
+        XElement label = Assert.Single(button.Descendants(), element => element.Name.LocalName == "TextBlock");
+        string foreground = (string?)label.Attribute("Foreground") ?? string.Empty;
+
+        Assert.Equal("#FFFFFF", foreground);
+        Assert.True(ContrastRatio(foreground, "#14243D") >= 4.5);
+
+        XDocument styles = LoadMarkup("App.axaml");
+        foreach (string selector in new[]
+        {
+            "Button.nav:pointerover /template/ ContentPresenter",
+            "Button.nav.selected /template/ ContentPresenter",
+            "Button.nav.selected:pointerover /template/ ContentPresenter",
+        })
+        {
+            Assert.True(ContrastRatio(foreground, SetterValue(styles, selector, "Background")) >= 4.5, selector);
+        }
+    }
+
     private static XDocument LoadMarkup(string name)
     {
         using Stream stream = typeof(NavigationContrastTests).Assembly.GetManifestResourceStream(

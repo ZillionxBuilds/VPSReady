@@ -29,7 +29,7 @@
                           AutomationProperties.HelpText="{Binding Hint}">
                     <Grid ColumnDefinitions="4,*" ColumnSpacing="12">
                       <Border IsVisible="{Binding IsSelected}" Background="#73B4FF" CornerRadius="2" />
-                      <TextBlock Grid.Column="1" Text="{Binding Label}" TextWrapping="Wrap" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding Label}" Foreground="#FFFFFF" TextWrapping="Wrap" FontWeight="SemiBold" VerticalAlignment="Center" />
                     </Grid>
                   </Button>
                 </DataTemplate>
