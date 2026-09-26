@@ -160,6 +160,11 @@ public sealed class SessionOperationDiagnostics
                 Recovery: result.Recovery);
         }
 
+        // The enclosing session result is authoritative even when a workflow
+        // supplied a matching terminal candidate. Preserve its verification
+        // and recovery evidence in the persisted terminal event.
+        terminal = terminal with { Verification = result.Verification, Recovery = result.Recovery };
+
         try
         {
             await sink.WriteAsync(terminal, CancellationToken.None).ConfigureAwait(false);
