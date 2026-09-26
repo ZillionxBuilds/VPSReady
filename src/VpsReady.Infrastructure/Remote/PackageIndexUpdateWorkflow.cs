@@ -26,6 +26,9 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, update.Id.Value, null).ConfigureAwait(false);
             var applied = await transport.ExecuteAsync(update, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, update.Id.Value).ConfigureAwait(false);
+            // Apt may already have changed the cache; cancellation cannot claim rollback.
+            // Do not dispatch a separate verification after the user cancels.
+            cancellationToken.ThrowIfCancellationRequested();
             if (!applied.Succeeded)
             {
                 var locked = applied.AptLockContended;

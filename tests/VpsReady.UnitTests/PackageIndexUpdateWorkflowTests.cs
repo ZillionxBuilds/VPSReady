@@ -64,6 +64,22 @@ public sealed class PackageIndexUpdateWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterApplyResponseDoesNotDispatchVerificationOrReportSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancelAfterApplyTransport(cancellation);
+        var sink = new RecordingSink();
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink).UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate], transport.Commands);
+        Assert.DoesNotContain(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+    }
+
+    [Fact]
     public async Task PreflightCancellationUsesThePackageCancellationResultAndOneCorrelationScope()
     {
         var sink = new RecordingSink();
@@ -112,6 +128,28 @@ public sealed class PackageIndexUpdateWorkflowTests
         private readonly Queue<RemoteCommandResult> responses = new(responses);
         public List<RemoteCommand> Commands { get; } = [];
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return VpsReady.Tests.ProductionOutput.CaptureAsync(command, responses.Dequeue(), cancellationToken); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancelAfterApplyTransport(CancellationTokenSource cancellation) : IRemoteTransport
+    {
+        public List<string> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            var output = command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexVerify
+                ? Success("apt_index=refreshed")
+                : Success("ignored");
+            var result = await VpsReady.Tests.ProductionOutput.CaptureAsync(command, output, CancellationToken.None);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexUpdate)
+            {
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
