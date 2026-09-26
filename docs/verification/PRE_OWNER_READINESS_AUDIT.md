@@ -94,6 +94,39 @@ packaging, hosted checks, independent QA and an approved exact integrated
 candidate remain **NOT VERIFIED/NOT RUN**. Owner Stage 0–6/E5 and
 **REAL VPS: NOT TESTED**.
 
+### F05 stale selected-key state after failed generation — 2026-09-26
+
+On draft [PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17)
+before db6289c, an E1 regression was **RED**: with a previously selected
+key and deployment confirmation, a new named-key attempt that failed on
+collision left the *old* key selected and eligible for deployment. The
+failure status did not make that old identity newly generated. Existing
+[issue #16](https://github.com/ZillionxBuilds/VPSReady/issues/16) and PR #17
+now clear the selected key, intentional public-key display and deployment/
+config confirmations as soon as a new-generation action starts. Invalid
+name/folder, failed named generation and the direct generation API have E1
+state regressions; no key bytes, generator transaction, SSH command or
+remote-host behavior changed.
+
+On exact clean PR #17 head db6289c0be49da76c4e005c72e61fefb2e0610da,
+E0 locked restore, Release warning-as-error build (zero warnings/errors),
+format and diff **PASS**; E1 **637 PASS/2 declared SKIP**, E2 **174 PASS/3
+declared SKIP**. E3 is **NOT RUN** for this presentation-state correction.
+E4 unsigned self-contained macOS arm64 publish, embedded SHA,
+artifact-safety and bounded process startup **PASS**; interactive UI/clean
+exit are **NOT VERIFIED**.
+
+Local-only unpushed composite 66d1197d455b3918f2c7fcac67d9c798c1940c1e
+adds this fix atop e92840b. The product patch auto-merged; one adjacent
+test insertion conflict was resolved by retaining both tests. Exact
+composite E0 locked restore/Release build/format/diff **PASS**, E1
+**884 PASS/3 declared SKIP**, E2 **214 PASS/3 declared SKIP**, and unsigned
+macOS arm64 E4 publish/embedded SHA/artifact-safety/bounded startup **PASS**.
+E3 was **NOT RUN on this new head**; earlier e92840b loopback proof is not
+transferred. Neither tree has independent QA, hosted/native Windows/Linux
+checks or approved release integration. Owner Stage 4/E5 and
+**REAL VPS: NOT TESTED**.
+
 ### Owner navigation-hover report — 2026-09-25 22:27 UTC
 
 The Owner's screenshots show a visible navigation tooltip and unreadable
