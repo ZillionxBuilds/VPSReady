@@ -116,10 +116,10 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             if (!string.Equals(reviewedCurrent, reviewedTarget, StringComparison.Ordinal))
             {
-                activePhase = DiagnosticPhase.Apply;
-                activeCommandId = apply.Id.Value;
                 await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
+                activePhase = DiagnosticPhase.Apply;
+                activeCommandId = apply.Id.Value;
                 applyAttempted = true;
                 var applied = await hostnameTransport.ExecuteHostnameChangeAsync(apply, reviewedTarget, cancellationToken).ConfigureAwait(false);
                 await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);

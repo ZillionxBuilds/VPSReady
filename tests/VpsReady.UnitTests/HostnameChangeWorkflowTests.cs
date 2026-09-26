@@ -225,7 +225,9 @@ public sealed class HostnameChangeWorkflowTests
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.Empty(transport.AppliedHostnames);
         Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeApply);
-        Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.HostnameChangeCancelled);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.HostnameChangeCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.NotEqual(RemoteCommandCatalog.UbuntuHostnameChangeApply, terminal.CommandId);
     }
 
     [Fact]
