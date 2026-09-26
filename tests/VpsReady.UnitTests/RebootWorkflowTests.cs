@@ -112,6 +112,65 @@ public sealed class RebootWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterBootIdentityCannotDispatchReboot()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new RebootTransport(Ok("reboot=started"))
+        {
+            OnBootIdentityRead = read =>
+            {
+                if (read == 1)
+                {
+                    cancellation.Cancel();
+                }
+            },
+            IgnoreCancellationOnCommand = true,
+        };
+        var sink = new Sink();
+
+        var result = await CreateWorkflow(new AllowedPreflight(), sink)
+            .RebootAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Empty(transport.Commands);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.RebootCancelled or DiagnosticEventCatalog.RebootSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.RebootCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuBootIdentityRead, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+    }
+
+    [Fact]
+    public async Task CancellationWhileReportingApplyReadinessCannotDispatchReboot()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new RebootTransport(Ok("reboot=started")) { IgnoreCancellationOnCommand = true };
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.OperationRunning && entry.Phase == DiagnosticPhase.Apply)
+                {
+                    cancellation.Cancel();
+                }
+            },
+        };
+
+        var result = await CreateWorkflow(new AllowedPreflight(), sink)
+            .RebootAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Empty(transport.Commands);
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.DoesNotContain(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootSucceeded);
+        Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootCancelled);
+    }
+
+    [Fact]
     public async Task ReconnectTimeoutIsFiniteAndHostTrustFailsClosed()
     {
         var timeoutTransport = new RebootTransport(Ok("reboot=started"));
@@ -352,10 +411,14 @@ public sealed class RebootWorkflowTests
         public Action? OnReconnect { get; init; }
         public Action<int>? OnBootIdentityRead { get; init; }
         public Action<RemoteCommand>? OnCommand { get; init; }
+        public bool IgnoreCancellationOnCommand { get; init; }
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!IgnoreCancellationOnCommand)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
             Commands.Add(command);
             OnCommand?.Invoke(command);
             if (responses.Count == 0)
@@ -365,7 +428,7 @@ public sealed class RebootWorkflowTests
 
             return responses.Dequeue() switch
             {
-                RemoteCommandResult result => VpsReady.Tests.ProductionOutput.CaptureAsync(command, result, cancellationToken),
+                RemoteCommandResult result => VpsReady.Tests.ProductionOutput.CaptureAsync(command, result, IgnoreCancellationOnCommand ? CancellationToken.None : cancellationToken),
                 Exception exception => Task.FromException<RemoteCommandResult>(exception),
                 _ => throw new InvalidOperationException("Unsupported response."),
             };
@@ -405,6 +468,7 @@ public sealed class RebootWorkflowTests
     private sealed class Sink : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+        public Action<StructuredDiagnosticEvent>? OnWrite { get; init; }
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); OnWrite?.Invoke(entry); return Task.CompletedTask; }
     }
 }
