@@ -2006,8 +2006,19 @@ apphost was live for about eight seconds before deliberate Ctrl-C. That is
 not a clean exit or interactive UI proof. The focused #17 native picker fault
 was not exercised in the UI.
 
-Hosted checks, official candidate package/provenance, native Windows/Linux
-execution, independent review and Owner Stage 0–6/E5 remain **NOT RUN**.
+The same pushed head was also published as self-contained `linux-arm64` in a
+disposable Ubuntu 24.04 ARM64 .NET SDK container. Its apphost inspected as
+ARM aarch64 ELF, the managed assembly embedded the exact SHA, and the
+artifact-safety scan passed. An unprivileged `app` user under Xvfb kept the
+process alive until the planned eight-second timeout (exit 124). The first
+attempt built but stopped during metadata inspection because the container
+lacked the operator's `rg` command; a fresh rerun with `grep` passed. This is
+contained Linux E4 startup evidence, not physical Linux desktop QA, a clean
+exit, or a retained official package. The disposable container was removed.
+
+Hosted checks, official candidate package/provenance, native Windows and
+physical Linux desktop validation, independent review and Owner Stage 0–6/E5
+remain **NOT RUN**.
 This pushed draft branch is source corrections ready for external review,
 not an approved release candidate. `release/0.1.0` remains `9965c5b`.
 
