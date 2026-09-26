@@ -101,13 +101,23 @@ win-arm64. Only osx-x64 received a translated local startup check; the other
 three have **no** startup proof. The official PowerShell candidate packager
 was **NOT RUN** because `pwsh` is unavailable on this host.
 
-GitHub reports Actions enabled for repository ID `1361332816` but registered
-workflow inventory **0** and historical run count **0**. Draft PR #101 and
-documentation PR #28 both report **no checks**. The default `main` tree has no
-`.github/workflows` files while the release branch has two; this is a likely
-workflow-registration explanation, **not** a verified sole cause. No Actions,
-protection, default-branch or account setting was changed. Hosted validation
-therefore remains **NOT RUN** rather than inferred PASS.
+GitHub reports Actions enabled (`allowed_actions: all`) for repository ID
+`1361332816`, but registered workflow inventory **0** and historical run count
+**0**. Draft PR #101 and documentation PR #28 both report **no checks**; the
+exact source head also has no check suites. The default `main` tree has no
+`.github/workflows` files, which prevents manual `workflow_dispatch` under
+[GitHub's documented default-branch rule](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+It does **not** establish why PR checks are absent: `blind-ci.yml` exists on
+`release/0.1.0`, includes `pull_request` for `release/**`, and PR #101 targets
+that branch without a merge conflict. GitHub documents that event-triggered
+workflows use files at the event-associated SHA/ref, with only some event types
+requiring the default branch
+([workflow basics](https://docs.github.com/en/actions/concepts/workflows-and-actions/workflows),
+[trigger troubleshooting](https://docs.github.com/en/actions/how-tos/troubleshoot-workflows)).
+The actual PR-run suppression cause remains **UNVERIFIED**. Reading organization
+Actions policy returned HTTP 403 (org-admin/actions-policy permission required),
+so that policy also remains **UNVERIFIED**. No Actions, protection, default-branch
+or account setting was changed. Hosted validation remains **NOT RUN**, not PASS.
 
 The source is **not** `READY_FOR_OWNER_VPS_TEST` or `READY_FOR_MAIN`:
 semantic merges need external review, hosted Windows/macOS/Linux checks and
