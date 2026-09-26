@@ -134,6 +134,29 @@ public sealed class UfwAllowRuleTests
         Assert.Single(diagnostics.Events, item => item.EventId is DiagnosticEventCatalog.OperationCancelled or DiagnosticEventCatalog.OperationFailed or DiagnosticEventCatalog.OperationSucceeded);
     }
 
+    [Theory]
+    [InlineData(DiagnosticPhase.Plan)]
+    [InlineData(DiagnosticPhase.Apply)]
+    public async Task CancellationBeforeAllowDispatchDoesNotApplyRule(DiagnosticPhase cancelAtPhase)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(Result(ActiveWithoutTarget), Result(string.Empty), Result(ActiveWithTarget));
+        var diagnostics = new CancellingSanitizedSink(cancellation, item =>
+            item.EventId == DiagnosticEventCatalog.OperationRunning && item.Phase == cancelAtPhase);
+        var workflow = new UfwAllowRuleWorkflow(new RedactingDiagnosticSink(new FailClosedRedactor(), diagnostics));
+
+        var result = await workflow.AddAsync(
+            transport,
+            new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 443, "Anywhere", UfwIpFamily.Ipv4),
+            cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwAllowRuleAdd);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
     [Fact]
     public async Task CancellationAfterSuccessDiagnosticDoesNotAddAnotherTerminalEvent()
     {
@@ -184,6 +207,22 @@ public sealed class UfwAllowRuleTests
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
             return Task.FromResult(results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue());
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancellationIgnoringTransport(params RemoteCommandResult[] results) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> queuedResults = new(results);
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            return Task.FromResult(queuedResults.Count == 0
+                ? throw new InvalidOperationException("Unexpected command.")
+                : queuedResults.Dequeue());
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;

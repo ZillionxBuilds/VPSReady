@@ -106,6 +106,58 @@ public sealed class UfwToggleWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterStoredPreflightDoesNotDispatchSshAllowOrEnable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwStoredSshRead, 1,
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredSshAllows), Result(""), Result(ActiveWithSshAllows), Result(""));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value is RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure or RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterVerifiedStoredAllowsDoesNotDispatchEnable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwStoredSshRead, 2,
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredSshAllows), Result(""), Result(ActiveWithSshAllows), Result(""));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
+        Assert.Equal(2, transport.Commands.Count(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure));
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterDisablePreflightDoesNotDispatchDisable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwRuleListRead, 1,
+            Result(ActiveWithSshAllows), Result(""), Result("Status: inactive"));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).DisableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwDisable);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task OrdinaryUpstreamNormalizedReportDoesNotPreventSupportedEnable()
     {
         // Verified using UFW 0.36.2 UFWFrontend.get_show_added: both-family
@@ -251,6 +303,35 @@ public sealed class UfwToggleWorkflowTests
             Commands.Add(command);
             return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue(), cancellationToken);
         }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    // Deliberately ignores the caller token to model a transport that returns
+    // after cancellation. The workflow must own its pre-mutation boundary.
+    private sealed class CancellationIgnoringTransport(
+        CancellationTokenSource cancellation,
+        string cancelAfterCommandId,
+        int cancelAfterOccurrence,
+        params RemoteCommandResult[] results) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> queuedResults = new(results);
+        private int matchingCommands;
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            var result = await ProductionOutput.CaptureAsync(command,
+                queuedResults.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : queuedResults.Dequeue(),
+                CancellationToken.None);
+            if (command.Id.Value == cancelAfterCommandId && ++matchingCommands == cancelAfterOccurrence)
+            {
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

@@ -70,6 +70,7 @@ public sealed class UfwToggleWorkflow
             foreach (var family in stored.Ipv6Enabled ? new[] { UfwIpFamily.Ipv4, UfwIpFamily.Ipv6 } : [UfwIpFamily.Ipv4])
             {
                 var ensure = UbuntuFirewallCommandCatalog.CreateActiveSshAllowEnsureRequest(port, family);
+                cancellationToken.ThrowIfCancellationRequested();
                 mutated = true;
                 var ensured = await Execute(correlation, "EnableFirewall", DiagnosticPhase.Apply, transport, ensure, cancellationToken).ConfigureAwait(false);
                 if (!ensured.Succeeded)
@@ -151,6 +152,7 @@ public sealed class UfwToggleWorkflow
 
             await Report(correlation, "DisableFirewall", DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, "The active firewall is ready for confirmed disable.", list.Id.Value).ConfigureAwait(false);
             var disable = UbuntuFirewallCommandCatalog.CreateToggleRequest(enable: false);
+            cancellationToken.ThrowIfCancellationRequested();
             mutated = true;
             var disabled = await Execute(correlation, "DisableFirewall", DiagnosticPhase.Apply, transport, disable, cancellationToken).ConfigureAwait(false);
             if (!disabled.Succeeded)
@@ -189,8 +191,10 @@ public sealed class UfwToggleWorkflow
 
     private async Task<RemoteCommandResult> Execute(CorrelationIds c, string action, DiagnosticPhase phase, IRemoteTransport t, RemoteCommand command, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         var result = await t.ExecuteAsync(command, token).ConfigureAwait(false);
         await Report(c, action, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", command.Id.Value, result.Succeeded ? null : OperationErrorCode.Command, result.Duration, result.ExitCode).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
         return result;
     }
 

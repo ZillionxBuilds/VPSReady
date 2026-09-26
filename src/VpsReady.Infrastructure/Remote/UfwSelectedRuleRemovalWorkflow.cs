@@ -46,8 +46,10 @@ public sealed class UfwSelectedRuleRemovalWorkflow
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Preflight, DiagnosticStatus.Running, "Reading the active SSH port before planning selected firewall-rule removal.", CancellationToken.None, sessionPortCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var activeSshPortResult = await transport.ExecuteAsync(sessionPortCommand, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Preflight, activeSshPortResult, sessionPortCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!TryReadPort(activeSshPortResult, out var activeSshPort))
             {
                 var error = activeSshPortResult.Succeeded ? OperationErrorCode.Parse : OperationErrorCode.Command;
@@ -99,10 +101,12 @@ public sealed class UfwSelectedRuleRemovalWorkflow
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, "The confirmed current firewall rule is ready for removal.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
             var applyCommand = UbuntuFirewallCommandCatalog.CreateSelectedRuleRemovalRequest(removalRequest!);
-            applyAttempted = true;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, "Removing the confirmed firewall rule.", CancellationToken.None, applyCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            applyAttempted = true;
             var applied = await transport.ExecuteAsync(applyCommand, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, applyCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!applied.Succeeded)
             {
                 return await FailureAfterApplyAsync(correlation, transport, listCommand, ErrorForApply(applied), cancellationToken).ConfigureAwait(false);
@@ -168,8 +172,10 @@ public sealed class UfwSelectedRuleRemovalWorkflow
 
     private async Task<UfwRuleListRead> ReadAsync(CorrelationIds correlation, DiagnosticPhase phase, IRemoteTransport transport, RemoteCommand command, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
         await ReportCommandAsync(correlation, phase, result, command.Id.Value).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         return UbuntuServerFactParser.ParseUfwRuleList(result);
     }
 

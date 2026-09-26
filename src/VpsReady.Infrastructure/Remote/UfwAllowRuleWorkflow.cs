@@ -56,10 +56,12 @@ public sealed class UfwAllowRuleWorkflow
             if (!alreadyPresent)
             {
                 applyCommand = UbuntuFirewallCommandCatalog.CreateAllowRuleRequest(validatedTarget);
-                applyAttempted = true;
                 await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, "Applying the validated firewall allow rule.", CancellationToken.None, applyCommand.Id.Value).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                applyAttempted = true;
                 var applied = await transport.ExecuteAsync(applyCommand, cancellationToken).ConfigureAwait(false);
                 await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, applyCommand.Id.Value).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!applied.Succeeded)
                 {
                     return await FailureAfterApplyAsync(correlation, transport, listCommand, ErrorForApply(applied), cancellationToken).ConfigureAwait(false);
@@ -136,8 +138,10 @@ public sealed class UfwAllowRuleWorkflow
 
     private async Task<UfwRuleListRead> ReadAsync(CorrelationIds correlation, DiagnosticPhase phase, IRemoteTransport transport, RemoteCommand command, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var result = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
         await ReportCommandAsync(correlation, phase, result, command.Id.Value).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         return UbuntuServerFactParser.ParseUfwRuleList(result);
     }
 
