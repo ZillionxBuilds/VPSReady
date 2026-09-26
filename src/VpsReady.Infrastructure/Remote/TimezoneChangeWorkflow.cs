@@ -114,11 +114,11 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
                 return await FailureAsync(correlation, error, code, DiagnosticPhase.Preflight, null, OperationState.Unchanged).ConfigureAwait(false);
             }
 
-            activePhase = DiagnosticPhase.Apply;
             var apply = UbuntuTimezoneCommandCatalog.CreateApplyRequest(plan.SelectedTimezone!);
-            activeCommand = apply.Id.Value;
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, activePhase, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
+            activePhase = DiagnosticPhase.Apply;
+            activeCommand = apply.Id.Value;
             applyAttempted = true;
             var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, activePhase, applied, activeCommand).ConfigureAwait(false);

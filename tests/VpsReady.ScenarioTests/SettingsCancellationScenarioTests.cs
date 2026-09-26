@@ -24,8 +24,10 @@ public sealed class SettingsCancellationScenarioTests
         Assert.True(result.Result.Cancelled);
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.Equal("before-host", host.State.Hostname);
-        Assert.Single(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events,
+        var terminal = Assert.Single(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events,
             entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.HostnameChangeCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.NotEqual(RemoteCommandCatalog.UbuntuHostnameChangeApply, terminal.CommandId);
     }
 
     [Fact]
@@ -43,8 +45,10 @@ public sealed class SettingsCancellationScenarioTests
         Assert.True(result.Result.Cancelled);
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.Equal("Etc/UTC", host.State.Timezone);
-        Assert.Single(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events,
+        var terminal = Assert.Single(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events,
             entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.TimezoneChangeCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.NotEqual(RemoteCommandCatalog.UbuntuTimezoneApply, terminal.CommandId);
     }
 
     private sealed class CancelAtApplySink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink

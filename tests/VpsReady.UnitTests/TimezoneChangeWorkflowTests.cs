@@ -121,7 +121,9 @@ public sealed class TimezoneChangeWorkflowTests
         Assert.True(result.Result.Cancelled);
         Assert.Equal(OperationState.Unchanged, result.Result.State);
         Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuTimezoneApply);
-        Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.TimezoneChangeCancelled);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.TimezoneChangeCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.NotEqual(RemoteCommandCatalog.UbuntuTimezoneApply, terminal.CommandId);
     }
 
     [Fact]
