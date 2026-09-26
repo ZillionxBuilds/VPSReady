@@ -39,8 +39,9 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [root-disk byte-evidence PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86),
 [selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88),
 [package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90),
-[package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92), and
-[reboot pre-apply cancellation PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94)
+[package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92),
+[reboot pre-apply cancellation PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94), and
+[setting Apply cancellation PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -99,6 +100,41 @@ embeds that exact composite SHA. Native interactive Mac UI, physical
 Windows/Linux, hosted checks, independent QA and Owner E5 are NOT RUN or
 NOT VERIFIED. This is collision preflight, **not** an approved integrated
 release candidate or `READY_FOR_OWNER_VPS_TEST`.
+
+### F08 hostname/timezone cancellation boundaries — 2026-09-26 UTC
+
+[#95/PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96) fixes two
+more exact-release gaps in hostname and timezone changes. Cancellation from
+the awaited Apply progress event still dispatched mutation and reported
+`Cancelled/Unknown` instead of stopping before dispatch. Cancellation after
+the Verify read could report success despite the canceled token. Four focused
+E1 regressions were RED on the release source (0 PASS/4 FAIL). The correction
+checks immediately before Apply dispatch and after Apply/Verify evidence;
+six focused E1 tests are GREEN. Pre-dispatch cancellation returns
+`Cancelled/Unchanged` without an Apply command; after an Apply attempt it
+remains `Cancelled/Unknown` with no false success. Two new E2 stateful-host
+tests confirm pre-Apply cancellation leaves hostname/timezone unchanged and
+emits one correlated Cancelled terminal. Isolated source head
+`2a89b280c59f251d29ad53b53d3bd6ab34d42a57` passed E0 locked restore,
+Release `-warnaserror` build (0 warnings/errors), format and diff checks;
+E1 614 PASS/2 declared SKIP; E2 176 PASS/3 declared SKIP. E3 was NOT RUN
+for the isolated settings fix. E4 unsigned self-contained macOS arm64 publish
+passed with embedded exact source SHA. E5 **REAL VPS: NOT TESTED**.
+
+The **local-only, unpushed** F08 composite at
+`d11dcff1bee7fd3ac690eaf0c3eb1edee20b799e` adds #96 to the prior
+`d478704` preflight. Its manual test conflict resolution retains #35 fresh
+plan validation plus #95 cancellation regressions; production uses the
+reviewed target from the fresh plan. Exact clean composite E0 locked restore,
+Release `-warnaserror` build (0 warnings/errors), format and diff PASS;
+E1 745 PASS/3 declared SKIP; E2 196 PASS/3 declared SKIP. E3 disposable
+Ubuntu Noble ARM64 container with loopback-only OpenSSH, no published ports,
+passed Category=E3 3/3 plus host-key/password/command/timeout checks. E4
+unsigned osx-arm64 Mach-O publish passed with embedded exact composite SHA.
+Native interactive UI, physical Windows/Linux, hosted checks, independent
+review and Owner E5 remain NOT RUN or NOT VERIFIED. This is a developer
+collision preflight, **not** approved release integration or permission to
+test a real VPS.
 
 ### F06/F09 session terminal evidence with key journey — 2026-09-26 UTC
 
@@ -1728,6 +1764,11 @@ tracks the separate E5 gate.
   pre-dispatch `Unchanged/NotStarted` remains distinct from post-attempt
   `Unknown/recovery`. Preserve #84 read-only and #94 mutation regressions in
   the approved candidate; local loopback E3 is not a real reboot test.
+- Obtain independent same-class review of [PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96)
+  for hostname/timezone Apply and Verify cancellation boundaries. Preserve
+  #35 fresh-plan checks with #95 pre-dispatch and post-verify regressions;
+  the `d11dcff` local conflict resolution and E0–E4 passes are compatibility
+  evidence, not an approved candidate or real settings mutation proof.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
   for F04 pre-terminal and pre-dispatch cancellation across
   add/remove/enable/disable/refresh, including `Unchanged` before dispatch
