@@ -278,14 +278,14 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     {
         path = string.Empty;
         error = null;
-        if (string.IsNullOrWhiteSpace(candidate) || !Path.IsPathFullyQualified(candidate) || !string.Equals(Path.GetFullPath(candidate), candidate, StringComparison.Ordinal))
-        {
-            error = ExistingSshKeySelectionErrorCatalog.InvalidTarget;
-            return false;
-        }
-
         try
         {
+            if (string.IsNullOrWhiteSpace(candidate) || !Path.IsPathFullyQualified(candidate) || !string.Equals(Path.GetFullPath(candidate), candidate, StringComparison.Ordinal))
+            {
+                error = ExistingSshKeySelectionErrorCatalog.InvalidTarget;
+                return false;
+            }
+
             RejectReparsePointHierarchy(candidate);
             var attributes = File.GetAttributes(candidate);
             if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
@@ -297,6 +297,9 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             path = candidate;
             return true;
         }
+        catch (ArgumentException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
+        catch (NotSupportedException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
+        catch (PathTooLongException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
         catch (FileNotFoundException) { error = ExistingSshKeySelectionErrorCatalog.Missing; return false; }
         catch (DirectoryNotFoundException)
         {
