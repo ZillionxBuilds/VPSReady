@@ -6,6 +6,34 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class UbuntuServerFactParserTests
 {
+    [Theory]
+    [InlineData("processor : 0\nmodel name : Test CPU\nprocessor : 1\nprocessor : 1")]
+    [InlineData("processor : 0\nmodel name : Test CPU\nprocessor : 1\nprocessor : 01")]
+    [InlineData("processor : 0\nmodel name : Test CPU\nprocessor : 999999999999999999999999")]
+    public void DuplicateOrOverflowProcessorIndicesDoNotInflateCpuCount(string output)
+    {
+        var valid = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Test CPU\nprocessor : 1\nmodel name : Test CPU\nprocessors : 2");
+        var duplicate = UbuntuServerFactParser.ParseCpu(output);
+
+        Assert.True(valid.IsKnown);
+        Assert.Equal(2, valid.Value!.LogicalProcessorCount);
+        Assert.False(duplicate.IsKnown);
+    }
+
+    [Theory]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemTotal: 2048 kB")]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemAvailable: 256 kB")]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemTotal: invalid kB")]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemAvailable: 999999999999999999999999 kB")]
+    public void DuplicateMemoryFieldsDoNotBecomeKnown(string output)
+    {
+        var valid = UbuntuServerFactParser.ParseMemory("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemFree: 256 kB");
+        var duplicate = UbuntuServerFactParser.ParseMemory(output);
+
+        Assert.True(valid.IsKnown);
+        Assert.False(duplicate.IsKnown);
+    }
+
     [Fact]
     public void ParsersUseCanonicalUbuntuUnitsAndOnlyAcceptSafePrivilegeStates()
     {

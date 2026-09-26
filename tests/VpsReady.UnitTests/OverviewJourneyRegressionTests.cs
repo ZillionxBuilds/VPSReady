@@ -61,6 +61,39 @@ public sealed class OverviewJourneyRegressionTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DuplicateCpuOrMemoryEvidenceOnlyMakesThatOverviewFactUnknown(bool cpu)
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport
+        {
+            CpuOutput = cpu ? "processor : 0\nmodel name : Fixture CPU\nprocessor : 0" : "processor : 0\nmodel name : Fixture CPU",
+            MemoryOutput = cpu ? "MemTotal: 1024 kB\nMemAvailable: 512 kB" : "MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemTotal: 2048 kB",
+        };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink));
+
+        await vm.RefreshAsync();
+
+        var label = cpu ? "CPU" : "Memory";
+        Assert.Equal(12, vm.Facts.Count);
+        Assert.Equal(12, transport.Calls);
+        Assert.Equal("Unknown", Assert.Single(vm.Facts, row => row.Label == label).Value);
+        Assert.All(vm.Facts.Where(row => row.Label != label), row => Assert.True(row.IsKnown));
+        Assert.NotEmpty(sink.Events);
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+            Assert.DoesNotContain("Fixture CPU", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("2048", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [Theory]
     // Synthetic byte evidence, not reconstructed from rounded human units.
     [InlineData("/dev/fixture 33822867456 5558272 31997505536 0% /", true)]
     [InlineData("", false)]
@@ -445,6 +478,8 @@ public sealed class OverviewJourneyRegressionTests
     {
         public int Calls { get; private set; }
         public string Mode { get; init; } = "valid";
+        public string CpuOutput { get; init; } = "processor : 0\nmodel name : Fixture CPU";
+        public string MemoryOutput { get; init; } = "MemTotal: 1024 kB\nMemAvailable: 512 kB";
         public string DiskOutput { get; init; } = "/dev/vda1 10000 1000 9000 10% /";
         public string UfwStatusOutput { get; init; } = "Status: inactive";
         public bool Block { get; init; }
@@ -465,8 +500,8 @@ public sealed class OverviewJourneyRegressionTests
                 RemoteCommandCatalog.UbuntuUptimeRead => "3600.00 2000.00",
                 RemoteCommandCatalog.UbuntuCurrentUserRead => "fixture",
                 RemoteCommandCatalog.UbuntuPrivilegeRead => "root=false\nsudo=available",
-                RemoteCommandCatalog.UbuntuCpuRead => "processor : 0\nmodel name : Fixture CPU",
-                RemoteCommandCatalog.UbuntuMemoryRead => "MemTotal: 1024 kB\nMemAvailable: 512 kB",
+                RemoteCommandCatalog.UbuntuCpuRead => CpuOutput,
+                RemoteCommandCatalog.UbuntuMemoryRead => MemoryOutput,
                 RemoteCommandCatalog.UbuntuRootDiskRead => DiskOutput,
                 RemoteCommandCatalog.SshSessionPortRead => "22",
                 RemoteCommandCatalog.UbuntuUfwAvailabilityRead => "ufw=available",
