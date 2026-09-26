@@ -42,6 +42,15 @@ See [issue #45](https://github.com/ZillionxBuilds/VPSReady/issues/45).
 See [issue #11](https://github.com/ZillionxBuilds/VPSReady/issues/11).
 **REAL VPS: NOT TESTED.**
 
+### SSH key deployment completion consistency (review branch)
+
+- Prevent a late cancellation during deployment verification diagnostics from
+  recording a contradictory success result. The remote key-install script and
+  password-access behavior are unchanged.
+
+See [issue #47](https://github.com/ZillionxBuilds/VPSReady/issues/47).
+**REAL VPS: NOT TESTED.**
+
 ### Pre-main repair — R10–R14 (review branch, not integrated)
 
 - Preserve authoritative session cancellation/timeout and reject stale SSH results.

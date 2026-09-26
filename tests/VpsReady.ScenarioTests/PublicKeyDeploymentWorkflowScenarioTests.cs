@@ -117,6 +117,24 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task CancellationAfterSimulatedVerifyDoesNotReportDeploymentSuccess()
+    {
+        await using var services = ScenarioComposition.Create("scenario.e2.public-key-late-cancel");
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        using var key = await CreateMaterialAsync();
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelAfterVerifyCommandSink(services.GetRequiredService<IDiagnosticSink>(), cancellation);
+
+        var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(host, key, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.NotEmpty(host.State.Ssh.AuthorizedKeyFingerprints);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded);
+        Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+    }
+
+    [Fact]
     public async Task ApplyDisconnectTriggersReadOnlyRecoveryAndNeverReportsSuccess()
     {
         await using var services = ScenarioComposition.Create("scenario.e2.public-key-disconnect");
@@ -182,6 +200,18 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private sealed class CancelAfterVerifyCommandSink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(entry, cancellationToken);
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Verify)
+            {
+                cancellation.Cancel();
             }
         }
     }
