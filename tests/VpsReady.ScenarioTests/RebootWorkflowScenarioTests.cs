@@ -10,6 +10,34 @@ namespace VpsReady.ScenarioTests;
 public sealed class RebootWorkflowScenarioTests
 {
     [Fact]
+    public async Task RequiredInspectionCancellationAfterCommandEvidenceHasOneSafeTerminalOutcome()
+    {
+        await using var services = ScenarioComposition.Create("c504-required-late-cancel");
+        using var cancellation = new CancellationTokenSource();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = new CancelAfterRequiredCommandSink(services.GetRequiredService<IDiagnosticSink>(), cancellation);
+        await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
+
+        var inspection = await CreateWorkflow(diagnostics).InspectRequiredAsync(transport, cancellation.Token);
+
+        Assert.True(inspection.Result.Cancelled);
+        Assert.Null(inspection.Required);
+        Assert.Equal(RebootErrorCatalog.Cancelled, inspection.ErrorCode);
+        var events = recorder.Events.Where(entry => entry.Correlation.OperationId == inspection.Result.OperationId).ToArray();
+        Assert.Contains(events, entry => entry.EventId == DiagnosticEventCatalog.CommandCompleted
+            && entry.CommandId == RemoteCommandCatalog.UbuntuRebootRequiredRead);
+        var terminal = Assert.Single(events, entry => entry.EventId == DiagnosticEventCatalog.RebootCancelled
+            || entry.EventId == DiagnosticEventCatalog.RebootSucceeded
+            || entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticEventCatalog.RebootCancelled, terminal.EventId);
+        Assert.All(events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+        });
+    }
+
+    [Fact]
     public async Task ConfirmedRebootMutatesStateThenRevalidatesTheSessionWithCorrelatedRedactedDiagnostics()
     {
         await using var services = ScenarioComposition.Create("c504-reboot");
@@ -134,6 +162,19 @@ public sealed class RebootWorkflowScenarioTests
         new(new PrivilegePreflightWorkflow(diagnostics), diagnostics, TestPolicy, new DeterministicRecoveryTime());
 
     private static RebootRecoveryPolicy TestPolicy { get; } = new(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 3);
+
+    private sealed class CancelAfterRequiredCommandSink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(entry, cancellationToken);
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted
+                && entry.CommandId == RemoteCommandCatalog.UbuntuRebootRequiredRead)
+            {
+                cancellation.Cancel();
+            }
+        }
+    }
 
     private sealed class DeterministicRecoveryTime : IRebootRecoveryTime
     {

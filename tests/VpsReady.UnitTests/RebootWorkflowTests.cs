@@ -42,6 +42,58 @@ public sealed class RebootWorkflowTests
         Assert.Null(result.Required);
     }
 
+    [Theory]
+    [InlineData("reboot_required=true", true)]
+    [InlineData("reboot_required=false", false)]
+    public async Task RequiredInspectionRetainsNormalTypedResult(string output, bool expected)
+    {
+        var sink = new Sink();
+        var result = await new RebootWorkflow(new AllowedPreflight(), sink).InspectRequiredAsync(new RebootTransport(Ok(output)));
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(expected, result.Required);
+        Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootSucceeded);
+        Assert.DoesNotContain(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootCancelled);
+    }
+
+    [Fact]
+    public async Task RequiredInspectionNonzeroCommandDoesNotClaimSuccess()
+    {
+        var sink = new Sink();
+        var result = await new RebootWorkflow(new AllowedPreflight(), sink)
+            .InspectRequiredAsync(new RebootTransport(new RemoteCommandResult(1, string.Empty, string.Empty, TimeSpan.Zero)));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Null(result.Required);
+        Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.DoesNotContain(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootSucceeded);
+    }
+
+    [Fact]
+    public async Task RequiredInspectionCancellationAfterCommandDiagnosticDoesNotPublishSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.CommandCompleted
+                    && entry.CommandId == RemoteCommandCatalog.UbuntuRebootRequiredRead)
+                {
+                    cancellation.Cancel();
+                }
+            },
+        };
+
+        var result = await new RebootWorkflow(new AllowedPreflight(), sink)
+            .InspectRequiredAsync(new RebootTransport(Ok("reboot_required=true")), cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Null(result.Required);
+        Assert.DoesNotContain(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootSucceeded);
+        Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootCancelled);
+    }
+
     [Fact]
     public async Task ConfirmedRebootTreatsExpectedDisconnectAsIntermediateThenVerifiesNewTrustedSession()
     {
@@ -405,6 +457,7 @@ public sealed class RebootWorkflowTests
     private sealed class Sink : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+        public Action<StructuredDiagnosticEvent>? OnWrite { get; init; }
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); OnWrite?.Invoke(entry); return Task.CompletedTask; }
     }
 }
