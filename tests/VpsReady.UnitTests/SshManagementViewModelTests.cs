@@ -500,8 +500,10 @@ public sealed class SshManagementViewModelTests
         }
     }
 
-    [Fact]
-    public async Task UnconfirmedGenerationDiagnosticKeepsCommittedPairVisibleButRequiresFreshKeySelection()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnconfirmedGenerationDiagnosticKeepsCommittedPairVisibleButRequiresFreshKeySelection(bool named)
     {
         await using var session = new ApplicationSession();
         await session.StartAsync(new RemoteEndpoint("private-host.example", 22, "private-user"), new NoopTransport());
@@ -518,7 +520,14 @@ public sealed class SshManagementViewModelTests
         vm.IsDeploymentConfirmed = true;
         Assert.True(vm.CanDeploy);
 
-        await vm.GenerateAsync(newPath);
+        if (named)
+        {
+            await vm.GenerateNamedAsync(Path.GetDirectoryName(newPath)!, Path.GetFileName(newPath));
+        }
+        else
+        {
+            await vm.GenerateAsync(newPath);
+        }
 
         Assert.Equal(1, selector.Calls);
         Assert.False(vm.HasSelectedKey);
