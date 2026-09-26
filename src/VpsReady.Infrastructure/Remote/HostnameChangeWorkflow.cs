@@ -29,6 +29,7 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, read.Id.Value, null).ConfigureAwait(false);
             var current = await hostnameTransport.ReadHostnameAsync(read, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!current.IsAvailable || !HostnameChangeValidator.TryNormalize(current.Hostname, out var currentHostname))
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Parse, HostnameChangeErrorCatalog.Inspection, DiagnosticPhase.Plan, read.Id.Value).ConfigureAwait(false);
@@ -79,6 +80,7 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             activePhase = DiagnosticPhase.Preflight;
             var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!privilege.Result.Succeeded)
             {
                 if (privilege.Result.Cancelled)
@@ -93,10 +95,12 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             {
                 activePhase = DiagnosticPhase.Apply;
                 activeCommandId = apply.Id.Value;
-                applyAttempted = true;
                 await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                applyAttempted = true;
                 var applied = await hostnameTransport.ExecuteHostnameChangeAsync(apply, plan.ProposedHostname!, cancellationToken).ConfigureAwait(false);
                 await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!applied.Succeeded)
                 {
                     return await FailureAsync(correlation, applied.ExitCode is 13 or 77 ? OperationErrorCode.Privilege : OperationErrorCode.Command, applied.ExitCode is 13 or 77 ? HostnameChangeErrorCatalog.Privilege : HostnameChangeErrorCatalog.Command, DiagnosticPhase.Apply, apply.Id.Value, OperationState.Unknown).ConfigureAwait(false);
@@ -107,7 +111,9 @@ public sealed class HostnameChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             activePhase = DiagnosticPhase.Verify;
             activeCommandId = verify.Id.Value;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var verified = await hostnameTransport.ReadHostnameAsync(verify, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!verified.IsAvailable || !string.Equals(verified.Hostname, plan.ProposedHostname, StringComparison.Ordinal))
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, HostnameChangeErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, applyAttempted ? OperationState.PartiallyApplied : OperationState.Unchanged).ConfigureAwait(false);
