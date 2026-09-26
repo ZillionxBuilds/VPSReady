@@ -137,16 +137,28 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 transactionDirectory = null;
 
                 var operation = OperationResult.Success(correlation.OperationId);
-                await PublishAsync(
-                    DiagnosticEventCatalog.LocalKeyGenerationSucceeded,
-                    correlation,
-                    DiagnosticPhase.Verify,
-                    DiagnosticStatus.Succeeded,
-                    errorCode: null,
-                    cancellationToken).ConfigureAwait(false);
-                return LocalEd25519KeyGenerationResult.Success(
-                    operation,
-                    new LocalEd25519KeyPairLocation(paths.PrivateFinalPath, paths.PublicFinalPath));
+                var committedPair = new LocalEd25519KeyPairLocation(paths.PrivateFinalPath, paths.PublicFinalPath);
+                try
+                {
+                    // The pair is already committed and verified. Caller cancellation
+                    // cannot turn it into an unchanged or cancelled local operation.
+                    await PublishAsync(
+                        DiagnosticEventCatalog.LocalKeyGenerationSucceeded,
+                        correlation,
+                        DiagnosticPhase.Verify,
+                        DiagnosticStatus.Succeeded,
+                        errorCode: null,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    // A sink can fail before or after persisting this terminal event.
+                    // Do not emit a contradictory Failed event or misreport the files
+                    // as absent. The caller must surface the uncertain Activity record.
+                    return LocalEd25519KeyGenerationResult.SuccessWithUnconfirmedDiagnostic(operation, committedPair);
+                }
+
+                return LocalEd25519KeyGenerationResult.Success(operation, committedPair);
             }
             finally
             {
