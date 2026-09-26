@@ -124,6 +124,88 @@ public sealed class HostnameChangeWorkflowTests
         Assert.Equal([RemoteCommandCatalog.UbuntuHostnameChangeRead, RemoteCommandCatalog.UbuntuHostnameChangeVerify], transport.Commands.Select(command => command.Id.Value));
     }
 
+    [Fact]
+    public async Task CancellationDuringApplyProgressEventDoesNotDispatchHostnameMutation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.OperationRunning && entry.Phase == DiagnosticPhase.Apply)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        };
+        var transport = new HostnameTransport("before-host") { IgnoreCancellationOnApply = true };
+        var workflow = new HostnameChangeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport, "after-host");
+
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Empty(transport.AppliedHostnames);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeApply);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.HostnameChangeCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.NotEqual(RemoteCommandCatalog.UbuntuHostnameChangeApply, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task CancellationAfterVerifiedHostnameReadNeverReportsSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink();
+        var transport = new HostnameTransport("before-host", "after-host")
+        {
+            OnRead = command =>
+            {
+                if (command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeVerify)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        };
+        var workflow = new HostnameChangeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport, "after-host");
+
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(["after-host"], transport.AppliedHostnames);
+        Assert.DoesNotContain(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.HostnameChangeSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterApplyCommandKeepsHostnameOutcomeUnknownWithoutVerify()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Apply)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        };
+        var transport = new HostnameTransport("before-host", "after-host");
+        var workflow = new HostnameChangeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport, "after-host");
+
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(["after-host"], transport.AppliedHostnames);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuHostnameChangeVerify);
+        Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.HostnameChangeCancelled);
+    }
+
     private sealed class AllowedPreflight : IPrivilegePreflight
     {
         public CorrelationIds? Correlation { get; private set; }
@@ -142,17 +224,21 @@ public sealed class HostnameChangeWorkflowTests
         public List<RemoteCommand> Commands { get; } = [];
         public List<string> AppliedHostnames { get; } = [];
         public RemoteCommandResult Apply { get; set; } = new(0, string.Empty, string.Empty, TimeSpan.Zero);
+        public bool IgnoreCancellationOnApply { get; init; }
+        public Action<RemoteCommand>? OnRead { get; init; }
 
         public Task<HostnameReadResult> ReadHostnameAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
-            return Task.FromResult(hostnameReads.Count == 0 ? HostnameReadResult.Unavailable : new HostnameReadResult(hostnameReads.Dequeue(), true));
+            var result = hostnameReads.Count == 0 ? HostnameReadResult.Unavailable : new HostnameReadResult(hostnameReads.Dequeue(), true);
+            OnRead?.Invoke(command);
+            return Task.FromResult(result);
         }
 
         public Task<RemoteCommandResult> ExecuteHostnameChangeAsync(RemoteCommand command, string validatedHostname, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!IgnoreCancellationOnApply) { cancellationToken.ThrowIfCancellationRequested(); }
             Commands.Add(command);
             AppliedHostnames.Add(validatedHostname);
             return Task.FromResult(Apply);
@@ -166,10 +252,12 @@ public sealed class HostnameChangeWorkflowTests
     private sealed class Sink : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
+        public Action<StructuredDiagnosticEvent>? OnWrite { get; init; }
 
         public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
         {
             Events.Add(entry);
+            OnWrite?.Invoke(entry);
             return Task.CompletedTask;
         }
     }

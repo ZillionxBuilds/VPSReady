@@ -96,6 +96,90 @@ public sealed class TimezoneChangeWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationDuringApplyProgressEventDoesNotDispatchTimezoneMutation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.OperationRunning && entry.Phase == DiagnosticPhase.Apply)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        };
+        var transport = new Transport(Ok("Etc/UTC"), Ok("Etc/UTC\nAsia/Bangkok"), Ok(""), Ok("Asia/Bangkok"))
+        {
+            IgnoreCancellationOnApply = true
+        };
+        var workflow = new TimezoneChangeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport, "Asia/Bangkok");
+
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuTimezoneApply);
+        var terminal = Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.TimezoneChangeCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.NotEqual(RemoteCommandCatalog.UbuntuTimezoneApply, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task CancellationAfterVerifiedTimezoneReadNeverReportsSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Verify)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        };
+        var transport = new Transport(Ok("Etc/UTC"), Ok("Etc/UTC\nAsia/Bangkok"), Ok(""), Ok("Asia/Bangkok"));
+        var workflow = new TimezoneChangeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport, "Asia/Bangkok");
+
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuTimezoneApply);
+        Assert.DoesNotContain(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.TimezoneChangeSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterApplyCommandKeepsTimezoneOutcomeUnknownWithoutVerify()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink
+        {
+            OnWrite = entry =>
+            {
+                if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Apply)
+                {
+                    cancellation.Cancel();
+                }
+            }
+        };
+        var transport = new Transport(Ok("Etc/UTC"), Ok("Etc/UTC\nAsia/Bangkok"), Ok(""), Ok("Asia/Bangkok"));
+        var workflow = new TimezoneChangeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport, "Asia/Bangkok");
+
+        var result = await workflow.ChangeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuTimezoneApply);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuTimezoneVerifyRead);
+        Assert.Single(sink.Events, entry => entry.Correlation.OperationId == result.Result.OperationId && entry.EventId == DiagnosticEventCatalog.TimezoneChangeCancelled);
+    }
+
+    [Fact]
     public void CatalogQuotesOnlyValidatedTimezoneAndRejectsShellSyntax()
     {
         var command = UbuntuTimezoneCommandCatalog.CreateApplyRequest("Europe/London");
@@ -132,13 +216,15 @@ public sealed class TimezoneChangeWorkflowTests
     {
         private readonly Queue<RemoteCommandResult> results = new(results);
         public List<RemoteCommand> Commands { get; } = [];
-        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return Task.FromResult(results.Dequeue()); }
+        public bool IgnoreCancellationOnApply { get; init; }
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { if (!IgnoreCancellationOnApply || command.Id.Value != RemoteCommandCatalog.UbuntuTimezoneApply) { cancellationToken.ThrowIfCancellationRequested(); } Commands.Add(command); return Task.FromResult(results.Dequeue()); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class Sink : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+        public Action<StructuredDiagnosticEvent>? OnWrite { get; init; }
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); OnWrite?.Invoke(entry); return Task.CompletedTask; }
     }
 }
