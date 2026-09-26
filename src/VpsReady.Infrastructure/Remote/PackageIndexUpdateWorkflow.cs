@@ -50,6 +50,7 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
             cancellationCommandId = verify.Id.Value;
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
             {
                 return await FailAsync(correlation, OperationErrorCode.Verification, PackageIndexUpdateErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);

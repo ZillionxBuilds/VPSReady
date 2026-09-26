@@ -118,6 +118,33 @@ public sealed class PackageIndexUpdateWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterVerifyCommandEvidenceCannotPublishIndexSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new IgnoringCancellationTransport();
+        var sink = new RecordingSink(entry =>
+        {
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Verify)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink)
+            .UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        var terminal = Assert.Single(sink.Events, item => item.EventId is
+            DiagnosticEventCatalog.PackageIndexUpdateCancelled or DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.PackageIndexUpdateCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexVerify, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+    }
+
+    [Fact]
     public async Task CancellationBeforeVerifyDispatchDoesNotRunTheVerifyCommand()
     {
         using var cancellation = new CancellationTokenSource();
