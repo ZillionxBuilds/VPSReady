@@ -35,8 +35,9 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [stored SSH-port PR #80](https://github.com/ZillionxBuilds/VPSReady/pull/80),
 [typed numeric-evidence PR #82](https://github.com/ZillionxBuilds/VPSReady/pull/82),
 [reboot-required cancellation PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84),
-[root-disk byte-evidence PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86), and
-[selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88)
+[root-disk byte-evidence PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86),
+[selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88), and
+[package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -962,6 +963,28 @@ UI/clean exit, Windows/Linux native, hosted checks and independent review are
 **NOT RUN**. The local composites below predate PR #42, and release remains
 unchanged. **REAL VPS: NOT TESTED.**
 
+### F08 package-index post-apply cancellation correction — 2026-09-26
+
+Exact release `9965c5b` is **RED 0 PASS/1 FAIL** in an E1 test where the
+caller cancels as a successful `apt update` response arrives: the workflow can
+still dispatch its independent verify and report success. Focused
+[issue #89](https://github.com/ZillionxBuilds/VPSReady/issues/89) and draft
+[PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90) at
+`2882c9996b30f7b7e44ba5813ebbbff79e811db6` check cancellation before
+verify dispatch. Because apt may already have changed the cache, the result
+is Cancelled with remote state Unknown, never a rollback claim.
+
+On isolated #90, E0 locked restore/Release `-warnaserror` build (0
+warnings/errors), format and diff checks passed; E1 was **609 PASS/2 SKIP**
+and E2 **175 PASS/3 SKIP**. Stateful scenario `c502-post-apply-cancel`
+mutated the simulated apt index, then confirmed no verify dispatch, one
+correlated Cancelled terminal event and no Success/Failed terminal event.
+E3 was **NOT RUN** (apt workflow). E4 unsigned self-contained macOS arm64
+publish, embedded exact SHA, artifact-safety and bounded five-second startup
+smoke passed; interactive UI/clean exit, native Windows/Linux and hosted
+checks remain **NOT VERIFIED**. This PR is unmerged and self-review is not
+independent QA. Owner Stage 5/E5 **REAL VPS: NOT TESTED.**
+
 ### Expanded local integration preflight — #34 and #36 added
 
 A second clean, **local-only** composite `codex/15-full-preflight-r35` at
@@ -1346,6 +1369,10 @@ F08 AC9–10 update: exact release also reports success for a canceled
 read-only reboot-required inspection after command evidence. Draft PR #84
 adds E1/E2 RED-to-GREEN and single-terminal diagnostic coverage. It does not
 establish real reboot/reconnect safety or replace Owner Stage 5.
+Exact release also misses cancellation after the `apt update` response and
+before the independent verify command; draft PR #90 adds the post-apply
+Cancelled/Unknown boundary and stateful no-verify regression described above.
+Neither draft is an approved integrated candidate or real apt/reboot proof.
 
 ### F09 criterion walk on the release source
 
@@ -1440,6 +1467,10 @@ tracks the separate E5 gate.
 - Obtain independent review of [PR #42](https://github.com/ZillionxBuilds/VPSReady/pull/42)
   for package-upgrade planning's cancellation completion boundary. Its isolated
   E1 and macOS publish are not an integrated-candidate or real apt proof.
+- Obtain independent review of [PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90)
+  for package-index post-apply cancellation before verification. Its E1/E2
+  Cancelled/Unknown result and macOS publish do not prove real apt behavior;
+  combine with #42 on an approved exact candidate before Owner Stage 5.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
   for F04 pre-terminal cancellation across add/remove/enable/disable/refresh.
   Also review stacked [PR #54](https://github.com/ZillionxBuilds/VPSReady/pull/54)
