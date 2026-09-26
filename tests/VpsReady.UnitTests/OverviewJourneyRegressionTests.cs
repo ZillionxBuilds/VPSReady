@@ -144,6 +144,28 @@ public sealed class OverviewJourneyRegressionTests
     }
 
     [Theory]
+    [InlineData("Status: active\nStatus: inactive")]
+    [InlineData("warning\nStatus: active")]
+    public async Task AmbiguousUfwStatusLeavesOnlyThatOverviewFactUnknown(string output)
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport { UfwStatusOutput = output };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink));
+
+        await vm.RefreshAsync();
+
+        Assert.Equal(12, transport.Calls);
+        Assert.Equal(11, vm.Facts.Count(row => row.IsKnown));
+        var firewallStatus = Assert.Single(vm.Facts, row => row.Label == "Firewall status");
+        Assert.False(firewallStatus.IsKnown);
+        Assert.Equal("Unknown", firewallStatus.Value);
+        Assert.All(sink.Events, entry => Assert.DoesNotContain(output, entry.Message, StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task LateReadAfterCancelOrSessionReplacementCannotRenderFacts(bool replace)
@@ -424,6 +446,7 @@ public sealed class OverviewJourneyRegressionTests
         public int Calls { get; private set; }
         public string Mode { get; init; } = "valid";
         public string DiskOutput { get; init; } = "/dev/vda1 10000 1000 9000 10% /";
+        public string UfwStatusOutput { get; init; } = "Status: inactive";
         public bool Block { get; init; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -447,7 +470,7 @@ public sealed class OverviewJourneyRegressionTests
                 RemoteCommandCatalog.UbuntuRootDiskRead => DiskOutput,
                 RemoteCommandCatalog.SshSessionPortRead => "22",
                 RemoteCommandCatalog.UbuntuUfwAvailabilityRead => "ufw=available",
-                RemoteCommandCatalog.UbuntuUfwStatusRead => "Status: inactive",
+                RemoteCommandCatalog.UbuntuUfwStatusRead => UfwStatusOutput,
                 _ => throw new InvalidOperationException("Unknown fixture command."),
             };
             if (command.Id.Value == RemoteCommandCatalog.UbuntuHostnameRead)

@@ -68,6 +68,28 @@ public sealed class UbuntuServerFactParserTests
         Assert.False(snapshot.SessionSshPort.IsKnown);
     }
 
+    [Theory]
+    [InlineData("Status: active\nStatus: inactive")]
+    [InlineData("Status: inactive\nStatus: active")]
+    [InlineData("warning\nStatus: active")]
+    public void AmbiguousUfwStatusDoesNotBecomeAKnownOverviewOrDetectionState(string output)
+    {
+        Assert.False(UbuntuServerFactParser.ParseUfwStatus(output).IsKnown);
+        var detection = UbuntuServerFactParser.ParseUfwDetection(new RemoteCommandResult(0, output, string.Empty, TimeSpan.Zero));
+        Assert.Equal(UfwFirewallState.Unknown, detection.State);
+    }
+
+    [Theory]
+    [InlineData("Status: active", UfwStatus.Active, UfwFirewallState.Active)]
+    [InlineData("Status: inactive", UfwStatus.Inactive, UfwFirewallState.Inactive)]
+    [InlineData("Status: active\n\nTo Action From\n-- ------ ----", UfwStatus.Active, UfwFirewallState.Active)]
+    public void ValidUfwStatusStillPreservesItsKnownState(string output, UfwStatus expected, UfwFirewallState expectedDetection)
+    {
+        Assert.Equal(expected, UbuntuServerFactParser.ParseUfwStatus(output).Value);
+        var detection = UbuntuServerFactParser.ParseUfwDetection(new RemoteCommandResult(0, output, string.Empty, TimeSpan.Zero));
+        Assert.Equal(expectedDetection, detection.State);
+    }
+
     private static Dictionary<string, RemoteCommandResult> Results(params (string Id, string Output)[] values) =>
         values.ToDictionary(
             value => value.Id,

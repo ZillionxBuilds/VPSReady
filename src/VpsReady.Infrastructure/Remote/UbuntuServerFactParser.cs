@@ -41,7 +41,7 @@ public static partial class UbuntuServerFactParser
             return UfwSnapshot.StateOnly(UfwFirewallState.Absent);
         }
 
-        return lines.FirstOrDefault() switch
+        return ReadUnambiguousUfwStatusHeader(lines) switch
         {
             "Status: inactive" => UfwSnapshot.StateOnly(UfwFirewallState.Inactive),
             "Status: active" => UfwSnapshot.StateOnly(UfwFirewallState.Active),
@@ -240,13 +240,33 @@ public static partial class UbuntuServerFactParser
 
     public static ServerFact<UfwStatus> ParseUfwStatus(string output)
     {
-        var status = Lines(output).FirstOrDefault(line => line.StartsWith("Status:", StringComparison.Ordinal));
+        var status = ReadUnambiguousUfwStatusHeader(Lines(output));
         return status switch
         {
             "Status: active" => ServerFact.Known(UfwStatus.Active),
             "Status: inactive" => ServerFact.Known(UfwStatus.Inactive),
             _ => ServerFact.Unknown<UfwStatus>(),
         };
+    }
+
+    private static string? ReadUnambiguousUfwStatusHeader(string[] lines)
+    {
+        if (lines.Length == 0 || lines[0] is not ("Status: active" or "Status: inactive"))
+        {
+            return null;
+        }
+
+        // UFW may print a multi-line rule listing after the first line, but a
+        // second status line makes the state contradictory rather than known.
+        for (var index = 1; index < lines.Length; index++)
+        {
+            if (lines[index].StartsWith("Status:", StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return lines[0];
     }
 
     private static ServerFact<string> ParseSafeSingleAtom(string output)
