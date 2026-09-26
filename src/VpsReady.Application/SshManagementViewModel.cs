@@ -162,6 +162,13 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
     public bool CanDeploy => !IsBusy && session.Snapshot.IsConnected && HasSelectedKey && IsDeploymentConfirmed;
 
+    /// <summary>A failed local chooser is a safe, unchanged local failure, never a key operation success.</summary>
+    public void ReportLocalFolderPickerFailure() =>
+        ReportLocalPickerFailure("The local folder chooser could not open. No new key was generated. Check desktop file access and choose a folder again; select an existing key again before deployment.");
+
+    public void ReportLocalFilePickerFailure() =>
+        ReportLocalPickerFailure("The local key file chooser could not open. No key was selected. Check desktop file access and choose a key again before deployment.");
+
     public bool CanVerifyKeyAuthentication => !IsBusy && session.Snapshot.IsConnected && HasSelectedKey;
 
     public string DeploymentEligibilityMessage => !session.Snapshot.IsConnected
@@ -506,6 +513,18 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         OnEligibilityChanged();
     }
 
+    private void ReportLocalPickerFailure(string safeMessage)
+    {
+        if (IsBusy)
+        {
+            // Do not replace an in-flight result or its correlation.
+            return;
+        }
+
+        InvalidateSelection();
+        CompletePreconditionFailure(safeMessage, OperationErrorCode.LocalIo);
+    }
+
     private bool TryBegin(SshManagementScreenState busyState, bool requiresSession, out CancellationTokenSource cancellation, CancellationToken callerCancellation)
     {
         cancellation = null!;
@@ -581,10 +600,10 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             : result.Cancelled ? SshManagementScreenState.Cancelled : SshManagementScreenState.Failed;
     }
 
-    private void CompletePreconditionFailure(string message)
+    private void CompletePreconditionFailure(string message, OperationErrorCode errorCode = OperationErrorCode.Validation)
     {
         var correlation = CorrelationIds.Create("ssh_management_validate");
-        var result = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+        var result = OperationResult.Failure(correlation.OperationId, errorCode, OperationState.Unchanged);
         OperationId = result.OperationId;
         ErrorCode = result.ErrorCode?.ToStableCode();
         State = SshManagementScreenState.Failed;
