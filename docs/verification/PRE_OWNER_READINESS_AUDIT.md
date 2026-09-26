@@ -1951,14 +1951,39 @@ command-result and timeout checks. No public SSH target or VPS was used.
 
 An unsigned self-contained `osx-arm64` publish of that same clean head passed
 on macOS ARM64; the apphost is Mach-O ARM64 and the managed assemblies embed
-the exact revision. The retained artifact safety scan passed, and the process remained
-running for about nine seconds before deliberate Ctrl-C termination. This is
+the exact revision. The retained artifact safety scan passed, and the process
+remained running for about nine seconds before deliberate Ctrl-C termination. This is
 E4 publish/startup observation, **not** clean-exit or interactive UI proof.
 The apphost SHA-256 was
 `4bea29a1a223431a25d35ef6e114525b9506ea2d616fc8356d0e003e192e3f75`.
 Windows/Linux native execution, official candidate packaging, hosted checks,
 independent review, approved release integration and Owner Stage 0–6/E5 remain
 **NOT RUN**. The current release is still `9965c5b` without these repairs.
+
+### F05 local picker failure boundary — 2026-09-26
+
+Source inspection found that the desktop's `async void` generate/select-key
+handlers awaited OS folder/file pickers without handling a faulted picker
+Task. Such a fault could escape before a safe ViewModel result; an actual
+desktop crash was **not** reproduced. Existing #16/draft PR #17 now at
+`20cd4d4` contains a focused adapter and path-free, correlated
+`LOCAL_IO_FAILED` result. Picker failure clears a previously confirmed key
+without invoking generation/selection; user cancellation leaves the earlier
+state unchanged. E1 injected both picker faults/cancellations, invalid name
+before picker side effects, and successful path forwarding.
+
+Exact focused #17 E0 locked restore, Release warnings-as-errors build/format
+and diff PASS; E1 **644 PASS / 2 SKIP**, E2 **174 PASS / 3 SKIP**. Unsigned
+macOS ARM64 E4 publish, embedded SHA and artifact-safety PASS; the process
+remained live about ten seconds before deliberate termination. The picker
+error was not exercised by native UI automation; E3 was not rerun for this
+UI-only fix. Draft #101 now at pushed `ebd384b` includes the correction with
+the adjacent ViewModel conflict resolved: E0 build/format PASS, E1 **945
+PASS / 3 SKIP**, E2 **227 PASS / 3 SKIP**. A separate unpublished
+#101+#103+#105 local preflight `13f8115` passed E0 build/format, E1 **954
+PASS / 3 SKIP**, E2 **227 PASS / 3 SKIP**. E3/E4 on these new combined heads,
+hosted/native cross-platform checks, independent review, approved release
+integration and Owner E5 remain **NOT RUN**.
 
 ## Owner protocol map
 
