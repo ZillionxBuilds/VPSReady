@@ -38,8 +38,9 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [reboot-required cancellation PR #84](https://github.com/ZillionxBuilds/VPSReady/pull/84),
 [root-disk byte-evidence PR #86](https://github.com/ZillionxBuilds/VPSReady/pull/86),
 [selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88),
-[package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90), and
-[package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92)
+[package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90),
+[package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92), and
+[reboot pre-apply cancellation PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -70,13 +71,28 @@ was NOT RUN for the apt workflow; E5 REAL VPS: NOT TESTED. A delayed UI
 regression was updated to require package-workflow cancellation, not a late
 success that the view model merely ignores.
 
+Safety-critical [#93/PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94)
+addresses a separate **reboot mutation** boundary, not #83/#84's read-only
+reboot-required inspection. On exact release, E1 was RED 0/1: cancellation
+returned with the pre-reboot boot identity, yet `ubuntu.reboot.apply` was
+still dispatched by a transport that ignored the token. Source head
+`2d4714218a13fffd24cd1e3ff15f016ba8e15190` checks after privilege
+preflight, after boot identity and immediately before dispatch. Focused E1
+is GREEN 1/1, plus an Apply-readiness cancellation case GREEN 1/1. Full E1
+610 PASS/2 declared SKIP; E2 175 PASS/3 declared SKIP. Stateful
+`c504-preapply-cancel` retains BootGeneration 0 and no reboot command, returns
+`Cancelled/Unchanged` with reconnect NotStarted and one correlated Plan
+terminal. E0 and unsigned local macOS arm64 E4 passed; real reconnect/reboot
+E3 and Owner E5 are NOT RUN. **REAL VPS: NOT TESTED.**
+
 The **local-only, unpushed** F08 preflight at
-`50d342bb6085b4bd40416be1413ad31e580b4bac` combines the previous key/F06
-composite with current #36/#42/#84/#90/#92 heads. The only #92 merge conflict
-was in adjacent tests; both #42 planning and #92 apply cancellations were
-retained. Exact clean composite: E0 locked restore, Release `-warnaserror`
-build with 0 warnings/errors, format and diff PASS; E1 737 PASS/3 declared
-SKIP; E2 193 PASS/3 declared SKIP. E3 passed 3/3 against disposable Ubuntu
+`d47870441456d92a8c331c64e6d8958df0cdc8c7` combines the previous key/F06
+composite with current #36/#42/#84/#90/#92/#94 heads. The #92 adjacent-test
+conflict retained #42 planning and #92 apply cancellations; the #94 scenario
+helper conflict retained both #84 read-only and #94 mutation regressions.
+Production source merged cleanly. Exact clean composite: E0 locked restore,
+Release `-warnaserror` build with 0 warnings/errors, format and diff PASS;
+E1 739 PASS/3 declared SKIP; E2 194 PASS/3 declared SKIP. E3 passed 3/3 against disposable Ubuntu
 Noble Linux ARM64 loopback-only OpenSSH in Docker, with no published ports or
 real VPS. E4 unsigned self-contained macOS arm64 Mach-O publish passed and
 embeds that exact composite SHA. Native interactive Mac UI, physical
@@ -1706,6 +1722,12 @@ tracks the separate E5 gate.
   regressions when resolving their adjacent test conflict. The local F08
   composite E0–E4 compatibility check is not approved integration or real apt
   proof; Owner Stage 5 remains NOT RUN.
+- Obtain independent safety review of [PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94)
+  for the pre-reboot mutation boundary. Confirm cancellation after boot identity
+  or Apply-readiness never dispatches `ubuntu.reboot.apply`, and that
+  pre-dispatch `Unchanged/NotStarted` remains distinct from post-attempt
+  `Unknown/recovery`. Preserve #84 read-only and #94 mutation regressions in
+  the approved candidate; local loopback E3 is not a real reboot test.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
   for F04 pre-terminal and pre-dispatch cancellation across
   add/remove/enable/disable/refresh, including `Unchanged` before dispatch
