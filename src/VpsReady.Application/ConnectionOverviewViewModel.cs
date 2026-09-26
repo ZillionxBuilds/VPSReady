@@ -14,6 +14,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private readonly IConnectionSessionLifecycle lifecycle;
     private readonly IApplicationSession session;
     private readonly IServerOverviewReader? overviewReader;
+    private readonly IDiagnosticSink? overviewDiagnostics;
     private readonly object cancellationGate = new();
     private CancellationTokenSource? connectionCancellation;
     private CancellationTokenSource? overviewCancellation;
@@ -26,11 +27,13 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private ConnectionScreenState overviewState = ConnectionScreenState.Unknown;
     private HostTrustReview? hostTrustReview;
 
-    public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session, IServerOverviewReader? overviewReader = null)
+    public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session,
+        IServerOverviewReader? overviewReader = null, IDiagnosticSink? overviewDiagnostics = null)
     {
         this.lifecycle = lifecycle;
         this.session = session;
         this.overviewReader = overviewReader;
+        this.overviewDiagnostics = overviewDiagnostics;
         RefreshCommand = new DelegateCommand(() => _ = RefreshAsync());
         CancelConnectionCommand = new DelegateCommand(CancelConnection);
         CancelRefreshCommand = new DelegateCommand(CancelRefresh);
@@ -251,15 +254,17 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         OnPropertyChanged(nameof(IsRefreshing));
         OnPropertyChanged(nameof(CanRefresh));
         var correlation = CorrelationIds.Create("overview") with { SessionId = snapshot.SessionId! };
+        var operationDiagnostics = SessionOperationDiagnostics.ForServerOverview(correlation, overviewDiagnostics);
         try
         {
             ServerOverviewRead? read = null;
             var result = await session.RunOperationForSessionAsync(correlation.OperationId, TimeSpan.FromMinutes(3),
                 async (transport, token) =>
                 {
-                    read = await overviewReader.ReadAsync(transport, snapshot.Identity, correlation, token).ConfigureAwait(false);
+                    read = await overviewReader.ReadAsync(transport, snapshot.Identity, operationDiagnostics, token).ConfigureAwait(false);
                     return read.Result;
                 }, snapshot.SessionId!, cancellation.Token).ConfigureAwait(false);
+            await operationDiagnostics.FinalizeAsync(result).ConfigureAwait(false);
             OperationId = result.OperationId;
             if (result.Succeeded && ReferenceEquals(result, read?.Result) && !cancellation.IsCancellationRequested
                 && string.Equals(snapshot.SessionId, session.Snapshot.SessionId, StringComparison.Ordinal) && read.Facts is not null)

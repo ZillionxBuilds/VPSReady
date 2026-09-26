@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -13,6 +14,115 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OperationJournalWorkspaceTests
 {
+    private static readonly JsonSerializerOptions RelaxedJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    [Fact]
+    public void BundleSafetyScanMasksOnlyTopLevelCommandIdNotNestedContextOrFreeText()
+    {
+        var commandId = RemoteCommandCatalog.UbuntuAuthorizedKeysVerify;
+        var message = $"Escaped free text says \"commandId\": \"{commandId}\".";
+        var json = JsonSerializer.Serialize(new { commandId, context = new { commandId }, message }, RelaxedJsonOptions);
+
+        var scanCopy = OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(json);
+
+        using var parsed = JsonDocument.Parse(scanCopy);
+        Assert.Equal("[CATALOGUED_COMMAND_ID]", parsed.RootElement.GetProperty("commandId").GetString());
+        Assert.Equal(commandId, parsed.RootElement.GetProperty("context").GetProperty("commandId").GetString());
+        Assert.Equal(message, parsed.RootElement.GetProperty("message").GetString());
+        Assert.Contains(commandId, scanCopy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BundleSafetyScanFailsClosedOnMalformedJournal()
+    {
+        Assert.ThrowsAny<JsonException>(() => OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(
+            "{\"commandId\": \"ubuntu.ssh.authorized-keys.verify\"} {"));
+    }
+
+    [Fact]
+    public async Task CancelledSessionFinalizationNeverExportsTheWorkflowSuccessCandidate()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "session-test", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            var correlation = CorrelationIds.Create("deploy_key");
+            var finalization = SessionOperationDiagnostics.ForPublicKeyDeployment(correlation, sink);
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.PublicKeyDeploymentStarted,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("validate"),
+                DiagnosticPhase.Validate,
+                DiagnosticStatus.Started,
+                "Public-key deployment started.",
+                Action: "DeployPublicKey"));
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationRunning,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("preflight"),
+                DiagnosticPhase.Preflight,
+                DiagnosticStatus.Running,
+                "raw authorized_keys contents must not appear",
+                Action: "DeployPublicKey"));
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.PublicKeyDeploymentSucceeded,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("verify"),
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Succeeded,
+                "This candidate success must not be exported.",
+                RemoteCommandCatalog.UbuntuAuthorizedKeysVerify,
+                Action: "DeployPublicKey"));
+
+            await finalization.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+            var activity = journal.GetActivity();
+            Assert.All(activity, entry => Assert.Equal(correlation.OperationId, entry.OperationId));
+            Assert.Contains(activity, entry => entry.State == ActivityState.Cancelled);
+            Assert.DoesNotContain(activity, entry => entry.State == ActivityState.Succeeded);
+            var persisted = await File.ReadAllTextAsync(Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("This candidate success must not be exported.", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("raw authorized_keys contents", persisted, StringComparison.Ordinal);
+            var report = journal.CreateSafeIssueReport(correlation.RunId);
+            Assert.Contains(correlation.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains($"Cancelled / {OperationErrorCode.Cancelled.ToStableCode()}", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("This candidate success must not be exported.", report, StringComparison.Ordinal);
+
+            var bundle = await journal.ExportSanitizedSupportBundleAsync(
+                correlation.RunId, Path.Combine(root, "user-selected-export"), CancellationToken.None);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var entry = Assert.Single(archive.Entries, item => item.FullName == "events.jsonl");
+            using var reader = new StreamReader(entry.Open());
+            var bundledEvents = await reader.ReadToEndAsync();
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, bundledEvents, StringComparison.Ordinal);
+            Assert.Contains(RemoteCommandCatalog.UbuntuAuthorizedKeysVerify, bundledEvents, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, bundledEvents, StringComparison.Ordinal);
+            Assert.DoesNotContain("raw authorized_keys contents", bundledEvents, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
     {
