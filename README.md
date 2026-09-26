@@ -112,8 +112,12 @@ build is not runnable on macOS/Linux or vice versa.
 
 These scripts do not sign, notarize, checksum, package, or certify a candidate.
 macOS Gatekeeper and Windows SmartScreen may warn about unsigned software;
-Linux may require desktop-system libraries. Building an architecture other
-than the host's does not prove it starts there. Follow the separate candidate
+Linux still needs desktop-system libraries even when the .NET runtime is
+self-contained. On a minimal Ubuntu desktop, install `libfontconfig1` if
+startup reports missing `libfontconfig.so.1` (a Skia rendering dependency);
+install it on the **desktop running VPSReady**, not on the managed server.
+Building an architecture other than the host's does not prove it starts there.
+Follow the separate candidate
 packaging/evidence process for release review, and do not interpret a local
 build as real-VPS validation.
 
@@ -131,6 +135,10 @@ Fixture-dependent tests can report skips. A skip is not a pass and does not
 establish SSH protocol, packaging or real-VPS evidence. See
 [quality checks](docs/development/QUALITY_CHECKS.md) and
 [contributing](CONTRIBUTING.md) for the full verification workflow.
+
+On a minimal Linux test environment, install `openssh-client` for the
+OpenSSH-config interoperability tests; it is a test prerequisite, not a
+dependency of the desktop SSH.NET connection path.
 
 ## Safety comes first
 
