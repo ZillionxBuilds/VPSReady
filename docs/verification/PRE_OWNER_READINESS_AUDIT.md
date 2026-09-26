@@ -60,6 +60,40 @@ interactive UI, native Windows/Linux, hosted checks and independent QA are
 composite showed no textual conflict but did not test that merged tree.
 The correction is not in release. **REAL VPS: NOT TESTED.**
 
+### All-pending plus F03 local compatibility preflight — 2026-09-25 23:01 UTC
+
+The clean, **local-only** `codex/15-disk-preflight` head
+`e92840b8af2e7a10e0de633e38897c671b216103` starts from the earlier
+unapproved pending-product composite and adds focused #85/PR #86 without a
+cherry-pick conflict. It contains the unmerged F05 named-key UI and prior
+repairs; it has **not** been pushed, independently reviewed, approved or
+integrated into release. It is compatibility evidence, not a candidate.
+
+- macOS arm64 E0 locked restore, Release `-warnaserror` build (zero
+  warnings/errors), format and repository policy guards **PASS**. Full E1
+  **882 PASS/3 declared SKIP**; full E2 **214 PASS/3 declared SKIP**.
+- Disposable Ubuntu Noble ARM64 Docker, with no published port, host
+  networking, privilege or Owner material: production SSH.NET E3 against
+  loopback OpenSSH **3 PASS/0 FAIL/0 SKIP**, including named generated-key
+  login and wrong-key rejection. Host-key, password, command-result and
+  timeout protocol checks, plus artifact-safety scans, **PASS**. This is
+  local-contained protocol evidence, not hosted CI or a real VPS.
+- Exact-head unsigned self-contained macOS arm64 E4 publish, embedded SHA,
+  artifact-safety and bounded process-startup smoke **PASS**. On nonroot
+  Ubuntu ARM64 Docker, E0 locked restore/build and full E1/E2 have the same
+  pass/skip counts. Linux ARM64 E4 publish, embedded SHA, artifact-safety
+  and bounded Xvfb startup **PASS** after restoring `/work` traversal
+  permission in the *test harness only*.
+
+The first nonroot Xvfb attempt failed with exit 126 before app start because
+`cp -a` changed the container's `/work` directory from mode 755 to the
+source-worktree mode 700; the corrected rerun exited at the planned eight-
+second timeout with the app process alive. Keep both results distinct.
+Interactive UI/clean exit, physical Linux and Windows hosts, official
+packaging, hosted checks, independent QA and an approved exact integrated
+candidate remain **NOT VERIFIED/NOT RUN**. Owner Stage 0–6/E5 and
+**REAL VPS: NOT TESTED**.
+
 ### Owner navigation-hover report — 2026-09-25 22:27 UTC
 
 The Owner's screenshots show a visible navigation tooltip and unreadable
