@@ -13,5 +13,5 @@
         Status = 'UNSIGNED'
         Warning = 'UNSIGNED CANDIDATE: code signing and macOS notarization were not performed; verify the source SHA-256 checksum before use.'
     }
-    StartupEvidence = 'NOT RUN (C606 startup-smoke suite is not implemented)'
+    StartupEvidence = 'NOT RUN (post-package startup smoke is reported separately)'
 }
