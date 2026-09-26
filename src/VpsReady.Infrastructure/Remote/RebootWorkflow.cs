@@ -133,19 +133,32 @@ public sealed class RebootWorkflow : IRebootWorkflow
         }
         catch (OperationCanceledException)
         {
-            return await CancelledAsync(correlation, 0, RebootReconnectOutcome.Cancelled, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+            var recoveryStarted = activePhase is DiagnosticPhase.Recovery or DiagnosticPhase.Verify;
+            return await CancelledAsync(correlation, 0, recoveryStarted ? RebootReconnectOutcome.Cancelled : RebootReconnectOutcome.NotStarted,
+                activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch (TimeoutException)
         {
-            return await FailureAsync(correlation, OperationErrorCode.Timeout, RebootErrorCatalog.Timeout, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.TimedOut).ConfigureAwait(false);
+            var recoveryStarted = activePhase is DiagnosticPhase.Recovery or DiagnosticPhase.Verify;
+            return await FailureAsync(correlation, OperationErrorCode.Timeout, recoveryStarted ? RebootErrorCatalog.Timeout : RebootErrorCatalog.PreRecovery,
+                activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged,
+                recoveryStarted ? RebootReconnectOutcome.TimedOut : RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await FailureAsync(correlation, ToError(exception.Kind), exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootErrorCatalog.HostTrust : RebootErrorCatalog.Command, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, exception.Kind == RemoteTransportFailureKind.HostTrust ? RebootReconnectOutcome.HostTrustRejected : RebootReconnectOutcome.Failed).ConfigureAwait(false);
+            var recoveryStarted = activePhase is DiagnosticPhase.Recovery or DiagnosticPhase.Verify;
+            var hostTrust = exception.Kind == RemoteTransportFailureKind.HostTrust;
+            return await FailureAsync(correlation, ToError(exception.Kind),
+                recoveryStarted ? (hostTrust ? RebootErrorCatalog.HostTrust : RebootErrorCatalog.Reconnect) : RebootErrorCatalog.PreRecovery,
+                activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged,
+                recoveryStarted ? (hostTrust ? RebootReconnectOutcome.HostTrustRejected : RebootReconnectOutcome.Failed) : RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
         }
         catch
         {
-            return await FailureAsync(correlation, OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged, RebootReconnectOutcome.Failed).ConfigureAwait(false);
+            var recoveryStarted = activePhase is DiagnosticPhase.Recovery or DiagnosticPhase.Verify;
+            return await FailureAsync(correlation, OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected,
+                activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged,
+                recoveryStarted ? RebootReconnectOutcome.Failed : RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
         }
     }
 
