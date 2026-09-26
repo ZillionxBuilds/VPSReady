@@ -62,14 +62,19 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
 
     // The actual transport consumes this already-parsed key, never reopens a
     // path after identity comparison. All file buffers are cleared by InspectAsync.
-    internal static async Task<PrivateKeyFile> OpenForAuthenticationAsync(ExistingSshKeyLocation location, CancellationToken cancellationToken)
+    internal static Task<PrivateKeyFile> OpenForAuthenticationAsync(ExistingSshKeyLocation location, CancellationToken cancellationToken) =>
+        OpenForAuthenticationAsync(location, new SilentKeyReadSink(), cancellationToken);
+
+    internal static async Task<PrivateKeyFile> OpenForAuthenticationAsync(
+        ExistingSshKeyLocation location, IDiagnosticSink diagnostics, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(diagnostics);
         if (string.IsNullOrEmpty(location.ExpectedFingerprint))
         {
             throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity);
         }
         PrivateKeyFile? key = null;
-        var selector = new ExistingOpenSshKeySelector(new SilentKeyReadSink());
+        var selector = new ExistingOpenSshKeySelector(diagnostics);
         var inspected = await selector.InspectAsync(new ExistingSshKeySelectionRequest(location.PrivateKeyPath),
             CorrelationIds.Create("key_use"), location.ExpectedFingerprint,
             (privateBytes, _) =>
@@ -82,6 +87,17 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             key?.Dispose();
             cancellationToken.ThrowIfCancellationRequested();
             throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity);
+        }
+        try
+        {
+            // Validation has its own terminal outcome. A caller cancelled at
+            // that boundary must not carry parsed private material into SSH.
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            key.Dispose();
+            throw;
         }
         return key;
     }
@@ -160,10 +176,10 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             }
             cancellationToken.ThrowIfCancellationRequested();
             consume?.Invoke(fileContents, publicBytes);
+            cancellationToken.ThrowIfCancellationRequested();
             var metadata = new ExistingSshKeyMetadata("ed25519", fingerprint);
             var operation = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
             await PublishAsync(DiagnosticEventCatalog.ExistingKeySelectionSucceeded, correlation, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, null, CancellationToken.None).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
             return ExistingSshKeySelectionResult.Success(operation, new ExistingSshKeyLocation(path, fingerprint), metadata);
         }
         catch (OperationCanceledException)

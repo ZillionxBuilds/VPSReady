@@ -85,6 +85,111 @@ public sealed class ExistingOpenSshKeySelectorTests
     }
 
     [Fact]
+    [Trait("Category", "E2")]
+    public async Task CancellationDuringSelectionSuccessPublicationHasOneAuthoritativeTerminalOutcome()
+    {
+        await using var workspace = new KeyWorkspace();
+        var generated = await new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink()).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None);
+        Assert.True(generated.Succeeded);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelOnSelectionEventSink(cancellation, DiagnosticEventCatalog.ExistingKeySelectionSucceeded);
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("select_key");
+
+        var selected = await new ExistingOpenSshKeySelector(diagnostics).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath), correlation, cancellation.Token);
+
+        Assert.Equal(
+            [DiagnosticEventCatalog.ExistingKeySelectionSucceeded],
+            diagnostics.Events.Where(item => item.Status is DiagnosticStatus.Succeeded or DiagnosticStatus.Cancelled or DiagnosticStatus.Failed)
+                .Select(item => item.EventId));
+        Assert.True(selected.Succeeded);
+        Assert.Equal(correlation.OperationId, selected.Operation.OperationId);
+        Assert.All(diagnostics.Events, item => Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "E2")]
+    public async Task CancellationBeforeSelectionValidationStillHasOnlyCancelledTerminalOutcome()
+    {
+        await using var workspace = new KeyWorkspace();
+        var generated = await new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink()).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None);
+        Assert.True(generated.Succeeded);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelOnSelectionEventSink(cancellation, DiagnosticEventCatalog.ExistingKeySelectionStarted);
+
+        var selected = await new ExistingOpenSshKeySelector(diagnostics).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("select_key"), cancellation.Token);
+
+        Assert.False(selected.Succeeded);
+        Assert.Equal(ExistingSshKeySelectionErrorCatalog.Cancelled, selected.SelectionErrorCode);
+        Assert.Null(selected.Metadata);
+        Assert.Null(selected.Location);
+        Assert.Equal(
+            [DiagnosticEventCatalog.ExistingKeySelectionCancelled],
+            diagnostics.Events.Where(item => item.Status is DiagnosticStatus.Succeeded or DiagnosticStatus.Cancelled or DiagnosticStatus.Failed)
+                .Select(item => item.EventId));
+    }
+
+    [Fact]
+    [Trait("Category", "E2")]
+    public async Task LateCancellationAfterPublicKeyRereadRetainsValidatedMaterialForCallerDisposal()
+    {
+        await using var workspace = new KeyWorkspace();
+        var generated = await new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink()).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None);
+        Assert.True(generated.Succeeded);
+        var selected = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink()).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+        Assert.True(selected.Succeeded);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelOnSelectionEventSink(cancellation, DiagnosticEventCatalog.ExistingKeySelectionSucceeded);
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("read_public_key");
+
+        var reread = await new ExistingOpenSshKeySelector(diagnostics).ReadPublicKeyAsync(
+            selected, correlation, cancellation.Token);
+        using var material = reread.Material;
+
+        Assert.True(reread.Operation.Succeeded);
+        Assert.NotNull(material);
+        Assert.Equal(correlation.OperationId, reread.Operation.OperationId);
+        Assert.Equal(
+            [DiagnosticEventCatalog.ExistingKeySelectionSucceeded],
+            diagnostics.Events.Where(item => item.Status is DiagnosticStatus.Succeeded or DiagnosticStatus.Cancelled or DiagnosticStatus.Failed)
+                .Select(item => item.EventId));
+    }
+
+    [Fact]
+    [Trait("Category", "E2")]
+    public async Task CancelledKeyUseAfterTerminalValidationDoesNotReturnPrivateKeyFile()
+    {
+        await using var workspace = new KeyWorkspace();
+        var generated = await new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink()).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"), CancellationToken.None);
+        Assert.True(generated.Succeeded);
+        var selected = await new ExistingOpenSshKeySelector(new CollectingDiagnosticSink()).SelectAsync(
+            new ExistingSshKeySelectionRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("select_key"), CancellationToken.None);
+        Assert.True(selected.Succeeded);
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelOnSelectionEventSink(cancellation, DiagnosticEventCatalog.ExistingKeySelectionSucceeded);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ExistingOpenSshKeySelector.OpenForAuthenticationAsync(selected.Location!, diagnostics, cancellation.Token));
+        Assert.Equal(
+            [DiagnosticEventCatalog.ExistingKeySelectionSucceeded],
+            diagnostics.Events.Where(item => item.Status is DiagnosticStatus.Succeeded or DiagnosticStatus.Cancelled or DiagnosticStatus.Failed)
+                .Select(item => item.EventId));
+    }
+
+    [Fact]
     public async Task ExistingKeyPermissionPolicyNeverRepermissionsUserMaterial()
     {
         if (OperatingSystem.IsWindows())
@@ -175,6 +280,23 @@ public sealed class ExistingOpenSshKeySelectorTests
     private static byte[] EncryptedEnvelope() => [.. "openssh-key-v1\0"u8, 0, 0, 0, 10, .. "aes256-ctr"u8];
 
     private static string Pem(string type, byte[] contents) => $"-----BEGIN {type}-----{Environment.NewLine}{Convert.ToBase64String(contents)}{Environment.NewLine}-----END {type}-----{Environment.NewLine}";
+}
+
+internal sealed class CancelOnSelectionEventSink(CancellationTokenSource cancellation, string eventId) : IDiagnosticSink
+{
+    public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+    public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Events.Add(diagnosticEvent);
+        if (diagnosticEvent.EventId == eventId)
+        {
+            cancellation.Cancel();
+        }
+
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class ThrowingSelectionObserver(Exception exception) : IExistingSshKeySelectionObserver
