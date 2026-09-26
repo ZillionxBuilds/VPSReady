@@ -64,6 +64,112 @@ public sealed class PackageIndexUpdateWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterApplyResponseDoesNotDispatchVerificationOrReportSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new IgnoringCancellationTransport(cancellation);
+        var sink = new RecordingSink();
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink).UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate], transport.Commands);
+        Assert.DoesNotContain(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterSuccessfulPreflightCannotStartAptUpdate()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new IgnoringCancellationTransport();
+        var sink = new RecordingSink();
+
+        var result = await new PackageIndexUpdateWorkflow(new CancelOnSuccessfulPreflight(cancellation), sink)
+            .UpdateAsync(transport, cancellation.Token);
+
+        Assert.Empty(transport.Commands);
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.DoesNotContain(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationDuringVerificationReportsTheVerifyPhaseAndCommand()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancelAtVerifyTransport(cancellation);
+        var sink = new RecordingSink();
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink)
+            .UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate, RemoteCommandCatalog.UbuntuAptIndexVerify], transport.Commands);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateCancelled);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexVerify, terminal.CommandId);
+        Assert.DoesNotContain(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterVerifyCommandEvidenceCannotPublishIndexSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new IgnoringCancellationTransport();
+        var sink = new RecordingSink(entry =>
+        {
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Verify)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink)
+            .UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        var terminal = Assert.Single(sink.Events, item => item.EventId is
+            DiagnosticEventCatalog.PackageIndexUpdateCancelled or DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.PackageIndexUpdateCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexVerify, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+    }
+
+    [Fact]
+    public async Task CancellationBeforeVerifyDispatchDoesNotRunTheVerifyCommand()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new IgnoringCancellationTransport();
+        var sink = new RecordingSink(entry =>
+        {
+            if (entry.EventId == DiagnosticEventCatalog.OperationRunning && entry.Phase == DiagnosticPhase.Verify)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        var result = await new PackageIndexUpdateWorkflow(new AllowedPreflight(), sink)
+            .UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptIndexUpdate], transport.Commands);
+        var terminal = Assert.Single(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateCancelled);
+        Assert.Equal(DiagnosticPhase.Apply, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexUpdate, terminal.CommandId);
+        Assert.DoesNotContain(sink.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+    }
+
+    [Fact]
     public async Task PreflightCancellationUsesThePackageCancellationResultAndOneCorrelationScope()
     {
         var sink = new RecordingSink();
@@ -107,11 +213,63 @@ public sealed class PackageIndexUpdateWorkflowTests
         public Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CorrelationIds? correlation = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(new PrivilegePreflightResult(OperationResult.Success("op_preflight", OperationState.Unchanged), new PrivilegeCapability(true, SudoCapability.NotRequired), null));
     }
+
+    private sealed class CancelOnSuccessfulPreflight(CancellationTokenSource cancellation) : IPrivilegePreflight
+    {
+        public Task<PrivilegePreflightResult> CheckAsync(IRemoteTransport transport, PrivilegeOperationIntent intent, CorrelationIds? correlation = null, CancellationToken cancellationToken = default)
+        {
+            cancellation.Cancel();
+            return Task.FromResult(new PrivilegePreflightResult(
+                OperationResult.Success(correlation?.OperationId ?? "op_preflight", OperationState.Unchanged),
+                new PrivilegeCapability(true, SudoCapability.NotRequired), null));
+        }
+    }
     private sealed class SequenceTransport(params RemoteCommandResult[] responses) : IRemoteTransport
     {
         private readonly Queue<RemoteCommandResult> responses = new(responses);
         public List<RemoteCommand> Commands { get; } = [];
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return VpsReady.Tests.ProductionOutput.CaptureAsync(command, responses.Dequeue(), cancellationToken); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class IgnoringCancellationTransport(CancellationTokenSource? cancelAfterApply = null) : IRemoteTransport
+    {
+        public List<string> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            var output = command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexVerify
+                ? Success("apt_index=refreshed")
+                : Success("ignored");
+            var result = await VpsReady.Tests.ProductionOutput.CaptureAsync(command, output, CancellationToken.None);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexUpdate)
+            {
+                cancelAfterApply?.Cancel();
+            }
+
+            return result;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancelAtVerifyTransport(CancellationTokenSource cancellation) : IRemoteTransport
+    {
+        public List<string> Commands { get; } = [];
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexVerify)
+            {
+                cancellation.Cancel();
+                throw new OperationCanceledException(cancellation.Token);
+            }
+
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command, Success("ignored"), CancellationToken.None);
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -122,9 +280,14 @@ public sealed class PackageIndexUpdateWorkflowTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class RecordingSink : IDiagnosticSink
+    private sealed class RecordingSink(Action<StructuredDiagnosticEvent>? afterWrite = null) : IDiagnosticSink
     {
         public List<StructuredDiagnosticEvent> Events { get; } = [];
-        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken) { Events.Add(entry); return Task.CompletedTask; }
+        public Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            Events.Add(entry);
+            afterWrite?.Invoke(entry);
+            return Task.CompletedTask;
+        }
     }
 }
