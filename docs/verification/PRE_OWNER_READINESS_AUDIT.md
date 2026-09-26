@@ -2044,6 +2044,20 @@ was an operator-tool gap, not a package failure. This exercises the official
 interactive QA, or an approved release-candidate artifact. Generated outputs
 were temporary and are not retained as downloadable evidence.
 
+That `f2c72ee` package still inherits an obsolete metadata reason from the
+release profile: its manifest says `NOT RUN (C606 startup-smoke suite is not
+implemented)`. The `NOT RUN` value is correct when the ZIP is created, before
+the separate smoke step, but the reason is false because C606 exists and the
+contained smoke above passed. Focused [PR #107](https://github.com/ZillionxBuilds/VPSReady/pull/107)
+([#106](https://github.com/ZillionxBuilds/VPSReady/issues/106)) corrects only
+the reason and adds a RED-to-GREEN static guard. Its exact head `8848501`
+passed a separate local `linux-arm64` package-path check: the manifest in the
+ZIP retained `NOT RUN`, named the separate post-package report, and matched
+the exact source SHA; sidecar, ZIP integrity, 28 notices and safety passed.
+This does **not** transfer the `f2c72ee` startup result to `8848501` or
+integrate #107 into #101/release. Independent review and exact combined-head
+validation remain pending.
+
 Hosted checks, official candidate package/provenance, native Windows and
 physical Linux desktop validation, independent review and Owner Stage 0–6/E5
 remain **NOT RUN**.
