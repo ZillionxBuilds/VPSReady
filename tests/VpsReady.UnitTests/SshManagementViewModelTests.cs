@@ -55,12 +55,18 @@ public sealed class SshManagementViewModelTests
             viewModel.NewKeyName = name;
             Assert.True(viewModel.HasInvalidKeyName);
             Assert.False(viewModel.CanGenerateKey);
+            await viewModel.SelectAsync("previous-key");
+            viewModel.IsDeploymentConfirmed = true;
+            Assert.True(viewModel.HasSelectedKey);
+            Assert.True(viewModel.IsDeploymentConfirmed);
 
             await viewModel.GenerateNamedAsync(root, name);
 
             Assert.Equal(0, generator.Calls);
             Assert.Equal(SshManagementScreenState.Failed, viewModel.State);
             Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+            Assert.False(viewModel.HasSelectedKey);
+            Assert.False(viewModel.IsDeploymentConfirmed);
             Assert.DoesNotContain(root, viewModel.Status, StringComparison.Ordinal);
             Assert.Empty(Directory.EnumerateFileSystemEntries(root));
         }
@@ -76,11 +82,15 @@ public sealed class SshManagementViewModelTests
             OperationResult.Failure("unused", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget));
         await using var session = new ApplicationSession();
         using var viewModel = CreateViewModel(session, generator: generator);
+        await viewModel.SelectAsync("previous-key");
+        viewModel.IsDeploymentConfirmed = true;
 
         await viewModel.GenerateNamedAsync(folder, "safe-name");
 
         Assert.Equal(0, generator.Calls);
         Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.False(viewModel.HasSelectedKey);
+        Assert.False(viewModel.IsDeploymentConfirmed);
         Assert.DoesNotContain(folder, viewModel.Status, StringComparison.Ordinal);
     }
 
@@ -122,6 +132,46 @@ public sealed class SshManagementViewModelTests
         Assert.False(File.Exists(Path.Combine(root, "another-key.pub")));
         Assert.DoesNotContain(root, viewModel.Status, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains(root, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FailedNewGenerationCannotLeavePreviouslyConfirmedKeyDeployable(bool named)
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            await using var session = new ApplicationSession();
+            await session.StartAsync(new RemoteEndpoint("private-host.example", 22, "private-user"), new NoopTransport());
+            var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+                OperationResult.Failure("generate-collision", OperationErrorCode.LocalIo),
+                LocalEd25519KeyGenerationErrorCatalog.Collision));
+            using var viewModel = CreateViewModel(session, generator: generator);
+
+            await viewModel.SelectAsync("previous-key");
+            viewModel.IsDeploymentConfirmed = true;
+            Assert.True(viewModel.CanDeploy);
+
+            if (named)
+            {
+                await viewModel.GenerateNamedAsync(root, "new-key");
+            }
+            else
+            {
+                await viewModel.GenerateAsync(Path.Combine(root, "new-key"));
+            }
+
+            Assert.Equal(1, generator.Calls);
+            Assert.Equal(SshManagementScreenState.Failed, viewModel.State);
+            Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Collision, viewModel.ErrorCode);
+            Assert.False(viewModel.HasSelectedKey);
+            Assert.Null(viewModel.SelectedKeyMetadata);
+            Assert.False(viewModel.IsDeploymentConfirmed);
+            Assert.False(viewModel.CanDeploy);
+            Assert.DoesNotContain(root, viewModel.Status, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [Theory]

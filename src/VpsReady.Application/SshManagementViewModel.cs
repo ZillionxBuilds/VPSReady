@@ -212,6 +212,9 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        // A new-generation attempt supersedes the old selection even when
+        // validation, file creation or automatic selection later fails.
+        InvalidateSelection();
         try
         {
             if (requestedName is null || !LocalSshKeyNamePolicy.IsValid(requestedName) || string.IsNullOrWhiteSpace(folderPath))
@@ -254,6 +257,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        InvalidateSelection();
         try
         {
             await GenerateCoreAsync(privateKeyPath, cancellation.Token).ConfigureAwait(false);
