@@ -439,6 +439,29 @@ evidence, not hosted CI, independent QA, a merged candidate or Owner Stage
 4/E5. Native Windows/Linux desktop checks remain **NOT RUN**.
 **REAL VPS: NOT TESTED.**
 
+### Exact full-source contained Linux ARM64 check — 2026-09-26
+
+The clean all-pending local `18b9f19` source was copied into a disposable
+official .NET SDK 10.0.400 Ubuntu Noble ARM64 Docker container. The first
+setup attempt stopped before product tests because UID 1654 was already the
+image's `app` user; the corrected run used that existing nonroot user.
+With `openssh-client`, `xvfb`, `xauth` and `libfontconfig1` installed only in
+the container, locked solution restore and Release warning-as-error build
+**PASS** with zero warnings/errors. Full nonroot E1 **761 PASS/3 declared
+SKIP**; E2 **199 PASS/3 declared SKIP**. The exact-head local loopback
+OpenSSH E3 **3 PASS/0 FAIL/0 SKIP** is recorded above from a separate
+container run, not counted again here.
+
+A direct self-contained `linux-arm64` publish from the same source produced
+an ARM aarch64 ELF apphost with embedded `18b9f19` SHA; retained artifact
+safety **PASS**. Running the app as nonroot under Xvfb reached the planned
+eight-second timeout (exit 124), without an early crash. This E4 evidence
+is contained Linux startup, **not** interactive/physical Linux host QA,
+clean exit or official candidate packaging. Container and generated output
+were removed automatically. Native Windows/Linux interactive UI, hosted
+checks, independent QA, approved integrated release and Owner Stage 0–6/E5
+remain **NOT RUN/NOT VERIFIED**. **REAL VPS: NOT TESTED.**
+
 ### F05 named-key UI with current navigation and safety dependencies — 2026-09-26
 
 Local-only `codex/16-latest-ui-compatibility` at
