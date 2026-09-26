@@ -31,6 +31,8 @@ public static class UfwStoredSshParser
         if (text is null || Encoding.UTF8.GetByteCount(text) > MaximumBytes || text.Contains('\r')) { return null; }
         var lines = text.Split('\n');
         if (lines.Length < 16 || lines[0] != "ufw_stored=v1" || !lines[1].StartsWith("port=", StringComparison.Ordinal)
+            // NumberStyles.None still accepts a terminal NUL; stored evidence must be ASCII decimal only.
+            || !lines[1][5..].All(char.IsAsciiDigit)
             || !int.TryParse(lines[1].AsSpan(5), NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535
             || lines[2] is not ("session_family=4" or "session_family=6") || lines[3] is not ("ipv6=yes" or "ipv6=no")
             || lines[4] != "output=ACCEPT" || lines[5] != "before4=" + Before4 || lines[6] != "after4=" + After4

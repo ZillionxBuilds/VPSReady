@@ -73,6 +73,29 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task MalformedStoredPortPreflightCannotMutateScenarioFirewall()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.stored-port-malformed");
+        state.Ufw.Rules.Clear();
+        var malformed = VpsReady.Tests.StoredUfwFixture.Create().Replace("port=22\n", "port=22\0\n", StringComparison.Ordinal);
+        var faults = new ScenarioFaultPlan();
+        faults.Inject(DiagnosticPhase.Preflight, ScenarioFaultKind.PartialOutput, "c305-stored-port-malformed", RemoteCommandCatalog.UbuntuUfwStoredSshRead, standardOutput: malformed);
+        var host = new DeterministicScenarioHost(state, faults);
+        var transport = new PhasedScenarioTransport(host);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("UNSUPPORTED_ENVIRONMENT", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(ScenarioUfwStatus.Inactive, state.Ufw.Status);
+        Assert.Empty(state.Ufw.Rules);
+        Assert.Equal([RemoteCommandCatalog.SshSessionPortRead, RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwStoredSshRead], transport.CommandIds);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task ActiveFirewallMissingIpv6SshAllowFailsClosedBeforeToggle()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.active-missing-ipv6");
