@@ -406,6 +406,31 @@ QA, hosted/native Windows/Linux checks or approved release integration.
 Owner Stage 4/E5 and
 **REAL VPS: NOT TESTED**.
 
+### F05 denied local key destination preflight — 2026-09-26
+
+An additional F05 preflight defect was reproduced on the existing
+[issue #16](https://github.com/ZillionxBuilds/VPSReady/issues/16) /
+[PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17): a local
+destination folder that exists but denies traversal made key-target inspection
+throw `UnauthorizedAccessException` before the generator's typed failure
+boundary. A macOS E1 regression was **RED 0/1** on `db6289c`. Commit
+`f976daba499028505e6e7f11185b9794601957b7` returns
+`LOCAL_KEY_PERMISSION_FAILED` with unchanged state, no file write and one
+path-free Validate-phase diagnostic. The regression is **GREEN 1/1** on
+macOS and in disposable nonroot Ubuntu Noble ARM64 Docker. Exact PR-head E0
+locked restore, warning-as-error build (zero warnings/errors), format and
+diff **PASS**; E1 **638 PASS/2 SKIP**, E2 **174 PASS/3 SKIP**. E3 local
+OpenSSH key-format proof **1 PASS/1 SKIP**; loopback sshd was **NOT RERUN**
+on this head. E4 unsigned macOS arm64 publish, Mach-O architecture, embedded
+SHA and artifact-safety **PASS**; startup/interactive UI **NOT RUN**.
+
+Local-only all-pending `18b9f19` cherry-picks that correction onto
+`33b2596` without conflicts with the existing generator repairs (#46, #58,
+#62); exact E0 build/format **PASS**, E1 **761 PASS/3 SKIP**, E2 **199
+PASS/3 SKIP**. E3/E4 were **NOT RERUN** on this new composite. This is
+developer compatibility evidence, not independent QA, a merged candidate or
+Owner Stage 4/E5. **REAL VPS: NOT TESTED.**
+
 ### F05 named-key UI with current navigation and safety dependencies — 2026-09-26
 
 Local-only `codex/16-latest-ui-compatibility` at
@@ -1699,7 +1724,7 @@ of these blind checks proves real UFW lockout safety.
 | Criteria | Source and named blind evidence | Remaining boundary |
 | --- | --- | --- |
 | F05 AC1/9 Ed25519 format and maintained approach | `Ed25519OpenSshKeyPairGeneratorTests` cover OpenSSH v1 output and key-generation scenario tests cover stateful faults; third-party notices and the key-generation decision record explain the approach. Isolated PR #66 adds disposable Ubuntu ARM64 OpenSSH E3 for an arbitrarily named generated pair, matching-key login and wrong-key refusal. | Explicit desktop name/path UX is unmerged PR #17; PR #66 is also unmerged. Neither isolated check is approved integrated-candidate or Owner Stage 4 proof. |
-| F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. Exact-release RED terminal-cancellation cases and draft PR #58 cover the committed-pair/result/diagnostic boundary. Exact-release RED malformed-absolute-path case and draft PR #62 cover a typed safe validation result without file creation; local composite tests the named-folder interaction with #17. | Release attempts other-name transaction recovery and blocks unrelated generation; unmerged PR #46 adds focused E2 correction. #58 and #62 are also unmerged and need independent approval. Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
+| F05 AC2–4/8 collision, transaction, permissions and recovery | Generator unit/scenario suites cover no silent overwrite, restrictive modes, staged/finalized fault recovery, reparse refusal and no orphaned partial pair. Exact-release RED terminal-cancellation cases and draft PR #58 cover the committed-pair/result/diagnostic boundary. Exact-release RED malformed-absolute-path case and draft PR #62 cover a typed safe validation result without file creation; local composite tests the named-folder interaction with #17. PR #17 at `f976dab` adds macOS RED-to-GREEN and nonroot Linux GREEN unit evidence that denied local key-target inspection returns a typed permission failure, unchanged state and no write. | Release attempts other-name transaction recovery and blocks unrelated generation; unmerged PR #46 adds focused E2 correction. #17, #58 and #62 remain unmerged and need independent approval. Exact-candidate native Windows/Linux path/permission behavior and Owner key creation NOT RUN. |
 | F05 AC5–7 intentional public view/copy and private omission | `SshManagementViewModel` and key-management presentation tests cover public-only view/copy; generator/diagnostic leakage tests check private material omission. Exact-release RED existing-key selection terminal cancellation and draft PR #60 cover a single authoritative selected-key result, public-material reread and cancellation before parsed private material is passed to SSH. Draft PR #64 corrects malformed selected-key path classification; draft PR #66 corrects Linux ARM64 safe-open flags with a post-validation symlink regression. | #60/#64/#66 remain unmerged and need independent review plus exact-candidate integration. Native Owner clipboard/screenshot and reviewed bundle privacy checks NOT RUN. |
 | F06 AC1–5 safe authorized-key deployment | `PublicKeyDeploymentWorkflowTests` and scenarios cover missing directory/file, ownership/modes, existing-entry preservation, idempotence, malformed material and no full key in diagnostics. Draft PR #76 makes the production shell contract fixture independent of umask and retains group-writable fail-closed regressions; no production shell behavior changes. | Release can journal success despite cancellation while the verified command diagnostic completes; unmerged PR #48 adds RED-to-GREEN E1/E2 and correct Verify-phase cancellation for that window. The post-success-event session mismatch in #49 remains RED. PR #76 is also unmerged; its isolated Linux full E1 is blocked by the separate unmerged ARM64 source correction #66. Real account ownership/permissions and `authorized_keys` mutation remain Owner Stage 4 E5. |
 | F06 AC6–9 separate key login and unchanged password access | `KeyAuthenticationVerificationWorkflowTests` and scenarios require a separate trusted candidate and minimum command; failed verification does not authorize password-access changes. The unmerged PR #23 cleanup scenario checks one correlated terminal failure with unchanged password-auth and authorized-key state. | Current release has terminal success/cancel and candidate-cleanup result gaps; unmerged PR #23 corrects both with E1/E2 and local composite evidence. Contained OpenSSH E3 passed 3/3 on exact local composite `ad832ae`, not the isolated PR head or an approved candidate; independent review and Owner separate-login proof NOT RUN. |
