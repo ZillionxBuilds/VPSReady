@@ -94,6 +94,7 @@ public sealed class UfwRuleListRefresher
                 UfwRuleListReadStatus.PrivilegeFailure => OperationErrorCode.Privilege,
                 _ => OperationErrorCode.Parse,
             };
+            cancellationToken.ThrowIfCancellationRequested();
             await ReportAsync(
                 correlation,
                 refresh.Replaced ? DiagnosticEventCatalog.OperationSucceeded : DiagnosticEventCatalog.OperationFailed,

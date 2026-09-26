@@ -30,6 +30,30 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task CancellationAfterStoredPolicyVerificationLeavesUfwInactive()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.cancel-before-enable-dispatch");
+        state.Ufw.Rules.Clear();
+        state.Ssh.IsConnected = true;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var phased = new PhasedScenarioTransport(host);
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellingScenarioTransport(phased, cancellation);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
+        Assert.Equal(ScenarioUfwStatus.Inactive, state.Ufw.Status);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuUfwEnable, phased.CommandIds);
+        Assert.Contains(state.Ufw.Rules, rule => rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == state.Ssh.ActiveSshPort && rule.IpFamily == ScenarioIpFamily.Ipv4);
+        Assert.Contains(state.Ufw.Rules, rule => rule.Protocol == ScenarioRuleProtocol.Tcp && rule.Port == state.Ssh.ActiveSshPort && rule.IpFamily == ScenarioIpFamily.Ipv6);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task MalformedStoredRulesVerificationBlocksEnableEvenThoughScenarioHostDoesNotEnforceClientSafety()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.added-rules-malformed");
@@ -231,5 +255,26 @@ public sealed class UfwToggleWorkflowScenarioTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancellingScenarioTransport(
+        PhasedScenarioTransport inner,
+        CancellationTokenSource cancellation) : IRemoteTransport
+    {
+        private int storedReads;
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            // Model a remote command which returns after the caller cancelled.
+            var result = await inner.ExecuteAsync(command, CancellationToken.None);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwStoredSshRead && ++storedReads == 2)
+            {
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
     }
 }
