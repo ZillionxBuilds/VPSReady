@@ -259,7 +259,16 @@ public sealed class ApplicationSession : IApplicationSession
         Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
         string expectedSessionId,
         CancellationToken cancellationToken = default)
-        => await RunOperationCoreAsync(operationId, timeout, operation, expectedSessionId, cancellationToken).ConfigureAwait(false);
+    {
+        // A missing identity must never turn an explicitly session-bound call
+        // into an unbound operation against a replacement connection.
+        if (string.IsNullOrWhiteSpace(expectedSessionId))
+        {
+            return OperationResult.Failure(operationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+        }
+
+        return await RunOperationCoreAsync(operationId, timeout, operation, expectedSessionId, cancellationToken).ConfigureAwait(false);
+    }
 
     private async Task<OperationResult> RunOperationCoreAsync(
         string operationId,

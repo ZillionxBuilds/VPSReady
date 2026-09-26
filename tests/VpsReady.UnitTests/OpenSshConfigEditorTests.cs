@@ -122,6 +122,39 @@ public sealed class OpenSshConfigEditorTests
         Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExtraEffectiveIdentityRefusesFalseNoChangeWithoutEditingConfig(bool extraInWildcard)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "other-key");
+        var original = extraInWildcard
+            ? workspace.RenderAlias("work-vps") + $"Host *\n    IdentityFile \"{extraIdentity}\"\n"
+            : workspace.RenderAlias("work-vps").Replace(
+                "    IdentitiesOnly yes\n",
+                $"    IdentityFile \"{extraIdentity}\"\n    IdentitiesOnly yes\n",
+                StringComparison.Ordinal);
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var diagnostics = new CollectingDiagnosticSink();
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("config_alias");
+
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics)
+            .AddAliasAsync(workspace.Request("work-vps"), correlation, CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.AliasExists, result.ErrorCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.All(diagnostics.Events, item =>
+        {
+            Assert.Equal(correlation.OperationId, item.Correlation.OperationId);
+            Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(extraIdentity, item.Message, StringComparison.Ordinal);
+        });
+    }
+
     [Fact]
     public async Task HandlesQuotedIdentityPathsAndInlineCommentsWithoutLeakingThePath()
     {
@@ -222,6 +255,71 @@ public sealed class OpenSshConfigEditorTests
 
         Assert.Equal(OpenSshConfigEditErrorCatalog.InvalidInput, result.ErrorCode);
         Assert.False(File.Exists(workspace.ConfigPath));
+    }
+
+    [UnixFact]
+    public async Task PosixIdentityPathWithLiteralBackslashIsNotSilentlyRewritten()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var selectedPath = Path.Combine(workspace.Root, @"key\with-backslash");
+        await File.WriteAllTextAsync(selectedPath, "synthetic local path fixture");
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink());
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("work-vps", "safe.example", "safe-user", 22, selectedPath),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InvalidInput, result.ErrorCode);
+        Assert.False(File.Exists(workspace.ConfigPath));
+    }
+
+    [Theory]
+    [InlineData("key%h")]
+    [InlineData("key${HOME}")]
+    public async Task IdentityPathWithOpenSshExpansionSyntaxIsNotSavedAsAFalseLiteral(string fileName)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var selectedPath = Path.Combine(workspace.Root, fileName);
+        await File.WriteAllTextAsync(selectedPath, "synthetic local path fixture");
+        const string original = "# retained local configuration\nHost other\n    User existing\n";
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("work-vps", "safe.example", "safe-user", 22, selectedPath),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InvalidInput, result.ErrorCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.All(diagnostics.Events, entry => Assert.DoesNotContain(selectedPath, entry.Message, StringComparison.Ordinal));
+    }
+
+    [UnixTheory]
+    [InlineData("key with spaces")]
+    [InlineData("key#comment-like")]
+    [InlineData("key\"quote")]
+    public async Task AcceptedLiteralIdentityPathRemainsEffectiveInOpenSsh(string fileName)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var selectedPath = Path.Combine(workspace.Root, fileName);
+        await File.WriteAllTextAsync(selectedPath, "synthetic local path fixture");
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink());
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("work-vps", "safe.example", "safe-user", 22, selectedPath),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        using var shell = new ShellSandbox();
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath) + " work-vps";
+        var effective = await shell.RunAsync(command);
+        Assert.Equal(0, effective.ExitCode);
+        Assert.Contains("identityfile " + selectedPath, effective.Output.Split('\n'), StringComparer.Ordinal);
     }
 
     [Fact]

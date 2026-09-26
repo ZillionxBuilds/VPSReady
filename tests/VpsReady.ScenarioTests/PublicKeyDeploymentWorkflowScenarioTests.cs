@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
+using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
@@ -13,6 +14,60 @@ namespace VpsReady.ScenarioTests;
 [Trait("Category", "E2")]
 public sealed class PublicKeyDeploymentWorkflowScenarioTests
 {
+    [Fact]
+    public async Task AppliedKeyRemainsUnverifiedForSessionOutcomeAfterLateCancellation()
+    {
+        await using var services = ScenarioComposition.Create("scenario.e2.public-key-late-session-cancel");
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var sink = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("scenario-private-host", 22, "scenario-user"), host);
+        using var key = await CreateMaterialAsync();
+        var correlation = CorrelationIds.Create("deploy_key");
+        var operationDiagnostics = SessionOperationDiagnostics.ForPublicKeyDeployment(correlation, sink);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = new CancellationTokenSource();
+        var action = session.RunOperationForSessionAsync(
+            correlation.OperationId,
+            TimeSpan.FromSeconds(10),
+            async (transport, token) =>
+            {
+                var workflow = await new PublicKeyDeploymentWorkflow(sink)
+                    .DeployAsync(transport, key, operationDiagnostics, token);
+                entered.TrySetResult();
+                await release.Task;
+                return workflow.Result;
+            },
+            session.Snapshot.SessionId!,
+            cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.NotEmpty(host.State.Ssh.AuthorizedKeyFingerprints);
+            cancellation.Cancel();
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        var result = await action.WaitAsync(TimeSpan.FromSeconds(5));
+        await operationDiagnostics.FinalizeAsync(result);
+        Assert.True(result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.State);
+        var terminal = Assert.Single(recorder.Events, entry =>
+            entry.Correlation.OperationId == result.OperationId
+            && entry.EventId is DiagnosticEventCatalog.PublicKeyDeploymentSucceeded or
+                DiagnosticEventCatalog.PublicKeyDeploymentFailed or
+                DiagnosticEventCatalog.PublicKeyDeploymentCancelled);
+        Assert.Equal(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, terminal.EventId);
+        Assert.Equal(OperationErrorCode.Cancelled.ToStableCode(), terminal.ErrorCode);
+        Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain("ssh-ed25519", recorder.ToJsonLines(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task DeploymentPreservesExistingEntriesAndSafePermissionsAndIsIdempotent()
     {
@@ -117,6 +172,24 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task CancellationAfterSimulatedVerifyDoesNotReportDeploymentSuccess()
+    {
+        await using var services = ScenarioComposition.Create("scenario.e2.public-key-late-cancel");
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        using var key = await CreateMaterialAsync();
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelAfterVerifyCommandSink(services.GetRequiredService<IDiagnosticSink>(), cancellation);
+
+        var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(host, key, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.NotEmpty(host.State.Ssh.AuthorizedKeyFingerprints);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded);
+        Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+    }
+
+    [Fact]
     public async Task ApplyDisconnectTriggersReadOnlyRecoveryAndNeverReportsSuccess()
     {
         await using var services = ScenarioComposition.Create("scenario.e2.public-key-disconnect");
@@ -182,6 +255,18 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private sealed class CancelAfterVerifyCommandSink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(entry, cancellationToken);
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.Phase == DiagnosticPhase.Verify)
+            {
+                cancellation.Cancel();
             }
         }
     }

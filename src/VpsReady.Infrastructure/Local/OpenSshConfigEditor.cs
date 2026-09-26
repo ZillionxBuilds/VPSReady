@@ -289,6 +289,15 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
             return false;
         }
 
+        // IdentityFile expands OpenSSH tokens and environment variables. A
+        // selected literal filename must never silently target another file.
+        // Backslash is a normal filename character on POSIX, not a separator.
+        if (value.Contains('%') || value.Contains("${", StringComparison.Ordinal)
+            || (!OperatingSystem.IsWindows() && value.Contains('\\')))
+        {
+            return false;
+        }
+
         try
         {
             var fullPath = Path.GetFullPath(value);
@@ -452,18 +461,20 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
         return values;
     }
 
-    private static Dictionary<string, string> GetEffectiveValues(IEnumerable<HostBlock> blocks, string alias)
+    private static EffectiveValues GetEffectiveValues(IEnumerable<HostBlock> blocks, string alias)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var identityFileCount = 0;
         foreach (var block in blocks.Where(block => MatchesAlias(block.Patterns, alias)))
         {
+            identityFileCount += block.IdentityFileCount;
             foreach (var pair in block.Values)
             {
                 values.TryAdd(pair.Key, pair.Value);
             }
         }
 
-        return values;
+        return new EffectiveValues(values, identityFileCount);
     }
 
     private static bool MatchesAlias(IEnumerable<string> patterns, string alias)
@@ -529,13 +540,31 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
         private readonly Dictionary<string, string> values = new(StringComparer.OrdinalIgnoreCase);
         public IReadOnlyList<string> Patterns { get; } = patterns;
         public IReadOnlyDictionary<string, string> Values => values;
+        public int IdentityFileCount { get; private set; }
 
-        public void AddValue(string directive, string value) => values.TryAdd(directive, value);
+        public void AddValue(string directive, string value)
+        {
+            // IdentityFile is additive in OpenSSH; the other managed directives
+            // use first-obtained-value semantics. Retain a count so a repeated
+            // alias cannot be called unchanged while another key is effective.
+            if (string.Equals(directive, "IdentityFile", StringComparison.OrdinalIgnoreCase))
+            {
+                IdentityFileCount++;
+            }
+
+            values.TryAdd(directive, value);
+        }
     }
+
+    private sealed record EffectiveValues(IReadOnlyDictionary<string, string> Values, int IdentityFileCount);
 
     private sealed record DesiredAlias(string Alias, string HostName, string User, string Port, string IdentityFile)
     {
-        public bool IsEquivalentTo(Dictionary<string, string> values) =>
+        public bool IsEquivalentTo(EffectiveValues effective) =>
+            effective.IdentityFileCount == 1 &&
+            IsEquivalentToFirstValues(effective.Values);
+
+        private bool IsEquivalentToFirstValues(IReadOnlyDictionary<string, string> values) =>
             values.TryGetValue("HostName", out var hostName) && string.Equals(hostName, HostName, StringComparison.OrdinalIgnoreCase) &&
             values.TryGetValue("User", out var user) && string.Equals(user, User, StringComparison.Ordinal) &&
             values.TryGetValue("Port", out var port) && string.Equals(port, Port, StringComparison.Ordinal) &&

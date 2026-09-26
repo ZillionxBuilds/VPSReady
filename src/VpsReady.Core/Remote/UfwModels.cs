@@ -17,13 +17,14 @@ public sealed record UfwRuleIdentity(string Value)
 {
     private static readonly Regex CanonicalValue = new("^ufw-ipv[46]-[1-9][0-9]{0,5}-[0-9a-f]{16}$", RegexOptions.CultureInvariant);
 
-    public static UfwRuleIdentity Create(int number, UfwRuleProtocol protocol, int port, string source, UfwRuleAction action, UfwIpFamily family)
+    public static UfwRuleIdentity Create(int number, UfwRuleProtocol protocol, int port, string source, UfwRuleAction action, UfwIpFamily family, int? endPort = null)
     {
-        if (number < 1 || port is < 1 or > 65535 || string.IsNullOrWhiteSpace(source))
+        if (number < 1 || port is < 1 or > 65535 || (endPort is { } end && (end <= port || end > 65535)) || string.IsNullOrWhiteSpace(source))
         {
             throw new ArgumentOutOfRangeException(nameof(number));
         }
-        var material = $"{number}|{protocol}|{port}|{source}|{action}|{family}";
+        var interval = endPort is { } upper ? FormattableString.Invariant($"{port}:{upper}") : port.ToString(CultureInfo.InvariantCulture);
+        var material = $"{number}|{protocol}|{interval}|{source}|{action}|{family}";
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant()[..16];
         return new UfwRuleIdentity($"ufw-{family.ToString().ToLowerInvariant()}-{number}-{hash}");
     }
@@ -37,7 +38,14 @@ public sealed record UfwRuleIdentity(string Value)
         && CanonicalValue.IsMatch(identity.Value);
 }
 
-public sealed record UfwRule(UfwRuleIdentity Identity, int Number, UfwRuleProtocol Protocol, int Port, string Source, UfwRuleAction Action, UfwIpFamily Family);
+public sealed record UfwRule(UfwRuleIdentity Identity, int Number, UfwRuleProtocol Protocol, int Port, string Source, UfwRuleAction Action, UfwIpFamily Family, int? EndPort = null)
+{
+    public bool ContainsPort(int port) => port >= Port && port <= (EndPort ?? Port);
+
+    public string PortDisplay => EndPort is { } end
+        ? $"{Port.ToString(CultureInfo.InvariantCulture)}:{end.ToString(CultureInfo.InvariantCulture)}"
+        : Port.ToString(CultureInfo.InvariantCulture);
+}
 public sealed record UfwSnapshot(UfwFirewallState State, IReadOnlyList<UfwRule> Rules)
 {
     public static UfwSnapshot StateOnly(UfwFirewallState state) => new(state, Array.Empty<UfwRule>());
@@ -148,10 +156,11 @@ public sealed record UfwRuleRemovalIntent(UfwRuleIdentity? SelectedIdentity, boo
 /// </summary>
 public sealed record UfwRuleRemovalRequest
 {
-    private UfwRuleRemovalRequest(UfwRuleProtocol protocol, int port, string source, UfwRuleAction action, UfwIpFamily family)
+    private UfwRuleRemovalRequest(UfwRuleProtocol protocol, int port, int? endPort, string source, UfwRuleAction action, UfwIpFamily family)
     {
         Protocol = protocol;
         Port = port;
+        EndPort = endPort;
         Source = source;
         Action = action;
         Family = family;
@@ -160,6 +169,8 @@ public sealed record UfwRuleRemovalRequest
     public UfwRuleProtocol Protocol { get; }
 
     public int Port { get; }
+
+    public int? EndPort { get; }
 
     public string Source { get; }
 
@@ -171,7 +182,9 @@ public sealed record UfwRuleRemovalRequest
     {
         request = null;
         if (freshRule is null
+            || freshRule.Number < 1
             || freshRule.Port is < 1 or > 65535
+            || (freshRule.EndPort is { } end && (end <= freshRule.Port || end > 65535))
             || string.IsNullOrWhiteSpace(freshRule.Source)
             || !Enum.IsDefined(freshRule.Protocol)
             || !Enum.IsDefined(freshRule.Action)
@@ -187,7 +200,8 @@ public sealed record UfwRuleRemovalRequest
             freshRule.Port,
             freshRule.Source,
             freshRule.Action,
-            freshRule.Family);
+            freshRule.Family,
+            freshRule.EndPort);
         if (!Equals(expectedIdentity, freshRule.Identity))
         {
             return false;
@@ -205,6 +219,7 @@ public sealed record UfwRuleRemovalRequest
         request = new UfwRuleRemovalRequest(
             freshRule.Protocol,
             freshRule.Port,
+            freshRule.EndPort,
             validatedSemantic.Source,
             freshRule.Action,
             freshRule.Family);
@@ -214,6 +229,7 @@ public sealed record UfwRuleRemovalRequest
     public bool MatchesSemantic(UfwRule rule) => rule is not null
         && rule.Protocol == Protocol
         && rule.Port == Port
+        && rule.EndPort == EndPort
         && string.Equals(rule.Source, Source, StringComparison.Ordinal)
         && rule.Action == Action
         && rule.Family == Family;
@@ -221,6 +237,10 @@ public sealed record UfwRuleRemovalRequest
     public string ToCommandSource() => Source == "Anywhere"
         ? Family == UfwIpFamily.Ipv4 ? "0.0.0.0/0" : "::/0"
         : Source;
+
+    public string ToCommandPort() => EndPort is { } end
+        ? $"{Port.ToString(CultureInfo.InvariantCulture)}:{end.ToString(CultureInfo.InvariantCulture)}"
+        : Port.ToString(CultureInfo.InvariantCulture);
 }
 
 public enum UfwAllowRuleValidationError
@@ -306,6 +326,7 @@ public sealed record UfwAllowRuleRequest
         rule is not null
         && rule.Protocol == Protocol
         && rule.Port == Port
+        && rule.EndPort is null
         && rule.Action == UfwRuleAction.Allow
         && rule.Family == Family
         && string.Equals(rule.Source, Source, StringComparison.Ordinal);

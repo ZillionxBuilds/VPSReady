@@ -18,8 +18,17 @@ public sealed class ServerOverviewReader(IDiagnosticSink diagnostics) : IServerO
         RemoteCommandCatalog.UbuntuUfwAvailabilityRead, RemoteCommandCatalog.UbuntuUfwStatusRead,
     ];
 
-    public async Task<ServerOverviewRead> ReadAsync(IRemoteTransport transport, RemoteEndpoint endpoint,
-        CorrelationIds correlation, CancellationToken cancellationToken = default)
+    public Task<ServerOverviewRead> ReadAsync(IRemoteTransport transport, RemoteEndpoint endpoint,
+        CorrelationIds correlation, CancellationToken cancellationToken = default) =>
+        ReadCoreAsync(transport, endpoint, new WorkflowDiagnosticContext(correlation, null), cancellationToken);
+
+    public Task<ServerOverviewRead> ReadAsync(IRemoteTransport transport, RemoteEndpoint endpoint,
+        SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default) =>
+        ReadCoreAsync(transport, endpoint, new WorkflowDiagnosticContext(
+            (sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics))).Correlation, sessionDiagnostics), cancellationToken);
+
+    private async Task<ServerOverviewRead> ReadCoreAsync(IRemoteTransport transport, RemoteEndpoint endpoint,
+        WorkflowDiagnosticContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -27,7 +36,7 @@ public sealed class ServerOverviewReader(IDiagnosticSink diagnostics) : IServerO
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         var results = new Dictionary<string, RemoteCommandResult>(StringComparer.Ordinal);
         var started = Stopwatch.GetTimestamp();
-        await ReportAsync(correlation, DiagnosticEventCatalog.OperationStarted, DiagnosticStatus.Started).ConfigureAwait(false);
+        await ReportAsync(context, DiagnosticEventCatalog.OperationStarted, DiagnosticStatus.Started).ConfigureAwait(false);
         try
         {
             foreach (var id in FactIds)
@@ -45,7 +54,7 @@ public sealed class ServerOverviewReader(IDiagnosticSink diagnostics) : IServerO
                     {
                         results.Add(id, result);
                     }
-                    await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted,
+                    await ReportAsync(context, DiagnosticEventCatalog.CommandCompleted,
                         result.Succeeded && results.ContainsKey(id) ? DiagnosticStatus.Succeeded : DiagnosticStatus.Warning,
                         id, result.Duration, result.ExitCode,
                         !result.Succeeded ? OperationErrorCode.Command : !results.ContainsKey(id) ? OperationErrorCode.Parse : null).ConfigureAwait(false);
@@ -53,43 +62,46 @@ public sealed class ServerOverviewReader(IDiagnosticSink diagnostics) : IServerO
                 catch (Exception exception) when (exception is RemoteTransportException or TimeoutException)
                 {
                     linked.Token.ThrowIfCancellationRequested();
-                    await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, DiagnosticStatus.Warning, id,
+                    await ReportAsync(context, DiagnosticEventCatalog.CommandCompleted, DiagnosticStatus.Warning, id,
                         error: exception is TimeoutException or RemoteTransportException { Kind: RemoteTransportFailureKind.Timeout }
                             ? OperationErrorCode.Timeout : OperationErrorCode.Network).ConfigureAwait(false);
                 }
             }
             var facts = UbuntuServerFactAggregator.Aggregate(results, endpoint);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticStatus.Succeeded, duration: Stopwatch.GetElapsedTime(started)).ConfigureAwait(false);
+            // All remote reads and parsing must be complete before deciding the
+            // terminal outcome. Once success is journaled, later cancellation
+            // cannot turn the same operation into a contradictory failure.
             linked.Token.ThrowIfCancellationRequested();
-            return new(OperationResult.Success(correlation.OperationId, OperationState.Unchanged), facts);
+            await ReportAsync(context, DiagnosticEventCatalog.OperationSucceeded, DiagnosticStatus.Succeeded, duration: Stopwatch.GetElapsedTime(started)).ConfigureAwait(false);
+            return new(OperationResult.Success(context.OperationId, OperationState.Unchanged), facts);
         }
         catch (OperationCanceledException)
         {
             var result = timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested
-                ? OperationResult.Failure(correlation.OperationId, OperationErrorCode.Timeout, OperationState.Unchanged)
-                : OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, result.Cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed,
+                ? OperationResult.Failure(context.OperationId, OperationErrorCode.Timeout, OperationState.Unchanged)
+                : OperationResult.Cancellation(context.OperationId, OperationState.Unchanged);
+            await ReportAsync(context, DiagnosticEventCatalog.OperationFailed, result.Cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed,
                 duration: Stopwatch.GetElapsedTime(started), error: result.ErrorCode).ConfigureAwait(false);
             return new(result, null);
         }
         catch
         {
-            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticStatus.Failed,
+            await ReportAsync(context, DiagnosticEventCatalog.OperationFailed, DiagnosticStatus.Failed,
                 duration: Stopwatch.GetElapsedTime(started), error: OperationErrorCode.Unexpected).ConfigureAwait(false);
-            return new(OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unchanged), null);
+            return new(OperationResult.Failure(context.OperationId, OperationErrorCode.Unexpected, OperationState.Unchanged), null);
         }
     }
 
-    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticStatus status,
+    private async Task ReportAsync(WorkflowDiagnosticContext context, string eventId, DiagnosticStatus status,
         string? commandId = null, TimeSpan? duration = null, int? exitCode = null, OperationErrorCode? error = null)
     {
         try
         {
-            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "Server overview", DiagnosticLevel.Information,
-                correlation.ForStep(commandId is null ? "overview" : "inspect"), eventId == DiagnosticEventCatalog.OperationStarted ? DiagnosticPhase.Validate : DiagnosticPhase.Verify, status,
+            await context.WriteAsync(diagnostics, new StructuredDiagnosticEvent(eventId, "Server overview", DiagnosticLevel.Information,
+                context.ForStep(commandId is null ? "overview" : "inspect"), eventId == DiagnosticEventCatalog.OperationStarted ? DiagnosticPhase.Validate : DiagnosticPhase.Verify, status,
                 commandId is null ? "Read-only overview operation completed or progressed; unavailable fields remain Unknown."
                     : "Read-only fact command completed; no remote output is included in diagnostics.",
-                commandId, error?.ToStableCode(), "ReadServerOverview", duration, ExitCode: exitCode), CancellationToken.None).ConfigureAwait(false);
+                commandId, error?.ToStableCode(), "ReadServerOverview", duration, ExitCode: exitCode)).ConfigureAwait(false);
         }
         catch { /* Diagnostic storage failure cannot fabricate facts. */ }
     }

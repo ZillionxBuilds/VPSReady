@@ -11,6 +11,33 @@ namespace VpsReady.ScenarioTests;
 public sealed class OpenSshConfigEditorScenarioTests
 {
     [Fact]
+    public async Task ExpansionLikeSelectedPathNeverMutatesAnExistingLocalAliasConfig()
+    {
+        using var services = ScenarioComposition.Create("ssh.config.edit.literal-identity");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var paths = services.GetRequiredService<IPlatformPaths>();
+        var configPath = paths.ResolvePath(LocalStorageArea.Ssh, "config");
+        var selectedPath = paths.ResolvePath(LocalStorageArea.Ssh, "id%h");
+        var original = "# user-owned config\nHost existing\n    User preserved\n";
+        state.LocalFiles.Files[configPath] = Encoding.UTF8.GetBytes(original);
+        var editor = new OpenSshConfigEditor(paths, services.GetRequiredService<ILocalFileStore>(), services.GetRequiredService<IDiagnosticSink>());
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("config_alias");
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("scenario-vps", "scenario.example", "scenario-user", 2222, selectedPath),
+            correlation, CancellationToken.None);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InvalidInput, result.ErrorCode);
+        Assert.Equal(original, Encoding.UTF8.GetString(state.LocalFiles.Files[configPath]));
+        Assert.False(state.LocalFiles.Files.ContainsKey(configPath + ".bak"));
+        Assert.Equal(0, state.LocalFiles.AtomicWriteCount);
+        var events = services.GetRequiredService<ScenarioDiagnosticRecorder>().Events;
+        Assert.Contains(events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditFailed && item.Correlation.OperationId == correlation.OperationId);
+        Assert.DoesNotContain(events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.All(events, item => Assert.DoesNotContain(selectedPath, item.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task DeterministicLocalConfigScenarioPreservesWildcardAndCreatesVerifiedBackup()
     {
         using var services = ScenarioComposition.Create("ssh.config.edit.success");
@@ -38,6 +65,30 @@ public sealed class OpenSshConfigEditorScenarioTests
             Assert.DoesNotContain("scenario.example", item.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("scenario-user", item.Message, StringComparison.Ordinal);
         });
+    }
+
+    [Fact]
+    public async Task ExtraWildcardIdentityRefusesFalseNoChangeInMutableLocalConfig()
+    {
+        using var services = ScenarioComposition.Create("ssh.config.edit.extra-identity");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var paths = services.GetRequiredService<IPlatformPaths>();
+        var request = Request(paths);
+        var configPath = paths.ResolvePath(LocalStorageArea.Ssh, "config");
+        var extraIdentity = paths.ResolvePath(LocalStorageArea.Ssh, "another_id");
+        var original = $"Host scenario-vps\n    HostName scenario.example\n    User scenario-user\n    Port 2222\n    IdentityFile \"{request.IdentityFile}\"\n    IdentitiesOnly yes\n\nHost *\n    IdentityFile \"{extraIdentity}\"\n";
+        var originalBytes = Encoding.UTF8.GetBytes(original);
+        state.LocalFiles.Files[configPath] = originalBytes;
+        var editor = new OpenSshConfigEditor(paths, services.GetRequiredService<ILocalFileStore>(), services.GetRequiredService<IDiagnosticSink>());
+
+        var result = await editor.AddAliasAsync(request, DiagnosticRunContext.StartSession().StartOperation("config_alias"), CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.AliasExists, result.ErrorCode);
+        Assert.Equal(originalBytes, state.LocalFiles.Files[configPath]);
+        Assert.Equal(0, state.LocalFiles.AtomicWriteCount);
+        Assert.DoesNotContain(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events,
+            item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
     }
 
     [Fact]

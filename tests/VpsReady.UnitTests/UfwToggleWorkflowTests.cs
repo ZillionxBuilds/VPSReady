@@ -78,6 +78,7 @@ public sealed class UfwToggleWorkflowTests
     [InlineData("0")]
     [InlineData("65536")]
     [InlineData("22\n2222")]
+    [InlineData("22\0")]
     public async Task MissingOrAmbiguousServerPortCannotEnableFirewall(string port)
     {
         var transport = new RecordingTransport(Result(port));
@@ -106,6 +107,58 @@ public sealed class UfwToggleWorkflowTests
     }
 
     [Fact]
+    public async Task CancellationAfterStoredPreflightDoesNotDispatchSshAllowOrEnable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwStoredSshRead, 1,
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredSshAllows), Result(""), Result(ActiveWithSshAllows), Result(""));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value is RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure or RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterVerifiedStoredAllowsDoesNotDispatchEnable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwStoredSshRead, 2,
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredSshAllows), Result(""), Result(ActiveWithSshAllows), Result(""));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.PartiallyApplied, result.Result.State);
+        Assert.Equal(2, transport.Commands.Count(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure));
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterDisablePreflightDoesNotDispatchDisable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwRuleListRead, 1,
+            Result(ActiveWithSshAllows), Result(""), Result("Status: inactive"));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).DisableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwDisable);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task OrdinaryUpstreamNormalizedReportDoesNotPreventSupportedEnable()
     {
         // Verified using UFW 0.36.2 UFWFrontend.get_show_added: both-family
@@ -128,6 +181,39 @@ public sealed class UfwToggleWorkflowTests
         Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
         Assert.Equal(3, transport.Commands.Count);
         Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+    }
+
+    [Fact]
+    public async Task RangeStartingAtSshPortDoesNotCountAsExactReachabilityRule()
+    {
+        var rangeInsteadOfExact = ActiveWithSshAllows.Replace("[ 1] 22/tcp", "[ 1] 22:23/tcp", StringComparison.Ordinal);
+        var transport = new RecordingTransport(Result("22"), Result(rangeInsteadOfExact), Result(StoredSshAllows));
+
+        var result = await Workflow(new RecordingSanitizedSink()).EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("VALIDATION_FAILED", result.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+    }
+
+    [Fact]
+    public async Task MalformedStoredPortBlocksEnableBeforeAnyMutation()
+    {
+        var malformed = StoredSshAllows.Replace("port=22\n", "port=22\0\n", StringComparison.Ordinal);
+        var transport = new RecordingTransport(Result("22"), Result("Status: inactive"), Result(malformed));
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(3, transport.Commands.Count);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("UNSUPPORTED_ENVIRONMENT", result.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure);
+        Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationFailed && item.CommandId == RemoteCommandCatalog.UbuntuUfwStoredSshRead);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
     [Fact]
@@ -251,6 +337,35 @@ public sealed class UfwToggleWorkflowTests
             Commands.Add(command);
             return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue(), cancellationToken);
         }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    // Deliberately ignores the caller token to model a transport that returns
+    // after cancellation. The workflow must own its pre-mutation boundary.
+    private sealed class CancellationIgnoringTransport(
+        CancellationTokenSource cancellation,
+        string cancelAfterCommandId,
+        int cancelAfterOccurrence,
+        params RemoteCommandResult[] results) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> queuedResults = new(results);
+        private int matchingCommands;
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            var result = await ProductionOutput.CaptureAsync(command,
+                queuedResults.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : queuedResults.Dequeue(),
+                CancellationToken.None);
+            if (command.Id.Value == cancelAfterCommandId && ++matchingCommands == cancelAfterOccurrence)
+            {
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

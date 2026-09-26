@@ -63,7 +63,28 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(correlation);
 
-        if (!TryCreatePaths(request, out var paths))
+        KeyPairPaths paths;
+        bool validTarget;
+        try
+        {
+            validTarget = TryCreatePaths(request, out paths);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Target inspection can be denied before the transaction lock or
+            // any file write. Keep this a typed, unchanged local failure.
+            return await FailAsync(
+                correlation,
+                LocalEd25519KeyGenerationErrorCatalog.Permission,
+                OperationErrorCode.LocalIo,
+                OperationState.Unchanged,
+                OperationVerification.NotRun,
+                OperationRecovery.NotRequired,
+                cancellationToken,
+                DiagnosticPhase.Validate).ConfigureAwait(false);
+        }
+
+        if (!validTarget)
         {
             return await FailAsync(
                 correlation,
@@ -72,7 +93,8 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 OperationState.Unchanged,
                 OperationVerification.NotRun,
                 OperationRecovery.NotRequired,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                DiagnosticPhase.Validate).ConfigureAwait(false);
         }
 
         var gate = TargetLocks.GetOrAdd(paths.PrivateFinalPath, _ => new SemaphoreSlim(1, 1));
@@ -89,13 +111,35 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         string? transactionDirectory = null;
         try
         {
-            await PublishAsync(
-                DiagnosticEventCatalog.LocalKeyGenerationStarted,
-                correlation,
-                DiagnosticPhase.Validate,
-                DiagnosticStatus.Started,
-                errorCode: null,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await PublishAsync(
+                    DiagnosticEventCatalog.LocalKeyGenerationStarted,
+                    correlation,
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Started,
+                    errorCode: null,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                // Journal failure precedes all file mutation. Do not create a
+                // private key if even the starting record cannot be trusted.
+                var failed = await FailAsync(
+                    correlation,
+                    LocalEd25519KeyGenerationErrorCatalog.LocalIo,
+                    OperationErrorCode.LocalIo,
+                    OperationState.Unchanged,
+                    OperationVerification.NotRun,
+                    OperationRecovery.NotRequired,
+                    CancellationToken.None,
+                    DiagnosticPhase.Validate).ConfigureAwait(false);
+                return failed.WithUnconfirmedDiagnostic();
+            }
 
             await RecoverMatchingTransactionsAsync(paths, cancellationToken).ConfigureAwait(false);
             ValidateNoCollision(paths);
@@ -137,16 +181,28 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 transactionDirectory = null;
 
                 var operation = OperationResult.Success(correlation.OperationId);
-                await PublishAsync(
-                    DiagnosticEventCatalog.LocalKeyGenerationSucceeded,
-                    correlation,
-                    DiagnosticPhase.Verify,
-                    DiagnosticStatus.Succeeded,
-                    errorCode: null,
-                    cancellationToken).ConfigureAwait(false);
-                return LocalEd25519KeyGenerationResult.Success(
-                    operation,
-                    new LocalEd25519KeyPairLocation(paths.PrivateFinalPath, paths.PublicFinalPath));
+                var committedPair = new LocalEd25519KeyPairLocation(paths.PrivateFinalPath, paths.PublicFinalPath);
+                try
+                {
+                    // The pair is already committed and verified. Caller cancellation
+                    // cannot turn it into an unchanged or cancelled local operation.
+                    await PublishAsync(
+                        DiagnosticEventCatalog.LocalKeyGenerationSucceeded,
+                        correlation,
+                        DiagnosticPhase.Verify,
+                        DiagnosticStatus.Succeeded,
+                        errorCode: null,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException)
+                {
+                    // A sink can fail before or after persisting this terminal event.
+                    // Do not emit a contradictory Failed event or misreport the files
+                    // as absent. The caller must surface the uncertain Activity record.
+                    return LocalEd25519KeyGenerationResult.SuccessWithUnconfirmedDiagnostic(operation, committedPair);
+                }
+
+                return LocalEd25519KeyGenerationResult.Success(operation, committedPair);
             }
             finally
             {
@@ -238,17 +294,27 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         OperationState state,
         OperationVerification verification,
         OperationRecovery recovery,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DiagnosticPhase phase = DiagnosticPhase.Apply)
     {
         var operation = OperationResult.Failure(correlation.OperationId, operationError, state, verification, recovery);
-        await PublishAsync(
-            DiagnosticEventCatalog.LocalKeyGenerationFailed,
-            correlation,
-            recovery == OperationRecovery.Failed ? DiagnosticPhase.Recovery : DiagnosticPhase.Apply,
-            DiagnosticStatus.Failed,
-            generationErrorCode,
-            CancellationToken.None).ConfigureAwait(false);
-        return LocalEd25519KeyGenerationResult.Failure(operation, generationErrorCode);
+        var result = LocalEd25519KeyGenerationResult.Failure(operation, generationErrorCode);
+        try
+        {
+            await PublishAsync(
+                DiagnosticEventCatalog.LocalKeyGenerationFailed,
+                correlation,
+                recovery == OperationRecovery.Failed ? DiagnosticPhase.Recovery : phase,
+                DiagnosticStatus.Failed,
+                generationErrorCode,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return result.WithUnconfirmedDiagnostic();
+        }
+
+        return result;
     }
 
     private async Task<LocalEd25519KeyGenerationResult> CancelAsync(
@@ -257,14 +323,23 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         OperationVerification verification)
     {
         var operation = OperationResult.Cancellation(correlation.OperationId, state, verification);
-        await PublishAsync(
-            DiagnosticEventCatalog.LocalKeyGenerationCancelled,
-            correlation,
-            DiagnosticPhase.Recovery,
-            DiagnosticStatus.Cancelled,
-            OperationErrorCode.Cancelled.ToStableCode(),
-            CancellationToken.None).ConfigureAwait(false);
-        return LocalEd25519KeyGenerationResult.Failure(operation, LocalEd25519KeyGenerationErrorCatalog.Cancelled);
+        var result = LocalEd25519KeyGenerationResult.Failure(operation, LocalEd25519KeyGenerationErrorCatalog.Cancelled);
+        try
+        {
+            await PublishAsync(
+                DiagnosticEventCatalog.LocalKeyGenerationCancelled,
+                correlation,
+                DiagnosticPhase.Recovery,
+                DiagnosticStatus.Cancelled,
+                OperationErrorCode.Cancelled.ToStableCode(),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return result.WithUnconfirmedDiagnostic();
+        }
+
+        return result;
     }
 
     private Task PublishAsync(
@@ -300,12 +375,29 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
     private static bool TryCreatePaths(LocalEd25519KeyGenerationRequest request, out KeyPairPaths paths)
     {
         paths = default;
-        if (string.IsNullOrWhiteSpace(request.PrivateKeyPath) || !Path.IsPathFullyQualified(request.PrivateKeyPath))
+        string privatePath;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.PrivateKeyPath) || !Path.IsPathFullyQualified(request.PrivateKeyPath))
+            {
+                return false;
+            }
+
+            privatePath = Path.GetFullPath(request.PrivateKeyPath);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (IOException)
         {
             return false;
         }
 
-        var privatePath = Path.GetFullPath(request.PrivateKeyPath);
         if (!string.Equals(privatePath, request.PrivateKeyPath, StringComparison.Ordinal)
             || string.Equals(Path.GetExtension(privatePath), ".pub", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(Path.GetFileName(privatePath))
@@ -576,7 +668,19 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         foreach (var directory in Directory.EnumerateDirectories(paths.ParentDirectory, $"{TransactionDirectoryPrefix}*", SearchOption.TopDirectoryOnly))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _ = RecoverTransaction(paths, directory);
+            var manifest = RequireOwnedTransactionManifest(directory);
+            if (ManifestMatches(paths, manifest))
+            {
+                _ = RecoverTransaction(paths, directory);
+            }
+            else if (string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.OrdinalIgnoreCase))
+            {
+                // Case-only names may alias on Windows or a case-insensitive macOS volume.
+                // Never treat an ambiguous transaction as safely unrelated.
+                throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+            }
+            // A validated other-name transaction remains untouched. Its staged
+            // key material is verified only when that exact target is recovered.
         }
 
         return Task.CompletedTask;
@@ -712,13 +816,9 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         }
     }
 
-    private static bool ManifestMatches(KeyPairPaths paths, string transactionDirectory, TransactionManifest manifest) =>
-        manifest.Version == ManifestVersion
-        && string.Equals(manifest.TransactionId, GetTransactionId(transactionDirectory), StringComparison.Ordinal)
-        && string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.Ordinal)
-        && string.Equals(manifest.PublicFileName, Path.GetFileName(paths.PublicFinalPath), StringComparison.Ordinal)
-        && IsSafeLeafName(manifest.PrivateFileName)
-        && IsSafeLeafName(manifest.PublicFileName);
+    private static bool ManifestMatches(KeyPairPaths paths, TransactionManifest manifest) =>
+        string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.Ordinal)
+        && string.Equals(manifest.PublicFileName, Path.GetFileName(paths.PublicFinalPath), StringComparison.Ordinal);
 
     private static bool IsSafeLeafName(string value) =>
         !string.IsNullOrWhiteSpace(value)
@@ -754,14 +854,30 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static void ValidateOwnedMatchingTransaction(KeyPairPaths paths, string transactionDirectory)
     {
+        var manifest = RequireOwnedTransactionManifest(transactionDirectory);
+        if (!ManifestMatches(paths, manifest))
+        {
+            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+        }
+    }
+
+    private static TransactionManifest RequireOwnedTransactionManifest(string transactionDirectory)
+    {
         if (!IsOwnedTransactionDirectory(transactionDirectory)
             || !TryReadManifest(transactionDirectory, out var manifest)
-            || !ManifestMatches(paths, transactionDirectory, manifest))
+            || manifest.Version != ManifestVersion
+            || !string.Equals(manifest.TransactionId, GetTransactionId(transactionDirectory), StringComparison.Ordinal)
+            || !IsSafeLeafName(manifest.PrivateFileName)
+            || string.Equals(Path.GetExtension(manifest.PrivateFileName), ".pub", StringComparison.OrdinalIgnoreCase)
+            || manifest.PrivateFileName.StartsWith(TransactionDirectoryPrefix, StringComparison.Ordinal)
+            || !IsSafeLeafName(manifest.PublicFileName)
+            || !string.Equals(manifest.PublicFileName, manifest.PrivateFileName + ".pub", StringComparison.Ordinal))
         {
             throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
         }
 
         ValidateTransactionEntries(transactionDirectory);
+        return manifest;
     }
 
     private void DeleteTransactionDirectoryIfOwned(KeyPairPaths paths, string transactionDirectory)

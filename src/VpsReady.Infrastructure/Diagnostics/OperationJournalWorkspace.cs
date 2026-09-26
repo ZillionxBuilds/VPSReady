@@ -44,12 +44,27 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         DiagnosticEnvironment environment,
         IDiagnosticFolderOpener folderOpener)
     {
+        ArgumentNullException.ThrowIfNull(redactor);
+        ArgumentNullException.ThrowIfNull(environment);
         this.platformPaths = platformPaths;
         this.redactor = redactor;
         this.clock = clock;
-        this.environment = environment;
+        // Environment values reach the journal, report, bundle and manifest.
+        // Sanitize once before any of those surfaces can observe them; merely
+        // checking WasOmitted would miss replacement-only redactions.
+        this.environment = environment with
+        {
+            AppVersion = SanitizeEnvironmentValue(redactor, environment.AppVersion),
+            BuildSha = SanitizeEnvironmentValue(redactor, environment.BuildSha),
+            LocalOs = SanitizeEnvironmentValue(redactor, environment.LocalOs),
+            LocalArchitecture = SanitizeEnvironmentValue(redactor, environment.LocalArchitecture),
+            ArtifactRid = environment.ArtifactRid is null ? null : SanitizeEnvironmentValue(redactor, environment.ArtifactRid),
+        };
         this.folderOpener = folderOpener;
     }
+
+    private static string SanitizeEnvironmentValue(IRedactor redactor, string value) =>
+        Safe(redactor.Redact(value).SafeText);
 
     public async Task WriteSanitizedAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
     {
@@ -570,11 +585,61 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     private static void AssertSafeBundleContents(IReadOnlyDictionary<string, string> files)
     {
-        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(pair.Value)).Key;
+        // Stable catalogued command IDs may describe an authorized-keys step.
+        // They are safe metadata, not raw authorized_keys contents or paths.
+        // Exempt only a JSON commandId field with a known catalog value; scan
+        // every other byte, including free-text fields, with the strict rule.
+        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(
+            pair.Key == "events.jsonl" ? MaskCataloguedCommandIdsForSafetyScan(pair.Value) : pair.Value)).Key;
         if (unsafeFile is not null)
         {
             throw new InvalidOperationException($"Support-bundle export omitted unsafe payload from {unsafeFile} by policy.");
         }
+    }
+
+    internal static string MaskCataloguedCommandIdsForSafetyScan(string jsonl)
+    {
+        // Parse the JSONL stream rather than matching text. A nested context
+        // key or escaped free-text lookalike must never receive this exemption.
+        var bytes = Encoding.UTF8.GetBytes(jsonl);
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { AllowMultipleValues = true });
+        var valueRanges = new List<(int Start, int End)>();
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1
+                || !reader.ValueTextEquals("commandId"))
+            {
+                continue;
+            }
+
+            if (!reader.Read())
+            {
+                throw new JsonException("A diagnostic command ID value was missing.");
+            }
+
+            var commandId = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            if (commandId is not null && DiagnosticCommandCatalog.IsKnown(commandId))
+            {
+                valueRanges.Add((checked((int)reader.TokenStartIndex), checked((int)reader.BytesConsumed)));
+            }
+        }
+
+        if (valueRanges.Count == 0)
+        {
+            return jsonl;
+        }
+
+        var scanCopy = new StringBuilder(jsonl.Length);
+        var offset = 0;
+        foreach (var (start, end) in valueRanges)
+        {
+            scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset, start - offset)));
+            scanCopy.Append("\"[CATALOGUED_COMMAND_ID]\"");
+            offset = end;
+        }
+
+        scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset)));
+        return scanCopy.ToString();
     }
 
     private void AssertSafeEventForExport(StructuredDiagnosticEvent diagnosticEvent)
@@ -813,23 +878,38 @@ public sealed class SafeUnhandledExceptionReporter(IDiagnosticSink diagnosticSin
 }
 
 /// <summary>Last-resort startup record when dependency composition itself failed.</summary>
+public sealed record MinimalStartupRecord(string ErrorId, string? JournalPath);
+
 public static class MinimalSafeStartupJournal
 {
-    public static void TryRecord()
+    public static MinimalStartupRecord TryRecord(IPlatformPaths? platformPaths = null)
     {
+        var errorId = $"startup-{Guid.NewGuid():N}";
         try
         {
-            var paths = new SystemPlatformPaths();
+            var paths = platformPaths ?? new SystemPlatformPaths();
             var path = paths.ResolvePath(LocalStorageArea.State, "logs/startup-failures.jsonl");
             var directory = Path.GetDirectoryName(path) ?? throw new IOException("A startup journal path requires a directory.");
             Directory.CreateDirectory(directory);
             ApplyDirectoryPermissions(directory);
-            File.AppendAllText(path, "{\"schema_version\":1,\"event_id\":\"application.startup_failed\",\"message\":\"VPSReady started in a safe limited state.\"}" + Environment.NewLine, new UTF8Encoding(false));
+            var line = JsonSerializer.Serialize(new
+            {
+                schema_version = 1,
+                timestamp_utc = DateTimeOffset.UtcNow,
+                event_id = "application.startup_failed",
+                operation_id = errorId,
+                error_code = "STARTUP_FAILED",
+                status = "failed",
+                message = "VPSReady started in a safe limited state."
+            });
+            File.AppendAllText(path, line + Environment.NewLine, new UTF8Encoding(false));
             ApplyFilePermissions(path);
+            return new MinimalStartupRecord(errorId, path);
         }
         catch
         {
             // The caller still presents the safe limited-state window.
+            return new MinimalStartupRecord(errorId, null);
         }
     }
 

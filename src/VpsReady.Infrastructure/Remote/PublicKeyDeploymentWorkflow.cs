@@ -15,17 +15,33 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
 
     public PublicKeyDeploymentWorkflow(IDiagnosticSink diagnostics) => this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
 
-    public async Task<PublicKeyDeploymentOperationResult> DeployAsync(
+    public Task<PublicKeyDeploymentOperationResult> DeployAsync(
         IRemoteTransport transport,
         PublicKeyDeploymentMaterial material,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        DeployCoreAsync(transport, material, null, cancellationToken);
+
+    public Task<PublicKeyDeploymentOperationResult> DeployAsync(
+        IRemoteTransport transport,
+        PublicKeyDeploymentMaterial material,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        DeployCoreAsync(transport, material, sessionDiagnostics ?? throw new ArgumentNullException(nameof(sessionDiagnostics)), cancellationToken);
+
+    private async Task<PublicKeyDeploymentOperationResult> DeployCoreAsync(
+        IRemoteTransport transport,
+        PublicKeyDeploymentMaterial material,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(material);
-        var correlation = CorrelationIds.Create("public_key_deploy");
+        var correlation = new WorkflowDiagnosticContext(
+            sessionDiagnostics?.Correlation ?? CorrelationIds.Create("public_key_deploy"), sessionDiagnostics);
         PreparedPublicKey? key = null;
         IPublicKeyDeploymentTransport? boundTransport = null;
         var applyAttempted = false;
+        var verifyAttempted = false;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, "Public-key deployment started.", null, null).ConfigureAwait(false);
@@ -61,6 +77,7 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
             }
 
             var verify = UbuntuAuthorizedKeysCommandCatalog.CreateVerifyRequest(key);
+            verifyAttempted = true;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying public-key presence, ownership, and secure permissions from fresh state.", verify.Id.Value, null).ConfigureAwait(false);
             var verified = await boundTransport.ExecutePublicKeyDeploymentAsync(verify, key.CanonicalText.AsMemory(), DiagnosticPhase.Verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
@@ -69,6 +86,9 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
                 return await RecoverAsync(correlation, boundTransport, key, OperationErrorCode.Verification, cancellationToken).ConfigureAwait(false);
             }
 
+            // Decide cancellation after the last awaited verification diagnostic,
+            // before recording a terminal success for this deployment.
+            cancellationToken.ThrowIfCancellationRequested();
             var success = OperationResult.Success(correlation.OperationId, alreadyPresent ? OperationState.Unchanged : OperationState.Applied);
             await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "Public-key deployment completed with refreshed verification.", verify.Id.Value, null, verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new PublicKeyDeploymentOperationResult(success, alreadyPresent, null);
@@ -76,7 +96,8 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.PartiallyApplied : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Public-key deployment was cancelled before verified completion.", null, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
+            var phase = verifyAttempted ? DiagnosticPhase.Verify : applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight;
+            await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentCancelled, phase, DiagnosticStatus.Cancelled, "Public-key deployment was cancelled before verified completion.", null, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
             return new PublicKeyDeploymentOperationResult(cancelled, false, PublicKeyDeploymentErrorCatalog.Cancelled);
         }
         catch (RemoteTransportException exception)
@@ -112,7 +133,7 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
         }
     }
 
-    private async Task<PublicKeyDeploymentOperationResult> RecoverAsync(CorrelationIds correlation, IPublicKeyDeploymentTransport transport, PreparedPublicKey key, OperationErrorCode original, CancellationToken cancellationToken)
+    private async Task<PublicKeyDeploymentOperationResult> RecoverAsync(WorkflowDiagnosticContext correlation, IPublicKeyDeploymentTransport transport, PreparedPublicKey key, OperationErrorCode original, CancellationToken cancellationToken)
     {
         var verify = UbuntuAuthorizedKeysCommandCatalog.CreateVerifyRequest(key);
         await ReportAsync(correlation, DiagnosticEventCatalog.OperationRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, "Deployment was not verified; refreshing key state without further mutation.", verify.Id.Value, original).ConfigureAwait(false);
@@ -129,21 +150,21 @@ public sealed class PublicKeyDeploymentWorkflow : IPublicKeyDeployment
         }
     }
 
-    private async Task<PublicKeyDeploymentOperationResult> FailAsync(CorrelationIds correlation, OperationErrorCode error, OperationState state, OperationVerification verification, OperationRecovery recovery, string deploymentError, DiagnosticPhase phase, string? commandId)
+    private async Task<PublicKeyDeploymentOperationResult> FailAsync(WorkflowDiagnosticContext correlation, OperationErrorCode error, OperationState state, OperationVerification verification, OperationRecovery recovery, string deploymentError, DiagnosticPhase phase, string? commandId)
     {
         var result = OperationResult.Failure(correlation.OperationId, error, state, verification, recovery);
         await ReportAsync(correlation, DiagnosticEventCatalog.PublicKeyDeploymentFailed, phase, DiagnosticStatus.Failed, "Public-key deployment did not complete safely.", commandId, error, verification: verification, recovery: recovery).ConfigureAwait(false);
         return new PublicKeyDeploymentOperationResult(result, false, deploymentError);
     }
 
-    private async Task ReportCommandAsync(CorrelationIds correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId) =>
+    private async Task ReportCommandAsync(WorkflowDiagnosticContext correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId) =>
         await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Public-key deployment command completed.", commandId, result.Succeeded ? null : ErrorForResult(result), result.Duration, result.ExitCode).ConfigureAwait(false);
 
-    private async Task ReportAsync(CorrelationIds correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, string? commandId, OperationErrorCode? error, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
+    private async Task ReportAsync(WorkflowDiagnosticContext correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, string? commandId, OperationErrorCode? error, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
     {
         try
         {
-            await diagnostics.WriteAsync(new StructuredDiagnosticEvent(eventId, "SSH key deployment", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, error?.ToStableCode(), ActionName, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery), CancellationToken.None).ConfigureAwait(false);
+            await correlation.WriteAsync(diagnostics, new StructuredDiagnosticEvent(eventId, "SSH key deployment", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, error?.ToStableCode(), ActionName, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery)).ConfigureAwait(false);
         }
         catch { }
     }

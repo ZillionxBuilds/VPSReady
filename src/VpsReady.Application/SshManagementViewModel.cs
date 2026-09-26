@@ -39,6 +39,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     private readonly object operationLock = new();
     private CancellationTokenSource? activeCancellation;
     private ExistingSshKeySelectionResult? selectedKey;
+    private string newKeyName = "vpsready_ed25519_" + Guid.NewGuid().ToString("N")[..12];
     private string alias = string.Empty;
     private string hostName = string.Empty;
     private string userName = string.Empty;
@@ -98,14 +99,16 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             if (!read.Operation.Succeeded || material is null || cancellation.IsCancellationRequested)
             {
                 InvalidateSelection();
-                Complete(cancellation.IsCancellationRequested ? OperationResult.Cancellation(read.Operation.OperationId, OperationState.Unchanged) : read.Operation,
-                    null, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
+                CompleteLocal(cancellation.IsCancellationRequested ? OperationResult.Cancellation(read.Operation.OperationId, OperationState.Unchanged) : read.Operation,
+                    cancellation.IsCancellationRequested ? ExistingSshKeySelectionErrorCatalog.Cancelled : read.SelectionErrorCode,
+                    LocalSshAction.ReadPublicKey, "Select the key again before viewing or copying its public counterpart.", SshManagementScreenState.Ready);
                 return null;
             }
             var characters = material.CopyForUse();
             try
             {
-                Complete(read.Operation, null, "The validated public key is available for this explicit local view/copy action. Clipboard contents may be read by other applications.", SshManagementScreenState.Ready);
+                CompleteLocal(read.Operation, null, LocalSshAction.ReadPublicKey,
+                    "The validated public key is available for this explicit local view/copy action. Clipboard contents may be read by other applications.", SshManagementScreenState.Ready);
                 return new string(characters);
             }
             finally { Array.Clear(characters); }
@@ -140,9 +143,33 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
     public bool CanStartOperation => !IsBusy;
 
+    public string NewKeyName
+    {
+        get => newKeyName;
+        set
+        {
+            if (SetProperty(ref newKeyName, value ?? string.Empty))
+            {
+                OnPropertyChanged(nameof(HasInvalidKeyName));
+                OnPropertyChanged(nameof(CanGenerateKey));
+            }
+        }
+    }
+
+    public bool HasInvalidKeyName => !LocalSshKeyNamePolicy.IsValid(NewKeyName);
+
+    public bool CanGenerateKey => CanStartOperation && !HasInvalidKeyName;
+
     public bool CanCancel => IsBusy;
 
     public bool CanDeploy => !IsBusy && session.Snapshot.IsConnected && HasSelectedKey && IsDeploymentConfirmed;
+
+    /// <summary>A failed local chooser is a safe, unchanged local failure, never a key operation success.</summary>
+    public void ReportLocalFolderPickerFailure() =>
+        ReportLocalPickerFailure("The local folder chooser could not open. No new key was generated. Check desktop file access and choose a folder again; select an existing key again before deployment.");
+
+    public void ReportLocalFilePickerFailure() =>
+        ReportLocalPickerFailure("The local key file chooser could not open. No key was selected. Check desktop file access and choose a key again before deployment.");
 
     public bool CanVerifyKeyAuthentication => !IsBusy && session.Snapshot.IsConnected && HasSelectedKey;
 
@@ -183,6 +210,51 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     public bool IsConfigConfirmed { get => isConfigConfirmed; set => SetProperty(ref isConfigConfirmed, value && HasSelectedKey && !IsBusy); }
 
     /// <summary>
+    /// Turns an explicitly named local folder choice into a single private-key
+    /// destination. The generator remains the only writer and independently
+    /// rejects collisions, unsafe paths and failed verification.
+    /// </summary>
+    public async Task GenerateNamedAsync(string? folderPath, string? requestedName, CancellationToken cancellationToken = default)
+    {
+        if (!TryBegin(SshManagementScreenState.Working, requiresSession: false, out var cancellation, cancellationToken))
+        {
+            return;
+        }
+
+        // A new-generation attempt supersedes the old selection even when
+        // validation, file creation or automatic selection later fails.
+        InvalidateSelection();
+        try
+        {
+            if (requestedName is null || !LocalSshKeyNamePolicy.IsValid(requestedName) || string.IsNullOrWhiteSpace(folderPath))
+            {
+                CompletePreconditionFailure("Enter a valid key name and choose a local folder before generating a key.");
+                return;
+            }
+
+            string privateKeyPath;
+            try
+            {
+                if (!Path.IsPathFullyQualified(folderPath))
+                {
+                    CompletePreconditionFailure("Choose a valid local folder before generating a key.");
+                    return;
+                }
+
+                privateKeyPath = Path.Combine(folderPath, requestedName);
+            }
+            catch (ArgumentException)
+            {
+                CompletePreconditionFailure("Choose a valid local folder before generating a key.");
+                return;
+            }
+
+            await GenerateCoreAsync(privateKeyPath, cancellation.Token).ConfigureAwait(false);
+        }
+        finally { End(cancellation); }
+    }
+
+    /// <summary>
     /// The desktop host obtains a local destination through its picker and
     /// passes it directly. The path is never retained for display or
     /// diagnostics; success continues through the same safe selection path.
@@ -194,24 +266,68 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        InvalidateSelection();
         try
         {
-            var generated = await generator.GenerateAsync(
-                new LocalEd25519KeyGenerationRequest(privateKeyPath),
-                CorrelationIds.Create("generate_key"),
-                cancellation.Token).ConfigureAwait(false);
-            Complete(generated.Operation, generated.GenerationErrorCode, generated.Succeeded
-                ? "A local key pair was generated and verified. Validating its safe selection metadata."
-                : null,
-                generated.Succeeded ? SshManagementScreenState.Working : null);
-            if (generated.Succeeded && generated.KeyPair is not null)
-            {
-                await SelectCoreAsync(generated.KeyPair.PrivateKeyPath, cancellation.Token).ConfigureAwait(false);
-            }
+            await GenerateCoreAsync(privateKeyPath, cancellation.Token).ConfigureAwait(false);
         }
         finally
         {
             End(cancellation);
+        }
+    }
+
+    private async Task GenerateCoreAsync(string privateKeyPath, CancellationToken cancellationToken)
+    {
+        var generated = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(privateKeyPath),
+            CorrelationIds.Create("generate_key"),
+            cancellationToken).ConfigureAwait(false);
+        if (generated.DiagnosticWarningCode is not null)
+        {
+            InvalidateSelection();
+            if (generated.Succeeded)
+            {
+                // A committed pair needs an explicit fresh selection before deployment.
+                CompleteLocal(generated.Operation, generated.DiagnosticWarningCode, LocalSshAction.GenerateKey,
+                    "A local key pair was generated and verified, but its Activity record could not be confirmed. Inspect the chosen folder and Select existing local key before deployment; do not generate the same name again.",
+                    SshManagementScreenState.Ready);
+            }
+            else
+            {
+                CompleteLocal(generated.Operation, generated.GenerationErrorCode, LocalSshAction.GenerateKey);
+                Status += " The local Activity record could not be confirmed. Inspect the chosen folder before retrying; do not assume a key was created or select an unverified key for deployment.";
+            }
+
+            return;
+        }
+
+        if (generated.Succeeded && cancellationToken.IsCancellationRequested)
+        {
+            // The pair was committed. Cancellation must not leave a previous
+            // key selected or conceal that the new local pair now exists.
+            InvalidateSelection();
+            CompleteLocal(generated.Operation, null, LocalSshAction.GenerateKey,
+                "A local key pair was generated and verified. Automatic selection was cancelled. Select existing local key to continue.",
+                SshManagementScreenState.Ready);
+            return;
+        }
+
+        CompleteLocal(generated.Operation, generated.GenerationErrorCode, LocalSshAction.GenerateKey, generated.Succeeded
+            ? "A local key pair was generated and verified. Validating its safe selection metadata."
+            : null,
+            generated.Succeeded ? SshManagementScreenState.Working : null);
+        if (generated.GenerationErrorCode == LocalEd25519KeyGenerationErrorCatalog.Collision)
+        {
+            Status = "A key with that name already exists in the selected folder. Choose another name or folder; VPSReady does not overwrite an existing key.";
+        }
+        if (generated.Succeeded && generated.KeyPair is not null)
+        {
+            await SelectCoreAsync(generated.KeyPair.PrivateKeyPath, cancellationToken).ConfigureAwait(false);
+            if (State == SshManagementScreenState.Cancelled)
+            {
+                Status = "A local key pair was generated and verified, but automatic selection was cancelled. Select existing local key to continue.";
+            }
         }
     }
 
@@ -240,6 +356,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        string? operationSessionId = null;
         try
         {
             if (!TryGetDeployableKey(out var selected))
@@ -248,36 +365,50 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var sessionSnapshot = session.Snapshot;
+            operationSessionId = sessionSnapshot.SessionId;
+            if (sessionSnapshot.SessionId is null)
+            {
+                var lostCorrelation = CorrelationIds.Create("public_key_deploy");
+                var lostDiagnostics = SessionOperationDiagnostics.ForPublicKeyDeployment(lostCorrelation, diagnostics);
+                var lostResult = OperationResult.Failure(lostCorrelation.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+                await lostDiagnostics.FinalizeAsync(lostResult).ConfigureAwait(false);
+                Complete(lostResult, null);
+                return;
+            }
+
             var materialResult = await selector.ReadPublicKeyAsync(selected, CorrelationIds.Create("key_deploy_validate"), cancellation.Token).ConfigureAwait(false);
             if (materialResult.Material is null)
             {
                 InvalidateSelection();
-                Complete(materialResult.Operation, PublicKeyDeploymentErrorCatalog.InvalidInput);
+                CompleteLocal(materialResult.Operation, materialResult.SelectionErrorCode ?? PublicKeyDeploymentErrorCatalog.InvalidInput, LocalSshAction.ReadPublicKey);
                 Status += " Select the key again before confirming deployment.";
                 return;
             }
 
             using (materialResult.Material)
             {
+                var correlation = CorrelationIds.Create("public_key_deploy");
+                var operationDiagnostics = SessionOperationDiagnostics.ForPublicKeyDeployment(correlation, diagnostics);
                 PublicKeyDeploymentOperationResult? deployed = null;
                 var result = await session.RunOperationForSessionAsync(
-                    "ssh_public_key_deploy",
+                    correlation.OperationId,
                     RemoteOperationTimeout,
                     async (transport, token) =>
                     {
-                        deployed = await deployment.DeployAsync(transport, materialResult.Material, token).ConfigureAwait(false);
+                        deployed = await deployment.DeployAsync(transport, materialResult.Material, operationDiagnostics, token).ConfigureAwait(false);
                         return deployed.Result;
                     },
                     sessionSnapshot.SessionId!,
                     cancellation.Token).ConfigureAwait(false);
-                CompleteSessionResult(sessionSnapshot, result, deployed?.Result, deployed?.DeploymentErrorCode,
+                await CompleteSessionResultAsync(sessionSnapshot, result, deployed?.Result, deployed?.DeploymentErrorCode, operationDiagnostics,
                     "Public-key deployment was verified. Run the separate key-authentication test before relying on the key.",
-                    SshManagementScreenState.PublicKeyDeployed);
+                    SshManagementScreenState.PublicKeyDeployed).ConfigureAwait(false);
             }
         }
         finally
         {
             End(cancellation);
+            DemoteProofIfSessionChanged(operationSessionId);
         }
     }
 
@@ -292,6 +423,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        string? operationSessionId = null;
         try
         {
             if (selectedKey is null)
@@ -301,13 +433,24 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var snapshot = session.Snapshot;
+            operationSessionId = snapshot.SessionId;
+            if (snapshot.SessionId is null || snapshot.Identity is null)
+            {
+                var lostCorrelation = CorrelationIds.Create("key_auth_verify");
+                var lostDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(lostCorrelation, diagnostics);
+                var lostResult = OperationResult.Failure(lostCorrelation.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+                await lostDiagnostics.FinalizeAsync(lostResult).ConfigureAwait(false);
+                Complete(lostResult, null);
+                return;
+            }
+
             var validation = await selector.ReadPublicKeyAsync(selectedKey, CorrelationIds.Create("key_auth_validate"), cancellation.Token).ConfigureAwait(false);
             using (validation.Material)
             {
                 if (validation.Material is null)
                 {
                     InvalidateSelection();
-                    Complete(validation.Operation, KeyAuthenticationVerificationErrorCatalog.InvalidInput);
+                    CompleteLocal(validation.Operation, validation.SelectionErrorCode ?? KeyAuthenticationVerificationErrorCatalog.InvalidInput, LocalSshAction.ReadPublicKey);
                     Status += " Select the key again before testing authentication.";
                     return;
                 }
@@ -317,17 +460,19 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 new KnownHostIdentity(snapshot.Identity!.Host, snapshot.Identity.Port),
                 selectedKey,
                 RemoteOperationTimeout);
+            var correlation = CorrelationIds.Create("key_auth_verify");
+            var operationDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(correlation, diagnostics);
             KeyAuthenticationVerificationResult? verified = null;
             var result = await session.RunOperationForSessionAsync(
-                "ssh_key_auth_verify", RemoteOperationTimeout,
+                correlation.OperationId, RemoteOperationTimeout,
                 async (_, token) =>
                 {
-                    verified = await keyAuthentication.VerifyAsync(request, token).ConfigureAwait(false);
+                    verified = await keyAuthentication.VerifyAsync(request, operationDiagnostics, token).ConfigureAwait(false);
                     return verified.Result;
                 }, snapshot.SessionId!, cancellation.Token).ConfigureAwait(false);
-            CompleteSessionResult(snapshot, result, verified?.Result, verified?.VerificationErrorCode,
+            await CompleteSessionResultAsync(snapshot, result, verified?.Result, verified?.VerificationErrorCode, operationDiagnostics,
                 "The separate key-authenticated connection was verified. Password access remains unchanged.",
-                SshManagementScreenState.KeyAuthenticationVerified);
+                SshManagementScreenState.KeyAuthenticationVerified).ConfigureAwait(false);
             if (verified?.VerificationErrorCode == KeyAuthenticationVerificationErrorCatalog.InvalidInput)
             {
                 InvalidateSelection();
@@ -341,6 +486,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         finally
         {
             End(cancellation);
+            DemoteProofIfSessionChanged(operationSessionId);
         }
     }
 
@@ -364,13 +510,30 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            var request = new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selectedKey.Location.PrivateKeyPath);
+            var selected = selectedKey;
+            var request = new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selected.Location.PrivateKeyPath);
             IsConfigConfirmed = false;
+            var validation = await selector.ReadPublicKeyAsync(selected, CorrelationIds.Create("config_key_validate"), cancellation.Token).ConfigureAwait(false);
+            using (validation.Material)
+            {
+                if (!validation.Operation.Succeeded || validation.Material is null || cancellation.IsCancellationRequested)
+                {
+                    InvalidateSelection();
+                    var failed = cancellation.IsCancellationRequested
+                        ? OperationResult.Cancellation(validation.Operation.OperationId, OperationState.Unchanged)
+                        : validation.Operation.Succeeded
+                            ? OperationResult.Failure(validation.Operation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged)
+                            : validation.Operation;
+                    Complete(failed, null);
+                    Status += " Select the key again before saving the local alias.";
+                    return;
+                }
+            }
             var result = await configEditor.AddAliasAsync(
                 request,
                 CorrelationIds.Create("edit_ssh_config"),
                 cancellation.Token).ConfigureAwait(false);
-            Complete(result.Operation, result.ErrorCode, result.Succeeded
+            CompleteLocal(result.Operation, result.ErrorCode, LocalSshAction.EditConfig, result.Succeeded
                 ? "The local OpenSSH alias was verified. It does not change the current server session."
                 : null,
                 result.Succeeded ? SshManagementScreenState.Configured : null);
@@ -416,7 +579,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(SelectedKeyMetadata));
         }
 
-        Complete(selection.Operation, selection.SelectionErrorCode, selection.Succeeded
+        CompleteLocal(selection.Operation, selection.SelectionErrorCode, LocalSshAction.SelectKey, selection.Succeeded
             ? "The local key was validated. Deploy its public companion only after explicit confirmation."
             : null,
             selection.Succeeded ? SshManagementScreenState.KeySelected : null);
@@ -431,6 +594,18 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasSelectedKey));
         OnPropertyChanged(nameof(SelectedKeyMetadata));
         OnEligibilityChanged();
+    }
+
+    private void ReportLocalPickerFailure(string safeMessage)
+    {
+        if (IsBusy)
+        {
+            // Do not replace an in-flight result or its correlation.
+            return;
+        }
+
+        InvalidateSelection();
+        CompletePreconditionFailure(safeMessage, OperationErrorCode.LocalIo);
     }
 
     private bool TryBegin(SshManagementScreenState busyState, bool requiresSession, out CancellationTokenSource cancellation, CancellationToken callerCancellation)
@@ -473,11 +648,12 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         return false;
     }
 
-    private void CompleteSessionResult(
+    private async Task CompleteSessionResultAsync(
         ApplicationSessionSnapshot expected,
         OperationResult result,
         OperationResult? innerResult,
         string? workflowErrorCode,
+        SessionOperationDiagnostics operationDiagnostics,
         string succeededStatus,
         SshManagementScreenState succeededState)
     {
@@ -488,30 +664,65 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         {
             result = OperationResult.Failure(result.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
         }
+
+        await operationDiagnostics.FinalizeAsync(result).ConfigureAwait(false);
         Complete(result, ReferenceEquals(result, innerResult) ? workflowErrorCode : null,
             result.Succeeded ? succeededStatus : null, result.Succeeded ? succeededState : null);
+        DemoteProofIfSessionChanged(expected.SessionId);
+    }
+
+    private void DemoteProofIfSessionChanged(string? expectedSessionId)
+    {
+        if (expectedSessionId is null || State is not (SshManagementScreenState.PublicKeyDeployed or SshManagementScreenState.KeyAuthenticationVerified))
+        {
+            return;
+        }
+
+        var snapshot = session.Snapshot;
+        if (string.Equals(expectedSessionId, snapshot.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // The old operation may have completed before replacement, so its
+        // historical terminal event remains valid. Its proof is never usable
+        // for the current session, including a replacement during finalization.
+        State = snapshot.IsConnected ? SshManagementScreenState.Ready : SshManagementScreenState.Disconnected;
+        Status = "The server session changed after this action completed. Its verification applies only to the previous session; recheck the current session before relying on it.";
     }
 
     private void Complete(
         OperationResult result,
         string? workflowErrorCode,
         string? succeededStatus = null,
-        SshManagementScreenState? succeededState = null)
+        SshManagementScreenState? succeededState = null,
+        string? failedStatus = null)
     {
         OperationId = result.OperationId;
         ErrorCode = workflowErrorCode ?? result.ErrorCode?.ToStableCode();
         Status = result.Succeeded
             ? succeededStatus ?? "The SSH key action completed and was verified. Review Activity & Diagnostics with this operation ID if needed."
-            : $"{result.UserMessage} {result.NextAction}";
+            : failedStatus ?? $"{result.UserMessage} {result.NextAction}";
         State = result.Succeeded
             ? succeededState ?? SshManagementScreenState.Ready
             : result.Cancelled ? SshManagementScreenState.Cancelled : SshManagementScreenState.Failed;
     }
 
-    private void CompletePreconditionFailure(string message)
+    private void CompleteLocal(
+        OperationResult result,
+        string? workflowErrorCode,
+        LocalSshAction action,
+        string? succeededStatus = null,
+        SshManagementScreenState? succeededState = null)
+    {
+        Complete(result, workflowErrorCode, succeededStatus, succeededState,
+            result.Succeeded ? null : LocalSshStatusCatalog.DescribeFailure(action, workflowErrorCode, result));
+    }
+
+    private void CompletePreconditionFailure(string message, OperationErrorCode errorCode = OperationErrorCode.Validation)
     {
         var correlation = CorrelationIds.Create("ssh_management_validate");
-        var result = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+        var result = OperationResult.Failure(correlation.OperationId, errorCode, OperationState.Unchanged);
         OperationId = result.OperationId;
         ErrorCode = result.ErrorCode?.ToStableCode();
         State = SshManagementScreenState.Failed;
@@ -588,6 +799,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(CanStartOperation));
+        OnPropertyChanged(nameof(CanGenerateKey));
         OnEligibilityChanged();
     }
 

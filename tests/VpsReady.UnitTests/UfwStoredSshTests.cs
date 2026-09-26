@@ -9,6 +9,7 @@ namespace VpsReady.UnitTests;
 public sealed class UfwStoredSshTests
 {
     [Theory]
+    [InlineData(1, true, false)]
     [InlineData(22, true, false)]
     [InlineData(2222, true, true)]
     [InlineData(65535, false, false)]
@@ -32,6 +33,35 @@ public sealed class UfwStoredSshTests
     [InlineData(false, false)]
     public void MissingEitherRequiredFamilyNeverProvesSafety(bool allow4, bool allow6) =>
         Assert.False(UfwStoredSshParser.Parse(StoredUfwFixture.Create(allow4: allow4, allow6: allow6))!.HasRequiredAllows);
+
+    [Fact]
+    public void ValidExtraRangeDoesNotBlockStoredSafetyButCannotStandInForExactSshAllow()
+    {
+        const string range = "-A ufw-user-input -p tcp -m multiport --dports 1000:2000 -s 10.0.0.0/8 -j ACCEPT\n";
+        Assert.True(UfwStoredSshParser.Parse(StoredUfwFixture.Create(rules4: range + StoredUfwFixture.Allow(false, 22)))!.HasRequiredAllows);
+        Assert.False(UfwStoredSshParser.Parse(StoredUfwFixture.Create(rules4: range))!.HasRequiredAllows);
+    }
+
+    [Theory]
+    [InlineData("-A ufw-user-input -p tcp -m multiport --dports 2000:1000 -j ACCEPT\n")]
+    [InlineData("-A ufw-user-input -p tcp -m multiport --dports 1000:65536 -j ACCEPT\n")]
+    [InlineData("-A ufw-user-input -p tcp -m multiport --dports 1000:2000 -j DROP\n")]
+    public void InvalidOrBlockingRangeFailsStoredSafetyClosed(string range) =>
+        Assert.Null(UfwStoredSshParser.Parse(StoredUfwFixture.Create(rules4: range + StoredUfwFixture.Allow(false, 22))));
+
+    [Theory]
+    [InlineData("22\0")]
+    [InlineData("22\0extra")]
+    [InlineData("+22")]
+    [InlineData("22 ")]
+    [InlineData("٢٢")]
+    public async Task NonAsciiDecimalPortCannotBecomeStoredSshAllowEvidence(string malformedPort)
+    {
+        var malformed = StoredUfwFixture.Create().Replace("port=22\n", $"port={malformedPort}\n", StringComparison.Ordinal);
+
+        Assert.Null(UfwStoredSshParser.Parse(malformed));
+        Assert.Null((await Capture(malformed)).StoredSshEvidence);
+    }
 
     [Theory]
     [InlineData("-A ufw-user-input -p tcp --dport 22 -j DROP\n")]

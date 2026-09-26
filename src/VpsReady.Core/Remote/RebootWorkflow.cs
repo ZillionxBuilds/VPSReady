@@ -9,13 +9,14 @@ public static class RebootErrorCatalog
     public const string RequiredState = "REBOOT_REQUIRED_STATE_UNAVAILABLE";
     public const string Privilege = "REBOOT_PRIVILEGE_FAILED";
     public const string Command = "REBOOT_COMMAND_FAILED";
+    public const string PreRecovery = "REBOOT_PRE_RECOVERY_FAILED";
     public const string Reconnect = "REBOOT_RECONNECT_FAILED";
     public const string Timeout = "REBOOT_RECONNECT_TIMEOUT";
     public const string Cancelled = "REBOOT_CANCELLED";
     public const string HostTrust = "REBOOT_RECONNECT_HOST_TRUST_FAILED";
     public const string Verification = "REBOOT_RECONNECT_VERIFICATION_FAILED";
     public const string Unexpected = "REBOOT_UNEXPECTED_FAILED";
-    public static IReadOnlyCollection<string> All { get; } = [Confirmation, RequiredState, Privilege, Command, Reconnect, Timeout, Cancelled, HostTrust, Verification, Unexpected];
+    public static IReadOnlyCollection<string> All { get; } = [Confirmation, RequiredState, Privilege, Command, PreRecovery, Reconnect, Timeout, Cancelled, HostTrust, Verification, Unexpected];
 }
 
 public sealed record RebootRequiredState(OperationResult Result, bool? Required, string? ErrorCode);

@@ -7,17 +7,131 @@ stable-release announcement; exact verification belongs to the linked records.
 
 ## Unreleased — v0.1 Core Basic
 
+### Local SSH key naming (review branch)
+
+- Added an explicit name field and folder choice for generated Ed25519 pairs.
+  Portable names are validated before generation; existing private or public
+  files are never silently replaced, and a collision prompts another choice.
+- Kept public-key view/copy, key selection and deployment as separate verified
+  actions. This change has no real-VPS evidence.
+
+See [issue #16](https://github.com/ZillionxBuilds/VPSReady/issues/16).
+
+### Local SSH key recovery isolation (review branch)
+
+- An interrupted key-pair transaction for one name no longer blocks a different
+  name in the same folder when its ownership and manifest are valid. The other
+  transaction is left untouched for its own later recovery; malformed,
+  unexpected and case-ambiguous transactions still fail closed.
+
+See [issue #45](https://github.com/ZillionxBuilds/VPSReady/issues/45).
+**REAL VPS: NOT TESTED.**
+
+### OpenSSH alias identity safety (review branch)
+
+- Refuse a false no-change result when an existing alias would also use an
+  additional `IdentityFile` from its own block or a matching wildcard. Existing
+  user config is left untouched for explicit review.
+
+See [issue #26](https://github.com/ZillionxBuilds/VPSReady/issues/26).
+Local OpenSSH/config evidence is not a real-VPS test. **REAL VPS: NOT TESTED.**
+
+### System setting plan freshness (review branch)
+
+- Recheck the current hostname or timezone on the planned connection before a
+  confirmed change. Timezone changes also recheck the server's available list.
+- Refuse stale or unavailable evidence without starting the change, and guide
+  the user to review a new plan. Post-change verification remains required.
+
+See [issue #35](https://github.com/ZillionxBuilds/VPSReady/issues/35).
+**REAL VPS: NOT TESTED.**
+
+### Firewall port-range compatibility (review branch)
+
+- Show existing numbered UFW TCP/UDP port ranges instead of treating the whole
+  listing as unreadable. Confirmed removal stays bound to the exact interval,
+  family, source, protocol and action, with a fresh absence check.
+- Prevent normal removal of any TCP interval containing the active SSH port;
+  a range never substitutes for an exact SSH allow rule.
+
+See [issue #33](https://github.com/ZillionxBuilds/VPSReady/issues/33).
+This is blind/local verification only; **REAL VPS: NOT TESTED.**
+
+### Connection validation and local Activity (review branch)
+
+- Invalid connection fields now show field-specific next steps, a fresh opaque
+  operation ID, and a stable validation code without opening SSH or repeating
+  submitted values in diagnostics.
+- Fixed local Activity recording in production builds: the numeric assembly
+  version is now marked as version metadata so fail-closed redaction does not
+  mistake it for a server address and reject the journal event.
+
+See [issue #18](https://github.com/ZillionxBuilds/VPSReady/issues/18).
+Local tests and native macOS review are not real-VPS proof. **REAL VPS: NOT TESTED.**
+
+### Startup fallback diagnostics (review branch)
+
+- Correlate the limited-state startup error ID with its minimal local journal
+  record. Show the private diagnostic file path only when the fallback write
+  succeeds; keep a safe, usable window when it does not.
+
+See [issue #24](https://github.com/ZillionxBuilds/VPSReady/issues/24).
+This is local-only evidence; **REAL VPS: NOT TESTED.**
+
+### Local Activity recovery guidance (review branch)
+
+- Failed or cancelled local key and OpenSSH-config operations now point users
+  to local state, while remote actions keep their remote-state safety warning.
+  Activity guidance remains fixed and does not include key paths or secrets.
+
+See [issue #29](https://github.com/ZillionxBuilds/VPSReady/issues/29).
+**REAL VPS: NOT TESTED.**
+
+### Local SSH-key error guidance (review branch)
+
+- Local key generation, selection, public-key revalidation and OpenSSH alias
+  errors now show file/config-specific next steps instead of falsely claiming
+  a server response or asking to refresh remote state. Uncertain local edits
+  still warn to inspect the chosen location and backup before retrying.
+- Preserve stable local key-selection error codes across public-key rechecks;
+  remote deployment and authentication warnings remain unchanged.
+
+See [issue #31](https://github.com/ZillionxBuilds/VPSReady/issues/31).
+**REAL VPS: NOT TESTED.**
+
+### Connection identity and host-key review (review branch)
+
+- Changing the connection host, port or username invalidates the previous
+  verified session before another server action can use it.
+- Invalid connection details, disconnects and cancelled tests clear stale
+  host-key review decisions. A new connection still requires explicit trust,
+  authentication and verification.
+
+See [issue #43](https://github.com/ZillionxBuilds/VPSReady/issues/43).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,
   workflow sections, form labels and differentiated high-risk actions while
   retaining existing confirmation and diagnostic behavior.
+- Refined selected-tab contrast and spacing, removed redundant labels, and
+  separated Connection and Overview into distinct screens after visual review.
 - Added Bash local-build entrypoints under `scripts/build/` for Windows,
   macOS and Linux (`x64` and `arm64`), plus English and Thai build instructions.
   Local publishes are self-contained and unsigned; they are not candidate
   packages or real-VPS proof.
 
 See [issue #11](https://github.com/ZillionxBuilds/VPSReady/issues/11).
+**REAL VPS: NOT TESTED.**
+
+### SSH key deployment completion consistency (review branch)
+
+- Prevent a late cancellation during deployment verification diagnostics from
+  recording a contradictory success result. The remote key-install script and
+  password-access behavior are unchanged.
+
+See [issue #47](https://github.com/ZillionxBuilds/VPSReady/issues/47).
 **REAL VPS: NOT TESTED.**
 
 ### Pre-main repair — R10–R14 (review branch, not integrated)

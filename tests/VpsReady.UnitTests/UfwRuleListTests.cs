@@ -53,6 +53,75 @@ public sealed class UfwRuleListTests
         Assert.All(read.Snapshot.Rules, rule => Assert.DoesNotContain("Status:", rule.Identity.Value, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void NumberedPortRangeRemainsVisibleInACompleteFirewallListing()
+    {
+        var read = UbuntuServerFactParser.ParseUfwRuleList(Result("""
+            Status: active
+
+                 To                         Action      From
+                 --                         ------      ----
+            [ 1] 1000:2000/tcp             ALLOW IN    Anywhere
+            """));
+
+        Assert.True(read.IsComplete);
+        var rule = Assert.Single(read.Snapshot.Rules);
+        Assert.Equal(1000, rule.Port);
+        Assert.Equal(2000, rule.EndPort);
+        Assert.Equal("1000:2000", rule.PortDisplay);
+        Assert.True(rule.ContainsPort(1500));
+        Assert.False(rule.ContainsPort(999));
+        Assert.False(rule.ContainsPort(2001));
+    }
+
+    [Theory]
+    [InlineData("1000:2000/tcp ALLOW IN Anywhere", UfwRuleProtocol.Tcp, UfwIpFamily.Ipv4, UfwRuleAction.Allow, "Anywhere")]
+    [InlineData("1000:2000/udp DENY IN 10.0.0.0/8", UfwRuleProtocol.Udp, UfwIpFamily.Ipv4, UfwRuleAction.Deny, "10.0.0.0/8")]
+    [InlineData("1000:2000/tcp (v6) REJECT IN 2001:db8::/32 (v6)", UfwRuleProtocol.Tcp, UfwIpFamily.Ipv6, UfwRuleAction.Reject, "2001:db8::/32")]
+    [InlineData("1:65535/udp (v6) ALLOW IN Anywhere (v6)", UfwRuleProtocol.Udp, UfwIpFamily.Ipv6, UfwRuleAction.Allow, "Anywhere")]
+    public void ValidRangesPreserveFamilyProtocolActionSourceAndBounds(string row, UfwRuleProtocol protocol, UfwIpFamily family, UfwRuleAction action, string source)
+    {
+        var read = ParseRow(row);
+
+        Assert.True(read.IsComplete);
+        var rule = Assert.Single(read.Snapshot.Rules);
+        Assert.Equal(protocol, rule.Protocol);
+        Assert.Equal(family, rule.Family);
+        Assert.Equal(action, rule.Action);
+        Assert.Equal(source, rule.Source);
+        Assert.NotNull(rule.EndPort);
+        Assert.Equal(UfwRuleIdentity.Create(1, protocol, rule.Port, source, action, family, rule.EndPort), rule.Identity);
+    }
+
+    [Theory]
+    [InlineData("0:2000/tcp ALLOW IN Anywhere")]
+    [InlineData("1000:1000/tcp ALLOW IN Anywhere")]
+    [InlineData("2000:1000/tcp ALLOW IN Anywhere")]
+    [InlineData("1000:65536/tcp ALLOW IN Anywhere")]
+    [InlineData("1000:/tcp ALLOW IN Anywhere")]
+    [InlineData("1000:2000:3000/tcp ALLOW IN Anywhere")]
+    [InlineData("1000:2000/tcp (v6) ALLOW IN Anywhere")]
+    public void MalformedOrAmbiguousRangeFailsClosed(string row)
+    {
+        var read = ParseRow(row);
+
+        Assert.False(read.IsComplete);
+        Assert.Empty(read.Snapshot.Rules);
+    }
+
+    [Fact]
+    public void RangeIdentityChangesWithEndPortButScalarIdentityRemainsStable()
+    {
+        var scalar = ParseRow("1000/tcp ALLOW IN Anywhere").Snapshot.Rules.Single();
+        var first = ParseRow("1000:2000/tcp ALLOW IN Anywhere").Snapshot.Rules.Single();
+        var second = ParseRow("1000:2001/tcp ALLOW IN Anywhere").Snapshot.Rules.Single();
+
+        Assert.Equal(UfwRuleIdentity.Create(1, UfwRuleProtocol.Tcp, 1000, "Anywhere", UfwRuleAction.Allow, UfwIpFamily.Ipv4), scalar.Identity);
+        Assert.NotEqual(scalar.Identity, first.Identity);
+        Assert.NotEqual(first.Identity, second.Identity);
+        Assert.Null(scalar.EndPort);
+    }
+
     [Theory]
     [InlineData("Status: active\n\nTo Action From\n-- ------ ----\n[ 1] 22/icmp ALLOW IN Anywhere", UfwRuleListReadStatus.Unsupported)]
     [InlineData("Status: active\n\nTo Action From\n-- ------ ----\n[ 1] 22/tcp (v6) ALLOW IN Anywhere", UfwRuleListReadStatus.Ambiguous)]
@@ -66,6 +135,26 @@ public sealed class UfwRuleListTests
         Assert.Equal(expected, read.Status);
         Assert.False(read.IsComplete);
         Assert.Empty(read.Snapshot.Rules);
+    }
+
+    [Theory]
+    [InlineData("10.0.0.0/8", "10.0.0.0/8\0")]
+    [InlineData("10.0.0.0/8", "10.0.0.1\0")]
+    [InlineData("10.0.0.0/8", "10.0.0.0/\0")]
+    [InlineData("2001:db8::/32", "2001:db8::/32\0")]
+    public void MalformedSourceCannotReplaceATrustedRuleListing(string originalSource, string source)
+    {
+        var prior = UbuntuServerFactParser.ParseUfwRuleList(Result(ActiveRules)).Snapshot;
+        var malformed = ActiveRules.Replace(originalSource, source, StringComparison.Ordinal);
+
+        var read = UbuntuServerFactParser.ParseUfwRuleList(Result(malformed));
+        var refresh = UfwRuleRefresh.Apply(prior, read);
+
+        Assert.Equal(UfwRuleListReadStatus.Unsupported, read.Status);
+        Assert.False(read.IsComplete);
+        Assert.Empty(read.Snapshot.Rules);
+        Assert.False(refresh.Replaced);
+        Assert.Same(prior, refresh.Snapshot);
     }
 
     [Theory]
@@ -126,4 +215,7 @@ public sealed class UfwRuleListTests
 
     private static RemoteCommandResult Result(string standardOutput, int exitCode = 0) =>
         new(exitCode, standardOutput, string.Empty, TimeSpan.Zero);
+
+    private static UfwRuleListRead ParseRow(string row) => UbuntuServerFactParser.ParseUfwRuleList(Result(
+        "Status: active\n\nTo Action From\n-- ------ ----\n[ 1] " + row));
 }

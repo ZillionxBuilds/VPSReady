@@ -1,18 +1,418 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Diagnostics;
+using VpsReady.Infrastructure.Remote;
+using VpsReady.Tests;
 
 namespace VpsReady.UnitTests;
 
 [Trait("Category", "E1")]
 public sealed class OperationJournalWorkspaceTests
 {
+    private static readonly JsonSerializerOptions RelaxedJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    [Fact]
+    public void BundleSafetyScanMasksOnlyTopLevelCommandIdNotNestedContextOrFreeText()
+    {
+        var commandId = RemoteCommandCatalog.UbuntuAuthorizedKeysVerify;
+        var message = $"Escaped free text says \"commandId\": \"{commandId}\".";
+        var json = JsonSerializer.Serialize(new { commandId, context = new { commandId }, message }, RelaxedJsonOptions);
+
+        var scanCopy = OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(json);
+
+        using var parsed = JsonDocument.Parse(scanCopy);
+        Assert.Equal("[CATALOGUED_COMMAND_ID]", parsed.RootElement.GetProperty("commandId").GetString());
+        Assert.Equal(commandId, parsed.RootElement.GetProperty("context").GetProperty("commandId").GetString());
+        Assert.Equal(message, parsed.RootElement.GetProperty("message").GetString());
+        Assert.Contains(commandId, scanCopy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BundleSafetyScanFailsClosedOnMalformedJournal()
+    {
+        Assert.ThrowsAny<JsonException>(() => OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(
+            "{\"commandId\": \"ubuntu.ssh.authorized-keys.verify\"} {"));
+    }
+
+    [Fact]
+    public async Task CancelledFirewallSessionExportsOnlyItsAuthoritativeTerminalResult()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root), redactor, new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "firewall-test", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            var correlation = CorrelationIds.Create("firewall_add");
+            var scope = SessionOperationDiagnostics.ForFirewall(correlation, sink, "add");
+            var before = """
+                Status: active
+
+                     To                         Action      From
+                     --                         ------      ----
+                [ 1] 22/tcp                     ALLOW IN    Anywhere
+                """;
+            var after = """
+                Status: active
+
+                     To                         Action      From
+                     --                         ------      ----
+                [ 1] 22/tcp                     ALLOW IN    Anywhere
+                [ 2] 443/tcp                    ALLOW IN    Anywhere
+                """;
+            var transport = new FirewallFixtureTransport(before, string.Empty, after, after, "22");
+            var lower = await new FirewallManagement(sink).AddAsync(
+                transport, new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 443, "Anywhere", UfwIpFamily.Ipv4), scope);
+
+            Assert.True(lower.Result.Succeeded);
+            Assert.DoesNotContain(journal.GetActivity(correlation.OperationId), entry => entry.Message == "Firewall allow rule is present in a fresh verified listing.");
+            await scope.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+            var activity = journal.GetActivity(correlation.OperationId);
+            Assert.Contains(activity, entry => entry.OperationId == correlation.OperationId && entry.State == ActivityState.Cancelled);
+            Assert.DoesNotContain(activity, entry => entry.Message == "Firewall allow rule is present in a fresh verified listing.");
+            var persisted = await File.ReadAllTextAsync(Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl"));
+            Assert.Contains(DiagnosticEventCatalog.OperationCancelled, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.OperationSucceeded, persisted, StringComparison.Ordinal);
+            var report = journal.CreateSafeIssueReport(correlation.RunId);
+            Assert.Contains(correlation.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains($"Cancelled / {OperationErrorCode.Cancelled.ToStableCode()}", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("fixture.invalid", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) { Directory.Delete(root, recursive: true); }
+        }
+    }
+
+    private sealed class FirewallFixtureTransport(params string[] outputs) : IRemoteTransport
+    {
+        private readonly Queue<string> outputs = new(outputs);
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) =>
+            ProductionOutput.CaptureAsync(command,
+                new RemoteCommandResult(0, outputs.Count > 0 ? outputs.Dequeue() : throw new InvalidOperationException("Unexpected fixture command."), string.Empty, TimeSpan.FromMilliseconds(5)),
+                cancellationToken);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task CancelledSessionFinalizationNeverExportsTheWorkflowSuccessCandidate()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "session-test", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            var correlation = CorrelationIds.Create("deploy_key");
+            var finalization = SessionOperationDiagnostics.ForPublicKeyDeployment(correlation, sink);
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.PublicKeyDeploymentStarted,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("validate"),
+                DiagnosticPhase.Validate,
+                DiagnosticStatus.Started,
+                "Public-key deployment started.",
+                Action: "DeployPublicKey"));
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationRunning,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("preflight"),
+                DiagnosticPhase.Preflight,
+                DiagnosticStatus.Running,
+                "raw authorized_keys contents must not appear",
+                Action: "DeployPublicKey"));
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.PublicKeyDeploymentSucceeded,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("verify"),
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Succeeded,
+                "This candidate success must not be exported.",
+                RemoteCommandCatalog.UbuntuAuthorizedKeysVerify,
+                Action: "DeployPublicKey"));
+
+            await finalization.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+            var activity = journal.GetActivity();
+            Assert.All(activity, entry => Assert.Equal(correlation.OperationId, entry.OperationId));
+            Assert.Contains(activity, entry => entry.State == ActivityState.Cancelled);
+            Assert.DoesNotContain(activity, entry => entry.State == ActivityState.Succeeded);
+            var persisted = await File.ReadAllTextAsync(Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("This candidate success must not be exported.", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("raw authorized_keys contents", persisted, StringComparison.Ordinal);
+            var report = journal.CreateSafeIssueReport(correlation.RunId);
+            Assert.Contains(correlation.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains($"Cancelled / {OperationErrorCode.Cancelled.ToStableCode()}", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("This candidate success must not be exported.", report, StringComparison.Ordinal);
+
+            var bundle = await journal.ExportSanitizedSupportBundleAsync(
+                correlation.RunId, Path.Combine(root, "user-selected-export"), CancellationToken.None);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var entry = Assert.Single(archive.Entries, item => item.FullName == "events.jsonl");
+            using var reader = new StreamReader(entry.Open());
+            var bundledEvents = await reader.ReadToEndAsync();
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, bundledEvents, StringComparison.Ordinal);
+            Assert.Contains(RemoteCommandCatalog.UbuntuAuthorizedKeysVerify, bundledEvents, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, bundledEvents, StringComparison.Ordinal);
+            Assert.DoesNotContain("raw authorized_keys contents", bundledEvents, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task HostAndUserPseudonymsStayStableThroughJournalAndBundleRedaction()
+    {
+        var root = CreateTemporaryDirectory();
+        const string host = "203.0.113.7";
+        const string user = "ubuntu";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "privacytest", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    "Connection verification failed.",
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["host"] = new(DiagnosticDataClassification.HostIdentifier, host),
+                        ["username"] = new(DiagnosticDataClassification.UserName, user),
+                    }),
+                CancellationToken.None);
+
+            var expectedHost = redactor.Redact(host, DiagnosticDataClassification.HostIdentifier).SafeText;
+            var expectedUser = redactor.Redact(user, DiagnosticDataClassification.UserName).SafeText;
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(
+                correlation.RunId,
+                Path.Combine(root, "user-selected-export"),
+                CancellationToken.None);
+            using var journalDocument = JsonDocument.Parse(journal);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            using var reader = new StreamReader(archive.GetEntry("events.jsonl")!.Open(), Encoding.UTF8);
+            var exportedEvents = reader.ReadToEnd();
+            using var bundleDocument = JsonDocument.Parse(exportedEvents);
+
+            foreach (var (key, expected) in new[] { ("host", expectedHost), ("username", expectedUser) })
+            {
+                Assert.Equal(expected, journalDocument.RootElement.GetProperty("context").GetProperty(key).GetProperty("value").GetString());
+                Assert.Equal(expected, bundleDocument.RootElement.GetProperty("context").GetProperty(key).GetProperty("value").GetString());
+            }
+
+            foreach (var surface in new[] { journal, report, exportedEvents })
+            {
+                Assert.DoesNotContain(host, surface, StringComparison.Ordinal);
+                Assert.DoesNotContain(user, surface, StringComparison.Ordinal);
+            }
+
+            Assert.DoesNotContain(host, Assert.Single(workspace.GetActivity()).Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("app_version")]
+    [InlineData("build_sha")]
+    [InlineData("local_os")]
+    [InlineData("local_arch")]
+    [InlineData("artifact_rid")]
+    public async Task TokenLikeEnvironmentMetadataIsSanitizedOnEveryDiagnosticSurface(string field)
+    {
+        var root = CreateTemporaryDirectory();
+        var exportDirectory = Path.Combine(root, "user-selected-export");
+        var syntheticToken = string.Concat("gh", "p_", "syntheticnotarealtoken12345");
+        var redactor = new FailClosedRedactor();
+        var redacted = redactor.Redact(syntheticToken);
+        Assert.False(redacted.WasOmitted);
+        Assert.NotEqual(syntheticToken, redacted.SafeText);
+        var environment = new DiagnosticEnvironment(
+            field == "app_version" ? syntheticToken : "0.1.0-test",
+            field == "build_sha" ? syntheticToken : "testbuild",
+            field == "local_os" ? syntheticToken : "test-os",
+            field == "local_arch" ? syntheticToken : "test-arch",
+            field == "artifact_rid" ? syntheticToken : "osx-arm64");
+
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                environment,
+                new RecordingFolderOpener());
+
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await new RedactingDiagnosticSink(redactor, workspace).WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    "Connection verification failed."),
+                CancellationToken.None);
+
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exportDirectory, CancellationToken.None);
+            Assert.DoesNotContain(syntheticToken, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(syntheticToken, report, StringComparison.Ordinal);
+
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                var content = reader.ReadToEnd();
+                Assert.DoesNotContain(syntheticToken, content, StringComparison.Ordinal);
+                if (entry.FullName == "environment.json")
+                {
+                    Assert.Contains("[REDACTED_TOKEN]", content, StringComparison.Ordinal);
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectionFormFailureReachesLocalActivityAndJournalWithOpaqueCorrelation()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "uncommitted-9965c5bc", System.Runtime.InteropServices.RuntimeInformation.OSDescription, "Arm64", "osx-arm64"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = CorrelationIds.Create("validate");
+            await sink.WriteAsync(new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                "Connection",
+                DiagnosticLevel.Error,
+                correlation,
+                DiagnosticPhase.Validate,
+                DiagnosticStatus.Failed,
+                "Enter a valid host or IP address. Enter an SSH port from 1 to 65535. Enter a username without spaces. Enter a password using the password field. Correct the indicated fields, then try again.",
+                ErrorCode: OperationErrorCode.Validation.ToStableCode(),
+                Action: "TestConnection",
+                OutputPolicy: OutputCapturePolicy.None), CancellationToken.None);
+
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal(correlation.OperationId, entry.OperationId);
+            Assert.Equal(ActivityState.Failed, entry.State);
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.Contains(correlation.OperationId, journal, StringComparison.Ordinal);
+            Assert.Contains("VALIDATION_FAILED", journal, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LocalKeyFailureJournalProjectsLocalGuidanceWithoutLeakingItsPath()
+    {
+        var root = CreateTemporaryDirectory();
+        const string seededPath = "/private/local-key-test-path";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            redactor.RegisterSensitiveValue(seededPath);
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "localguide", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.LocalKeyGenerationFailed,
+                    "Local SSH key",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Failed,
+                    $"Generation failed at {seededPath}",
+                    ErrorCode: "LOCAL_KEY_TARGET_COLLISION",
+                    Action: "Generate local SSH key"),
+                CancellationToken.None);
+
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal("Review the error and verify the local state before retrying.", entry.NextSafeAction);
+            Assert.Equal(correlation.OperationId, entry.OperationId);
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            Assert.DoesNotContain(seededPath, entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededPath, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededPath, report, StringComparison.Ordinal);
+            Assert.DoesNotContain("verify the remote state", entry.NextSafeAction, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
     {

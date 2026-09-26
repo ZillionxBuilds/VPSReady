@@ -74,6 +74,46 @@ public sealed class ConnectionSessionLifecycleTests
     }
 
     [Fact]
+    public async Task IdentityEditCancelsInFlightConnectionBeforeItCanPublishASession()
+    {
+        var session = new ApplicationSession();
+        var blocking = new RecordingPasswordTransport { BlockConnect = true };
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new QueueTransportFactory(blocking), new RecordingDiagnosticsSink());
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session);
+        viewModel.AppendSecretCharacter('x');
+        var test = viewModel.TestAsync("first.example", "22", "user", TimeSpan.FromSeconds(5));
+        await blocking.ConnectEntered.Task;
+
+        await viewModel.InvalidateForIdentityEditAsync();
+        await test;
+
+        Assert.False(session.Snapshot.IsConnected);
+        Assert.False(viewModel.HasConnectedSession);
+        Assert.Equal(ConnectionScreenState.Disconnected, viewModel.State);
+        Assert.Null(viewModel.OperationId);
+        Assert.Null(lifecycle.PendingHostTrustReview);
+        Assert.Equal(1, blocking.DisposeCount);
+    }
+
+    [Fact]
+    public async Task CancelledTransportHostTrustFailureCannotCreateAReviewChallenge()
+    {
+        var session = new ApplicationSession();
+        var blocking = new RecordingPasswordTransport { BlockConnect = true, ReturnHostTrustOnCancellation = true };
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new QueueTransportFactory(blocking), new RecordingDiagnosticsSink());
+        using var input = CreateInput("cancelled-trust.example");
+        var test = lifecycle.TestConnectionAsync(input);
+        await blocking.ConnectEntered.Task;
+
+        await lifecycle.DisconnectAsync();
+        var result = await test;
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Null(lifecycle.PendingHostTrustReview);
+        Assert.False(session.Snapshot.IsConnected);
+    }
+
+    [Fact]
     public async Task DifferentIdentityInvalidatesOldSessionWhileSameIdentityReusesIt()
     {
         var session = new ApplicationSession();
@@ -141,7 +181,9 @@ public sealed class ConnectionSessionLifecycleTests
 
         public bool BlockConnect { get; init; }
 
-        public KnownHostTrustAssessment? LastHostTrustAssessment => null;
+        public bool ReturnHostTrustOnCancellation { get; init; }
+
+        public KnownHostTrustAssessment? LastHostTrustAssessment { get; private set; }
 
         public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
         {
@@ -149,7 +191,21 @@ public sealed class ConnectionSessionLifecycleTests
             ConnectEntered.TrySetResult();
             if (BlockConnect)
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                }
+                catch (OperationCanceledException) when (ReturnHostTrustOnCancellation)
+                {
+                    LastHostTrustAssessment = new KnownHostTrustAssessment(
+                        KnownHostTrustState.Unknown,
+                        new KnownHostTrustChallenge(
+                            new KnownHostIdentity(endpoint.Host, endpoint.Port),
+                            new HostKeyFingerprint("SHA256:synthetic"),
+                            KnownHostTrustState.Unknown),
+                        false);
+                    throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust);
+                }
             }
         }
 

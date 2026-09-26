@@ -47,7 +47,8 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         PublicKeyDeploymentMaterial? material = null;
         if (!selectedKey.Succeeded)
         {
-            return new(OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged), null);
+            return new(OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged),
+                null, ExistingSshKeySelectionErrorCatalog.InvalidTarget);
         }
         var inspected = await InspectAsync(new ExistingSshKeySelectionRequest(selectedKey.Location!.PrivateKeyPath),
             correlation, selectedKey.Metadata!.Fingerprint,
@@ -57,19 +58,24 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             material?.Dispose();
             material = null;
         }
-        return new(inspected.Operation, material);
+        return new(inspected.Operation, material, inspected.SelectionErrorCode);
     }
 
     // The actual transport consumes this already-parsed key, never reopens a
     // path after identity comparison. All file buffers are cleared by InspectAsync.
-    internal static async Task<PrivateKeyFile> OpenForAuthenticationAsync(ExistingSshKeyLocation location, CancellationToken cancellationToken)
+    internal static Task<PrivateKeyFile> OpenForAuthenticationAsync(ExistingSshKeyLocation location, CancellationToken cancellationToken) =>
+        OpenForAuthenticationAsync(location, new SilentKeyReadSink(), cancellationToken);
+
+    internal static async Task<PrivateKeyFile> OpenForAuthenticationAsync(
+        ExistingSshKeyLocation location, IDiagnosticSink diagnostics, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(diagnostics);
         if (string.IsNullOrEmpty(location.ExpectedFingerprint))
         {
             throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity);
         }
         PrivateKeyFile? key = null;
-        var selector = new ExistingOpenSshKeySelector(new SilentKeyReadSink());
+        var selector = new ExistingOpenSshKeySelector(diagnostics);
         var inspected = await selector.InspectAsync(new ExistingSshKeySelectionRequest(location.PrivateKeyPath),
             CorrelationIds.Create("key_use"), location.ExpectedFingerprint,
             (privateBytes, _) =>
@@ -82,6 +88,17 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             key?.Dispose();
             cancellationToken.ThrowIfCancellationRequested();
             throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity);
+        }
+        try
+        {
+            // Validation has its own terminal outcome. A caller cancelled at
+            // that boundary must not carry parsed private material into SSH.
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException)
+        {
+            key.Dispose();
+            throw;
         }
         return key;
     }
@@ -160,10 +177,10 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             }
             cancellationToken.ThrowIfCancellationRequested();
             consume?.Invoke(fileContents, publicBytes);
+            cancellationToken.ThrowIfCancellationRequested();
             var metadata = new ExistingSshKeyMetadata("ed25519", fingerprint);
             var operation = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
             await PublishAsync(DiagnosticEventCatalog.ExistingKeySelectionSucceeded, correlation, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, null, CancellationToken.None).ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
             return ExistingSshKeySelectionResult.Success(operation, new ExistingSshKeyLocation(path, fingerprint), metadata);
         }
         catch (OperationCanceledException)
@@ -262,14 +279,14 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
     {
         path = string.Empty;
         error = null;
-        if (string.IsNullOrWhiteSpace(candidate) || !Path.IsPathFullyQualified(candidate) || !string.Equals(Path.GetFullPath(candidate), candidate, StringComparison.Ordinal))
-        {
-            error = ExistingSshKeySelectionErrorCatalog.InvalidTarget;
-            return false;
-        }
-
         try
         {
+            if (string.IsNullOrWhiteSpace(candidate) || !Path.IsPathFullyQualified(candidate) || !string.Equals(Path.GetFullPath(candidate), candidate, StringComparison.Ordinal))
+            {
+                error = ExistingSshKeySelectionErrorCatalog.InvalidTarget;
+                return false;
+            }
+
             RejectReparsePointHierarchy(candidate);
             var attributes = File.GetAttributes(candidate);
             if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
@@ -281,6 +298,9 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             path = candidate;
             return true;
         }
+        catch (ArgumentException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
+        catch (NotSupportedException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
+        catch (PathTooLongException) { error = ExistingSshKeySelectionErrorCatalog.InvalidTarget; return false; }
         catch (FileNotFoundException) { error = ExistingSshKeySelectionErrorCatalog.Missing; return false; }
         catch (DirectoryNotFoundException)
         {
@@ -416,18 +436,32 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
 
     private static int TranslateUnixFlags(UnixOpenFlags flags)
     {
+        // Linux ARM64 overrides O_DIRECTORY and O_NOFOLLOW in its UAPI;
+        // the x64 values mean O_DIRECT and O_LARGEFILE there. Unknown ABIs
+        // must fail closed rather than opening a key without no-follow.
+        (int noFollow, int directory, int nonBlocking) = OperatingSystem.IsMacOS()
+            ? (0x100, 0, 0x4)
+            : OperatingSystem.IsLinux()
+                ? RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => (0x20000, 0x10000, 0x800),
+                    Architecture.Arm64 => (0x8000, 0x4000, 0x800),
+                    _ => throw new UnsafeKeySelectionPathException(),
+                }
+                : throw new UnsafeKeySelectionPathException();
+
         var translated = 0;
         if ((flags & UnixOpenFlags.NoFollow) != 0)
         {
-            translated |= OperatingSystem.IsMacOS() ? 0x100 : 0x20000;
+            translated |= noFollow;
         }
-        if ((flags & UnixOpenFlags.Directory) != 0 && !OperatingSystem.IsMacOS())
+        if ((flags & UnixOpenFlags.Directory) != 0)
         {
-            translated |= 0x10000;
+            translated |= directory;
         }
         if ((flags & UnixOpenFlags.NonBlocking) != 0)
         {
-            translated |= OperatingSystem.IsMacOS() ? 0x4 : 0x800;
+            translated |= nonBlocking;
         }
         return translated;
     }

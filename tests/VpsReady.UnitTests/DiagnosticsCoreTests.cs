@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Infrastructure.Diagnostics;
@@ -7,6 +9,35 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class DiagnosticsCoreTests
 {
+    [Theory]
+    [InlineData(DiagnosticDataClassification.HostIdentifier, "203.0.113.7", "HOST")]
+    [InlineData(DiagnosticDataClassification.UserName, "ubuntu", "USER")]
+    public void PublicIdentityPseudonymsCannotBeReproducedFromAnUnkeyedDictionary(
+        DiagnosticDataClassification classification,
+        string rawIdentity,
+        string marker)
+    {
+        var firstRedactor = new FailClosedRedactor();
+        var secondRedactor = new FailClosedRedactor();
+
+        var first = firstRedactor.Redact(rawIdentity, classification).SafeText;
+        var repeated = firstRedactor.Redact(rawIdentity, classification).SafeText;
+        var independent = secondRedactor.Redact(rawIdentity, classification).SafeText;
+        var unkeyedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(rawIdentity));
+        var guessableToken = $"[{marker}-{Convert.ToHexString(unkeyedDigest.AsSpan(0, 6))}]";
+
+        Assert.StartsWith($"[{marker}-", first, StringComparison.Ordinal);
+        Assert.Equal(first, repeated);
+        Assert.NotEqual(guessableToken, first);
+        Assert.NotEqual(first, independent);
+        Assert.NotEqual(first, secondRedactor.Redact(first, classification).SafeText);
+        Assert.DoesNotContain(rawIdentity, first, StringComparison.Ordinal);
+        Assert.DoesNotContain(rawIdentity, independent, StringComparison.Ordinal);
+
+        var forgedToken = $"[{marker}-0000000000000000-0000000000000000]";
+        Assert.NotEqual(forgedToken, firstRedactor.Redact(forgedToken, classification).SafeText);
+    }
+
     [Fact]
     public void CorrelationFactoryCreatesOpaqueLinkedIdentifiersAndActivityStates()
     {
@@ -76,6 +107,36 @@ public sealed class DiagnosticsCoreTests
         {
             Assert.DoesNotContain(unsafeValue, activity.NextSafeAction, StringComparison.Ordinal);
         }
+    }
+
+    [Theory]
+    [InlineData(DiagnosticEventCatalog.LocalKeyGenerationFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.LocalKeyGenerationCancelled, DiagnosticStatus.Cancelled, "Verify the local state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.LocalKeyGenerationRecoveryRequired, DiagnosticStatus.RecoveryRequired, "Review the recovery guidance and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.ExistingKeySelectionFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.ExistingKeySelectionCancelled, DiagnosticStatus.Cancelled, "Verify the local state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.OpenSshConfigEditFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.OpenSshConfigEditCancelled, DiagnosticStatus.Cancelled, "Verify the local state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.StartupFailed, DiagnosticStatus.Failed, "Review the error and verify the local state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.PublicKeyDeploymentFailed, DiagnosticStatus.Failed, "Review the error and verify the remote state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, DiagnosticStatus.Cancelled, "Verify the remote state before retrying the cancelled action.")]
+    [InlineData(DiagnosticEventCatalog.RebootRecoveryRequired, DiagnosticStatus.RecoveryRequired, "Review the recovery guidance and verify the remote state before retrying.")]
+    [InlineData(DiagnosticEventCatalog.OperationFailed, DiagnosticStatus.Failed, "Review the error and verify the remote state before retrying.")]
+    public void ActivityGuidanceDistinguishesLocalOnlyEventsFromRemoteOrGenericEvents(
+        string eventId,
+        DiagnosticStatus status,
+        string expectedGuidance)
+    {
+        var diagnosticEvent = new StructuredDiagnosticEvent(
+            eventId,
+            "Safe category",
+            DiagnosticLevel.Error,
+            CorrelationIds.Create("review"),
+            DiagnosticPhase.Verify,
+            status,
+            "Fixed safe message");
+
+        Assert.Equal(expectedGuidance, diagnosticEvent.ToActivityEntry().NextSafeAction);
     }
 
     [Fact]
