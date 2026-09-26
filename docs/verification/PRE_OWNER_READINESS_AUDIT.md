@@ -969,9 +969,15 @@ were **NOT VERIFIED**. A disposable local merge of exact PR #34 head
 `1ef0f617176e6f2b5c1087a4730ea4b80cc962e0` with this #52 head
 was conflict-free: E0 build/format/diff **PASS**, E1 **656 PASS/2 SKIP**,
 E2 **183 PASS/3 SKIP**. It was not pushed or approved. The separate
-#50/#54/#52 combination must be rerun against this new #52 head; older
-composite counts above do not prove it. Hosted checks, native Windows/Linux,
-independent QA and an approved integrated candidate remain **NOT RUN**.
+#50/#54/#52 combination at the new #52 head produced one toggle `Success`
+helper conflict; a local-only resolution preserved #54's deferred
+`WorkflowDiagnosticContext` and #52's caller-token check. The resulting
+unpublished local merge commit `513d1d3b7647e647f8b03dbbc9f299ff2c02601f`
+passed E0 locked restore/build/format/diff (zero warnings/errors), E1
+**665 PASS/2 SKIP** and E2 **177 PASS/3 SKIP**. This is developer
+compatibility evidence, not an independent review or integrated candidate.
+Hosted checks, native Windows/Linux, independent QA and an approved
+integrated candidate remain **NOT RUN**.
 E3 was **NOT RUN**; Owner Stage 3/E5 and **REAL VPS: NOT TESTED**.
 
 ### F08 stale system-plan gap and focused correction — 2026-09-25
@@ -1407,9 +1413,10 @@ This is a trace of blind coverage, not a release or real-firewall PASS:
 
 F04 AC11 follow-up: the newer isolated PR #52 head `a76929a` additionally
 has seven RED-to-GREEN pre-dispatch cancellation cases and one stateful
-cancel-before-enable case. The earlier #50/#54/#52 interaction evidence is
-for the older #52 head and must be rerun before an integrated-candidate
-claim. None of these blind checks proves real UFW lockout safety.
+cancel-before-enable case. New-head local #50/#54/#52 compatibility passed
+after one reviewed-in-source but not independently approved helper resolution
+at `513d1d3`; it does not establish an integrated-candidate claim. None
+of these blind checks proves real UFW lockout safety.
 
 ### F05–F07 criterion walk on the release source
 
@@ -1551,9 +1558,9 @@ tracks the separate E5 gate.
   and `PartiallyApplied` after a write attempt.
   Also review stacked [PR #54](https://github.com/ZillionxBuilds/VPSReady/pull/54)
   for #53 post-terminal session authority and correlation, after dependency
-  PR #50. New-head local #34/#52 and older-head #50/#54/#52 composites are
-  not approved release or real-firewall evidence; rerun the latter against
-  the new #52 head and resolve its toggle helper conflict explicitly.
+  PR #50. New-head local #34/#52 and #50/#54/#52 composites are not
+  approved release or real-firewall evidence. The latter needs independent
+  review of its locally resolved toggle helper before approved integration.
 - Obtain independent parser/safety review of [PR #78](https://github.com/ZillionxBuilds/VPSReady/pull/78)
   for F04 malformed CIDR output and fail-closed snapshot/selection behavior.
   Its local auto-merge with #34/#68 and E0/E1/E2 passes do not replace hosted
