@@ -22,12 +22,12 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, planned, command.Id.Value).ConfigureAwait(false);
             if (!planned.Succeeded)
             {
-                return await PlanFailureAsync(correlation, OperationErrorCode.Apt, planned.AptLockContended ? PackageUpgradeErrorCatalog.Locked : PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+                return await PlanFailureAsync(correlation, OperationErrorCode.Apt, planned.AptLockContended ? PackageUpgradeErrorCatalog.Locked : PackageUpgradeErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
             }
 
             if (planned.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuAptUpgradePlan, Number: { } count, Fingerprint: { } fingerprint })
             {
-                return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+                return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
             }
 
             var result = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
@@ -41,15 +41,15 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         }
         catch (TimeoutException)
         {
-            return await PlanFailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout).ConfigureAwait(false);
+            return await PlanFailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout, command.Id.Value).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await PlanFailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+            return await PlanFailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
         }
         catch
         {
-            return await PlanFailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected).ConfigureAwait(false);
+            return await PlanFailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected, command.Id.Value).ConfigureAwait(false);
         }
     }
 
@@ -184,10 +184,10 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         return new PackageUpgradePlan(result, 0);
     }
 
-    private async Task<PackageUpgradePlan> PlanFailureAsync(CorrelationIds correlation, OperationErrorCode error, string code)
+    private async Task<PackageUpgradePlan> PlanFailureAsync(CorrelationIds correlation, OperationErrorCode error, string code, string commandId)
     {
         var result = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
-        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, null, error).ConfigureAwait(false);
+        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
         return new PackageUpgradePlan(result, 0);
     }
 

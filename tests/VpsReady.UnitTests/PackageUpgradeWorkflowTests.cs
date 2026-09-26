@@ -113,6 +113,37 @@ public sealed class PackageUpgradeWorkflowTests
         }
     }
 
+    [Theory]
+    [InlineData("timeout", OperationErrorCode.Timeout)]
+    [InlineData("network", OperationErrorCode.Network)]
+    [InlineData("unexpected", OperationErrorCode.Unexpected)]
+    public async Task InitialPlanExceptionIdentifiesThePlanCommandWithoutMutation(string failure, OperationErrorCode expectedError)
+    {
+        var sink = new Sink();
+        Exception exception = failure switch
+        {
+            "timeout" => new TimeoutException(),
+            "network" => new RemoteTransportException(RemoteTransportFailureKind.Network),
+            _ => new InvalidOperationException("untrusted remote detail"),
+        };
+        var transport = new TimeoutAtCommandTransport(RemoteCommandCatalog.UbuntuAptUpgradePlan, failOccurrence: 1)
+        {
+            Failure = exception,
+        };
+
+        var plan = await new PackageUpgradeWorkflow(new AllowedPreflight(), sink).PlanAsync(transport);
+
+        Assert.False(plan.IsReady);
+        Assert.Equal(expectedError, plan.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, plan.Result.State);
+        Assert.Equal([RemoteCommandCatalog.UbuntuAptUpgradePlan], transport.Commands.Select(command => command.Id.Value));
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.PackageUpgradeFailed);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptUpgradePlan, terminal.CommandId);
+        Assert.Equal(plan.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.DoesNotContain(sink.Events, entry => entry.Message.Contains("untrusted remote detail", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task RevalidationTimeoutIsAttributedToPlanWithoutUpgradeMutation()
     {
