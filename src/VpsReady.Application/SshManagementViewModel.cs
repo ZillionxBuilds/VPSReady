@@ -364,8 +364,25 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            var request = new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selectedKey.Location.PrivateKeyPath);
+            var selected = selectedKey;
+            var request = new OpenSshConfigEditRequest(Alias, HostName, UserName, parsedPort, selected.Location.PrivateKeyPath);
             IsConfigConfirmed = false;
+            var validation = await selector.ReadPublicKeyAsync(selected, CorrelationIds.Create("config_key_validate"), cancellation.Token).ConfigureAwait(false);
+            using (validation.Material)
+            {
+                if (!validation.Operation.Succeeded || validation.Material is null || cancellation.IsCancellationRequested)
+                {
+                    InvalidateSelection();
+                    var failed = cancellation.IsCancellationRequested
+                        ? OperationResult.Cancellation(validation.Operation.OperationId, OperationState.Unchanged)
+                        : validation.Operation.Succeeded
+                            ? OperationResult.Failure(validation.Operation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged)
+                            : validation.Operation;
+                    Complete(failed, null);
+                    Status += " Select the key again before saving the local alias.";
+                    return;
+                }
+            }
             var result = await configEditor.AddAliasAsync(
                 request,
                 CorrelationIds.Create("edit_ssh_config"),

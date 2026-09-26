@@ -128,6 +128,109 @@ public sealed class SelectedKeyIdentityRegressionTests
         }
     }
 
+    [Theory]
+    [InlineData("private")]
+    [InlineData("pair")]
+    [InlineData("missing-private")]
+    [InlineData("other")]
+    public async Task ConfigAliasRejectsKeyChangedAfterSelectionBeforeAnyWrite(string change)
+    {
+        await using var a = new KeyWorkspace();
+        await using var b = new KeyWorkspace();
+        await GenerateAsync(a);
+        await GenerateAsync(b);
+        await using var session = new ApplicationSession();
+        var sink = new CollectingDiagnosticSink();
+        var config = new CountConfig();
+        using var vm = new SshManagementViewModel(session, new Ed25519OpenSshKeyPairGenerator(sink),
+            new ExistingOpenSshKeySelector(sink), new CountDeployment(), new CountAuthentication(), config);
+        await vm.SelectAsync(a.PrivateKeyPath);
+        Assert.True(vm.HasSelectedKey);
+        vm.Alias = "fixture";
+        vm.HostName = "fixture.invalid";
+        vm.UserName = "fixture";
+        vm.Port = "22";
+        vm.IsConfigConfirmed = true;
+
+        if (change is "private" or "pair")
+        {
+            File.Copy(b.PrivateKeyPath, a.PrivateKeyPath, overwrite: true);
+            if (change == "pair")
+            {
+                File.Copy(b.PublicKeyPath, a.PublicKeyPath, overwrite: true);
+            }
+        }
+        else if (change == "missing-private")
+        {
+            File.Delete(a.PrivateKeyPath);
+        }
+        else
+        {
+            await ChangeCompanionAsync(a, b, change);
+        }
+
+        await vm.SaveConfigAsync();
+
+        Assert.Equal(0, config.Calls);
+        Assert.False(vm.HasSelectedKey);
+        Assert.False(vm.IsConfigConfirmed);
+        Assert.Equal(SshManagementScreenState.Failed, vm.State);
+        Assert.DoesNotContain(a.PrivateKeyPath, vm.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ConfigAliasAcceptsUnchangedValidatedKey()
+    {
+        await using var key = new KeyWorkspace();
+        await GenerateAsync(key);
+        await using var session = new ApplicationSession();
+        var sink = new CollectingDiagnosticSink();
+        var config = new CountConfig();
+        using var vm = new SshManagementViewModel(session, new Ed25519OpenSshKeyPairGenerator(sink),
+            new ExistingOpenSshKeySelector(sink), new CountDeployment(), new CountAuthentication(), config);
+        await vm.SelectAsync(key.PrivateKeyPath);
+        vm.Alias = "fixture";
+        vm.HostName = "fixture.invalid";
+        vm.UserName = "fixture";
+        vm.Port = "22";
+        vm.IsConfigConfirmed = true;
+
+        await vm.SaveConfigAsync();
+
+        Assert.Equal(1, config.Calls);
+        Assert.True(vm.HasSelectedKey);
+        Assert.Equal(SshManagementScreenState.Configured, vm.State);
+        Assert.False(vm.IsConfigConfirmed);
+    }
+
+    [Fact]
+    public async Task CancelledConfigKeyRevalidationCannotWriteAlias()
+    {
+        await using var key = new KeyWorkspace();
+        await GenerateAsync(key);
+        await using var session = new ApplicationSession();
+        var sink = new CollectingDiagnosticSink();
+        var config = new CountConfig();
+        using var vm = new SshManagementViewModel(session, new Ed25519OpenSshKeyPairGenerator(sink),
+            new ExistingOpenSshKeySelector(sink), new CountDeployment(), new CountAuthentication(), config);
+        await vm.SelectAsync(key.PrivateKeyPath);
+        vm.Alias = "fixture";
+        vm.HostName = "fixture.invalid";
+        vm.UserName = "fixture";
+        vm.Port = "22";
+        vm.IsConfigConfirmed = true;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await vm.SaveConfigAsync(cancellation.Token);
+
+        Assert.Equal(0, config.Calls);
+        Assert.False(vm.HasSelectedKey);
+        Assert.False(vm.IsConfigConfirmed);
+        Assert.Equal(SshManagementScreenState.Cancelled, vm.State);
+        Assert.DoesNotContain(key.PrivateKeyPath, vm.Status, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task SelectedAndDeploymentFingerprintUseTheSameOpenSshBlob()
     {
@@ -249,6 +352,15 @@ public sealed class SelectedKeyIdentityRegressionTests
     private sealed class NoConfig : IOpenSshConfigEditor
     {
         public Task<OpenSshConfigEditResult> AddAliasAsync(OpenSshConfigEditRequest request, CorrelationIds correlation, CancellationToken cancellationToken) => throw new InvalidOperationException("Unexpected config action.");
+    }
+    private sealed class CountConfig : IOpenSshConfigEditor
+    {
+        public int Calls { get; private set; }
+        public Task<OpenSshConfigEditResult> AddAliasAsync(OpenSshConfigEditRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(OpenSshConfigEditResult.Success(OperationResult.Success(correlation.OperationId), OpenSshConfigEditDisposition.Created));
+        }
     }
 }
 
