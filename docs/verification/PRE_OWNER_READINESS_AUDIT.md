@@ -48,6 +48,58 @@ are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
 
+## Current reconciliation — 2026-09-26
+
+Earlier headings that call a local tree "all-pending", "all-source" or "full"
+describe the scope understood **at that time**, not exhaustive coverage of the
+currently open product PRs. A fresh ancestry and source audit found that the
+previous `18b9f19` preflight omitted, among others, the UFW port-range repair
+in PR #34 and diagnostic-pseudonym repair in PR #38. Its E0–E4 results remain
+valid for **that exact tree only**. They must not be cited as proof that all
+open repairs interact safely. This correction supersedes broader coverage
+wording elsewhere in this historical log without erasing those results.
+
+An isolated **local, unpushed** reconciliation branch,
+`codex/15-all-open-preflight` at
+`2459a35b1e6a3d7f8a8a202b881bc4698e1da0aa`, descends from the unchanged
+release base `9965c5bcdb445947d6bd593344fbade62d9c55a4`. At the
+2026-09-26 open-PR inventory, every open **product** PR head except #17 is a
+Git ancestor of this commit. For #17, `git cherry -v HEAD
+origin/fix/16-ssh-key-naming` reports its remaining `f976daba` patch as
+equivalent (`-`); the named-key UI, validation, generator and regressions are
+present. Documentation PR #28 is deliberately excluded from this product
+tree. This membership check does not substitute for independent review of
+the conflict resolutions.
+
+The new integration resolved actual interactions in SSH-key local recovery
+versus named generation/cancellation (#32/#17/#58), connection identity
+invalidation versus field-specific diagnostic guidance (#44/#19), and
+firewall pre-terminal cancellation versus session diagnostics and exact SSH
+allow protection (#52/#54/#34). It also combined the missing Overview/UFW
+parser corrections (#68/#70/#72/#74/#78/#80/#82/#86), diagnostic privacy
+(#38/#40), package exception attribution (#98) and the previously selected
+repairs. The independent product PRs remain draft/unmerged; this branch is
+only developer compatibility evidence.
+
+| Class | Exact `2459a35` result | Boundary |
+| --- | --- | --- |
+| E0 static/build | Locked restore, Release `-warnaserror` build with zero warnings/errors and `dotnet format --verify-no-changes` PASS on macOS arm64. Six static policy guards and retained-artifact safety scan PASS. Disposable Ubuntu Noble ARM64 locked restore and warning-as-error build also PASS. | This is source/build evidence, not approval. |
+| E1 unit | macOS arm64 and Ubuntu ARM64: 938 PASS, 3 declared SKIP on each. | Three host/contained prerequisites are separately classified. |
+| E2 stateful simulation | macOS arm64: 227 PASS, 3 declared SKIP. Ubuntu ARM64: 227 PASS, 3 declared SKIP when the built assembly ran nonroot on the container's native filesystem. | An earlier root/bind-mounted Linux run failed one mode-000 permission fixture because its file remained readable; that run is not counted as PASS. No production change was made for this harness artifact. |
+| E3 local protocol | Disposable Ubuntu Noble ARM64 loopback-only OpenSSH: 3/3 production SSH.NET tests PASS, including named-key matching/wrong-key refusal. Host-key, wrong-password, stdout/stderr/exit and timeout checks PASS. | `TestResults/e3-production-sshnet.trx` and `TestResults/e3/local-contained-protocol.txt`; no published port or real VPS. |
+| E4 local packaging/startup | Unsigned self-contained macOS arm64 publish embeds exact SHA and its process started before intentional termination. Unsigned Linux ARM64 publish embeds exact SHA and sustained Xvfb startup for five seconds before intentional timeout. | No clean-exit, interactive UI, official candidate archive, native Windows/x64 or hosted proof. |
+| E5 Owner real VPS | **NOT TESTED.** | Owner Stage 0–6 and explicit promotion approval remain separate. |
+
+The first contained Linux build-wrapper attempt could not resolve the
+macOS-hosted worktree Git metadata path inside Docker. A direct publish from
+the same SHA then passed; a separate restore attempt with an explicit RID was
+rejected by the existing lock-file contract before compilation. Neither
+setup failure is a product-test pass or a reason to weaken the lock file.
+The source is **not** `READY_FOR_OWNER_VPS_TEST` or `READY_FOR_MAIN`:
+semantic merges need external review, hosted Windows/macOS/Linux checks and
+official package evidence are still unverified, and release/main are
+unchanged. **REAL VPS: NOT TESTED.**
+
 ### F08 package cancellation and system-action compatibility — 2026-09-26 UTC
 
 Same-class review of F08 found two distinct false-success boundaries on the
@@ -424,7 +476,8 @@ OpenSSH key-format proof **1 PASS/1 SKIP**; loopback sshd was **NOT RERUN**
 on this head. E4 unsigned macOS arm64 publish, Mach-O architecture, embedded
 SHA and artifact-safety **PASS**; startup/interactive UI **NOT RUN**.
 
-Local-only all-pending `18b9f19` cherry-picks that correction onto
+Historical local `18b9f19` (not an exhaustive open-PR composite)
+cherry-picks that correction onto
 `33b2596` without conflicts with the existing generator repairs (#46, #58,
 #62); exact E0 build/format **PASS**, E1 **761 PASS/3 SKIP**, E2 **199
 PASS/3 SKIP**. Exact E3 on disposable Ubuntu Noble ARM64 Docker/loopback
@@ -441,7 +494,7 @@ evidence, not hosted CI, independent QA, a merged candidate or Owner Stage
 
 ### Exact full-source contained Linux ARM64 check — 2026-09-26
 
-The clean all-pending local `18b9f19` source was copied into a disposable
+The clean historical local `18b9f19` source was copied into a disposable
 official .NET SDK 10.0.400 Ubuntu Noble ARM64 Docker container. The first
 setup attempt stopped before product tests because UID 1654 was already the
 image's `app` user; the corrected run used that existing nonroot user.
@@ -665,7 +718,7 @@ PowerShell package/manifest/notices, native Windows/Linux desktop, independent
 QA, approved exact-candidate E0–E4 and Owner Stage 0–6 remain **NOT RUN**.
 **REAL VPS: NOT TESTED.**
 
-### Current all-pending product preflight — 2026-09-25 18:36 UTC
+### Historical local product preflight — 2026-09-25 18:36 UTC
 
 The local-only `codex/15-full-integrated-check` at
 `0bd4223a3d91f812a51531ab0e742fb7014faeb6` starts from the unchanged
@@ -1553,8 +1606,9 @@ unmerged [PR #17](https://github.com/ZillionxBuilds/VPSReady/pull/17).
 
 A clean **local-only** `codex/45-full-preflight` head
 `2cf6186d5405330d4ae10b4d509eff6e280a5223` stacks those two exact
-source corrections on the prior `22fff7e` composite. It includes all open
-product PRs through #46 (documentation PR #28 remains separate). E0 locked
+source corrections on the prior `22fff7e` composite. It combined the product
+repairs then selected through #46 (documentation PR #28 remains separate),
+but was not an exhaustive current open-PR inventory. E0 locked
 restore, Release `-warnaserror` build with 0 warnings/errors, format and diff
 PASS; E1 full Unit 749 PASS/2 SKIP; E2 full Scenario 205 PASS/3 SKIP; E4
 unsigned osx-arm64 publish and artifact-safety scan PASS. E3 and interactive
