@@ -18,7 +18,7 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex KeyValue = new("^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$", RegexOptions.CultureInvariant);
     private static readonly Regex MemInfo = new("^(?<key>MemTotal|MemAvailable):\\s*(?<value>[0-9]+)\\s*kB$", RegexOptions.CultureInvariant);
     private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*(?<index>[0-9]+)$", RegexOptions.CultureInvariant);
-    private static readonly Regex CpuModel = new("^(?:model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex CpuModel = new("^(?<key>model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
@@ -190,13 +190,29 @@ public static partial class UbuntuServerFactParser
             }
         }
 
-        var model = lines.Select(line => CpuModel.Match(line)).FirstOrDefault(match => match.Success)?.Groups["value"].Value.Trim();
-        if (processorIndices.Count == 0 || !string.IsNullOrEmpty(model) && !IsSafeDisplayValue(model))
+        var modelNames = new HashSet<string>(StringComparer.Ordinal);
+        var hardwareNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in lines.Where(line => line.StartsWith("model name", StringComparison.Ordinal)
+            || line.StartsWith("Hardware", StringComparison.Ordinal)))
+        {
+            var match = CpuModel.Match(line);
+            var value = match.Groups["value"].Value.Trim();
+            if (!match.Success || !IsSafeDisplayValue(value))
+            {
+                return ServerFact.Unknown<CpuFacts>();
+            }
+
+            var names = match.Groups["key"].Value == "model name" ? modelNames : hardwareNames;
+            names.Add(value);
+        }
+
+        if (processorIndices.Count == 0)
         {
             return ServerFact.Unknown<CpuFacts>();
         }
 
-        return ServerFact.Known(new CpuFacts(processorIndices.Count, string.IsNullOrWhiteSpace(model) ? null : model));
+        var candidates = modelNames.Count > 0 ? modelNames : hardwareNames;
+        return ServerFact.Known(new CpuFacts(processorIndices.Count, candidates.Count == 1 ? candidates.Single() : null));
     }
 
     public static ServerFact<MemoryFacts> ParseMemory(string output)

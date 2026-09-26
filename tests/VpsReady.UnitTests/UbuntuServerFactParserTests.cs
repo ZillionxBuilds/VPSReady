@@ -35,6 +35,51 @@ public sealed class UbuntuServerFactParserTests
     }
 
     [Fact]
+    public void MixedCpuModelsKeepLogicalCountWithoutClaimingFirstModelForAllProcessors()
+    {
+        var homogeneous = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : Model A");
+        var mixed = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : Model B");
+
+        Assert.True(homogeneous.IsKnown);
+        Assert.Equal("Model A", homogeneous.Value!.Model);
+        Assert.True(mixed.IsKnown);
+        Assert.Equal(2, mixed.Value!.LogicalProcessorCount);
+        Assert.Null(mixed.Value.Model);
+    }
+
+    [Fact]
+    public void UnsafeLaterCpuModelCannotBeHiddenByAnEarlierSafeOne()
+    {
+        var cpu = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : bad\u001bmodel");
+
+        Assert.False(cpu.IsKnown);
+    }
+
+    [Fact]
+    public void CpuModelFallbackDistinguishesModelNameFromHardwareAndModelLessOutput()
+    {
+        var modelLess = UbuntuServerFactParser.ParseCpu("processor : 0\nprocessor : 1");
+        var hardwareOnly = UbuntuServerFactParser.ParseCpu("processor : 0\nHardware : Board A");
+        var modelAndHardware = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nHardware : Board A");
+        var mixedHardware = UbuntuServerFactParser.ParseCpu("processor : 0\nHardware : Board A\nHardware : Board B");
+
+        Assert.True(modelLess.IsKnown);
+        Assert.Null(modelLess.Value!.Model);
+        Assert.Equal("Board A", hardwareOnly.Value!.Model);
+        Assert.Equal("Model A", modelAndHardware.Value!.Model);
+        Assert.True(mixedHardware.IsKnown);
+        Assert.Null(mixedHardware.Value!.Model);
+    }
+
+    [Fact]
+    public void MalformedLaterCpuModelCannotBeHiddenByAnEarlierSafeOne()
+    {
+        var cpu = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name :");
+
+        Assert.False(cpu.IsKnown);
+    }
+
+    [Fact]
     public void ParsersUseCanonicalUbuntuUnitsAndOnlyAcceptSafePrivilegeStates()
     {
         var uptime = UbuntuServerFactParser.ParseUptime("93600.50 1200.00");

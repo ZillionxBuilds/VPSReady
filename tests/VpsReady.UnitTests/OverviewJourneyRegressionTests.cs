@@ -93,6 +93,31 @@ public sealed class OverviewJourneyRegressionTests
         });
     }
 
+    [Fact]
+    public async Task MixedCpuModelsRenderKnownCountButUnknownModelWithoutChangingOtherFacts()
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport { CpuOutput = "processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : Model B" };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink));
+
+        await vm.RefreshAsync();
+
+        Assert.Equal(12, transport.Calls);
+        Assert.Equal("2 logical CPUs; model Unknown", Assert.Single(vm.Facts, row => row.Label == "CPU").Value);
+        Assert.All(vm.Facts, row => Assert.True(row.IsKnown));
+        Assert.NotEmpty(sink.Events);
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+            Assert.DoesNotContain("Model A", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Model B", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
     [Theory]
     // Synthetic byte evidence, not reconstructed from rounded human units.
     [InlineData("/dev/fixture 33822867456 5558272 31997505536 0% /", true)]
