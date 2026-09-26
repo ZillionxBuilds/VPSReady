@@ -170,6 +170,30 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
     }
 
     [Fact]
+    public async Task SessionTerminalDiagnosticRetainsPassedVerificationWhenCandidateCleanupFails()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            DisposeFailure = new InvalidOperationException("synthetic cleanup failure"),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        var correlation = CorrelationIds.Create("key_auth_verify");
+        var sessionDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(correlation, diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest(), sessionDiagnostics);
+        await sessionDiagnostics.FinalizeAsync(result.Result);
+
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(correlation.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(OperationVerification.Passed, terminal.Verification);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("synthetic cleanup failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task CandidateCleanupFailureCannotReplacePriorAuthenticationFailure()
     {
         var transport = new RecordingKeyAuthenticationTransport

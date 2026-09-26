@@ -570,11 +570,61 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     private static void AssertSafeBundleContents(IReadOnlyDictionary<string, string> files)
     {
-        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(pair.Value)).Key;
+        // Stable catalogued command IDs may describe an authorized-keys step.
+        // They are safe metadata, not raw authorized_keys contents or paths.
+        // Exempt only a JSON commandId field with a known catalog value; scan
+        // every other byte, including free-text fields, with the strict rule.
+        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(
+            pair.Key == "events.jsonl" ? MaskCataloguedCommandIdsForSafetyScan(pair.Value) : pair.Value)).Key;
         if (unsafeFile is not null)
         {
             throw new InvalidOperationException($"Support-bundle export omitted unsafe payload from {unsafeFile} by policy.");
         }
+    }
+
+    internal static string MaskCataloguedCommandIdsForSafetyScan(string jsonl)
+    {
+        // Parse the JSONL stream rather than matching text. A nested context
+        // key or escaped free-text lookalike must never receive this exemption.
+        var bytes = Encoding.UTF8.GetBytes(jsonl);
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { AllowMultipleValues = true });
+        var valueRanges = new List<(int Start, int End)>();
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1
+                || !reader.ValueTextEquals("commandId"))
+            {
+                continue;
+            }
+
+            if (!reader.Read())
+            {
+                throw new JsonException("A diagnostic command ID value was missing.");
+            }
+
+            var commandId = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            if (commandId is not null && DiagnosticCommandCatalog.IsKnown(commandId))
+            {
+                valueRanges.Add((checked((int)reader.TokenStartIndex), checked((int)reader.BytesConsumed)));
+            }
+        }
+
+        if (valueRanges.Count == 0)
+        {
+            return jsonl;
+        }
+
+        var scanCopy = new StringBuilder(jsonl.Length);
+        var offset = 0;
+        foreach (var (start, end) in valueRanges)
+        {
+            scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset, start - offset)));
+            scanCopy.Append("\"[CATALOGUED_COMMAND_ID]\"");
+            offset = end;
+        }
+
+        scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset)));
+        return scanCopy.ToString();
     }
 
     private void AssertSafeEventForExport(StructuredDiagnosticEvent diagnosticEvent)

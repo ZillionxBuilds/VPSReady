@@ -328,6 +328,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        string? operationSessionId = null;
         try
         {
             if (!TryGetDeployableKey(out var selected))
@@ -336,6 +337,17 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var sessionSnapshot = session.Snapshot;
+            operationSessionId = sessionSnapshot.SessionId;
+            if (sessionSnapshot.SessionId is null)
+            {
+                var lostCorrelation = CorrelationIds.Create("public_key_deploy");
+                var lostDiagnostics = SessionOperationDiagnostics.ForPublicKeyDeployment(lostCorrelation, diagnostics);
+                var lostResult = OperationResult.Failure(lostCorrelation.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+                await lostDiagnostics.FinalizeAsync(lostResult).ConfigureAwait(false);
+                Complete(lostResult, null);
+                return;
+            }
+
             var materialResult = await selector.ReadPublicKeyAsync(selected, CorrelationIds.Create("key_deploy_validate"), cancellation.Token).ConfigureAwait(false);
             if (materialResult.Material is null)
             {
@@ -347,25 +359,28 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
 
             using (materialResult.Material)
             {
+                var correlation = CorrelationIds.Create("public_key_deploy");
+                var operationDiagnostics = SessionOperationDiagnostics.ForPublicKeyDeployment(correlation, diagnostics);
                 PublicKeyDeploymentOperationResult? deployed = null;
                 var result = await session.RunOperationForSessionAsync(
-                    "ssh_public_key_deploy",
+                    correlation.OperationId,
                     RemoteOperationTimeout,
                     async (transport, token) =>
                     {
-                        deployed = await deployment.DeployAsync(transport, materialResult.Material, token).ConfigureAwait(false);
+                        deployed = await deployment.DeployAsync(transport, materialResult.Material, operationDiagnostics, token).ConfigureAwait(false);
                         return deployed.Result;
                     },
                     sessionSnapshot.SessionId!,
                     cancellation.Token).ConfigureAwait(false);
-                CompleteSessionResult(sessionSnapshot, result, deployed?.Result, deployed?.DeploymentErrorCode,
+                await CompleteSessionResultAsync(sessionSnapshot, result, deployed?.Result, deployed?.DeploymentErrorCode, operationDiagnostics,
                     "Public-key deployment was verified. Run the separate key-authentication test before relying on the key.",
-                    SshManagementScreenState.PublicKeyDeployed);
+                    SshManagementScreenState.PublicKeyDeployed).ConfigureAwait(false);
             }
         }
         finally
         {
             End(cancellation);
+            DemoteProofIfSessionChanged(operationSessionId);
         }
     }
 
@@ -380,6 +395,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             return;
         }
 
+        string? operationSessionId = null;
         try
         {
             if (selectedKey is null)
@@ -389,6 +405,17 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
             }
 
             var snapshot = session.Snapshot;
+            operationSessionId = snapshot.SessionId;
+            if (snapshot.SessionId is null || snapshot.Identity is null)
+            {
+                var lostCorrelation = CorrelationIds.Create("key_auth_verify");
+                var lostDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(lostCorrelation, diagnostics);
+                var lostResult = OperationResult.Failure(lostCorrelation.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+                await lostDiagnostics.FinalizeAsync(lostResult).ConfigureAwait(false);
+                Complete(lostResult, null);
+                return;
+            }
+
             var validation = await selector.ReadPublicKeyAsync(selectedKey, CorrelationIds.Create("key_auth_validate"), cancellation.Token).ConfigureAwait(false);
             using (validation.Material)
             {
@@ -405,17 +432,19 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 new KnownHostIdentity(snapshot.Identity!.Host, snapshot.Identity.Port),
                 selectedKey,
                 RemoteOperationTimeout);
+            var correlation = CorrelationIds.Create("key_auth_verify");
+            var operationDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(correlation, diagnostics);
             KeyAuthenticationVerificationResult? verified = null;
             var result = await session.RunOperationForSessionAsync(
-                "ssh_key_auth_verify", RemoteOperationTimeout,
+                correlation.OperationId, RemoteOperationTimeout,
                 async (_, token) =>
                 {
-                    verified = await keyAuthentication.VerifyAsync(request, token).ConfigureAwait(false);
+                    verified = await keyAuthentication.VerifyAsync(request, operationDiagnostics, token).ConfigureAwait(false);
                     return verified.Result;
                 }, snapshot.SessionId!, cancellation.Token).ConfigureAwait(false);
-            CompleteSessionResult(snapshot, result, verified?.Result, verified?.VerificationErrorCode,
+            await CompleteSessionResultAsync(snapshot, result, verified?.Result, verified?.VerificationErrorCode, operationDiagnostics,
                 "The separate key-authenticated connection was verified. Password access remains unchanged.",
-                SshManagementScreenState.KeyAuthenticationVerified);
+                SshManagementScreenState.KeyAuthenticationVerified).ConfigureAwait(false);
             if (verified?.VerificationErrorCode == KeyAuthenticationVerificationErrorCatalog.InvalidInput)
             {
                 InvalidateSelection();
@@ -429,6 +458,7 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         finally
         {
             End(cancellation);
+            DemoteProofIfSessionChanged(operationSessionId);
         }
     }
 
@@ -578,11 +608,12 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         return false;
     }
 
-    private void CompleteSessionResult(
+    private async Task CompleteSessionResultAsync(
         ApplicationSessionSnapshot expected,
         OperationResult result,
         OperationResult? innerResult,
         string? workflowErrorCode,
+        SessionOperationDiagnostics operationDiagnostics,
         string succeededStatus,
         SshManagementScreenState succeededState)
     {
@@ -593,8 +624,31 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
         {
             result = OperationResult.Failure(result.OperationId, OperationErrorCode.Reconnect, OperationState.Unknown);
         }
+
+        await operationDiagnostics.FinalizeAsync(result).ConfigureAwait(false);
         Complete(result, ReferenceEquals(result, innerResult) ? workflowErrorCode : null,
             result.Succeeded ? succeededStatus : null, result.Succeeded ? succeededState : null);
+        DemoteProofIfSessionChanged(expected.SessionId);
+    }
+
+    private void DemoteProofIfSessionChanged(string? expectedSessionId)
+    {
+        if (expectedSessionId is null || State is not (SshManagementScreenState.PublicKeyDeployed or SshManagementScreenState.KeyAuthenticationVerified))
+        {
+            return;
+        }
+
+        var snapshot = session.Snapshot;
+        if (string.Equals(expectedSessionId, snapshot.SessionId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // The old operation may have completed before replacement, so its
+        // historical terminal event remains valid. Its proof is never usable
+        // for the current session, including a replacement during finalization.
+        State = snapshot.IsConnected ? SshManagementScreenState.Ready : SshManagementScreenState.Disconnected;
+        Status = "The server session changed after this action completed. Its verification applies only to the previous session; recheck the current session before relying on it.";
     }
 
     private void Complete(

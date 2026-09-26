@@ -514,6 +514,9 @@ public sealed class SshManagementViewModelTests
             Calls++;
             return Task.FromResult(new PublicKeyDeploymentOperationResult(OperationResult.Success("deploy-opaque"), false, null));
         }
+
+        public Task<PublicKeyDeploymentOperationResult> DeployAsync(IRemoteTransport transport, PublicKeyDeploymentMaterial material, SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default) =>
+            DeployAsync(transport, material, cancellationToken);
     }
 
     private sealed class RecordingKeyAuthenticationVerifier : IKeyAuthenticationVerifier
@@ -527,6 +530,9 @@ public sealed class SshManagementViewModelTests
             LastRequest = request;
             return Task.FromResult(Result);
         }
+
+        public Task<KeyAuthenticationVerificationResult> VerifyAsync(KeyAuthenticationVerificationRequest request, SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default) =>
+            VerifyAsync(request, cancellationToken);
     }
 
     private sealed class RecordingConfigEditor : IOpenSshConfigEditor

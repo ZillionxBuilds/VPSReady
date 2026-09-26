@@ -66,7 +66,7 @@ public sealed class AppViewModel : ObservableObject
         IServerOverviewReader? overviewReader = null)
         : this(applicationSession, false, null, diagnosticsWorkspace)
     {
-        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession, overviewReader);
+        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession, overviewReader, diagnostics);
         Firewall = new FirewallViewModel(applicationSession, firewallManagement, diagnostics);
         SshManagement = new SshManagementViewModel(
             applicationSession,
