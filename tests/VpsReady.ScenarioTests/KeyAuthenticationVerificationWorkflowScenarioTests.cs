@@ -11,6 +11,40 @@ namespace VpsReady.ScenarioTests;
 public sealed class KeyAuthenticationVerificationWorkflowScenarioTests
 {
     [Fact]
+    public async Task CandidateCleanupFailureAfterVerifiedLoginHasOneSafeFailedTerminal()
+    {
+        await using var services = ScenarioComposition.Create("scenario.r22.key-auth-cleanup", state =>
+        {
+            state.Ssh.AuthorizedKeyFingerprints.Add("SHA256:scenario-c405-key");
+        });
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var workflow = new KeyAuthenticationVerificationWorkflow(
+            new ThrowingDisposeFactory(services.GetRequiredService<IRemoteTransportFactory>()),
+            services.GetRequiredService<IDiagnosticSink>());
+        var authorizedKeyCount = state.Ssh.AuthorizedKeyFingerprints.Count;
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Unexpected, result.VerificationErrorCode);
+        Assert.Equal("key", state.Ssh.LastAuthenticationMethod);
+        Assert.Equal(ScenarioAuthenticationState.Succeeds, state.Ssh.Authentication);
+        Assert.Equal(authorizedKeyCount, state.Ssh.AuthorizedKeyFingerprints.Count);
+        var terminal = Assert.Single(recorder.Events, item => item.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.DoesNotContain("scenario-private-host", recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain("scenario-c405-key", recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic cleanup failure", recorder.ToJsonLines(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CompletedSeparateKeyVerificationKeepsOneTerminalOutcomeDuringLateCancellation()
     {
         await using var services = ScenarioComposition.Create("scenario.r22.key-auth-terminal", state =>
@@ -140,6 +174,29 @@ public sealed class KeyAuthenticationVerificationWorkflowScenarioTests
                 await Release.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
             }
             await inner.WriteAsync(entry, cancellationToken);
+        }
+    }
+
+    private sealed class ThrowingDisposeFactory(IRemoteTransportFactory inner) : IRemoteTransportFactory
+    {
+        public IRemoteTransport Create() => new ThrowingDisposeTransport((IKeyAuthenticationSshTransport)inner.Create());
+    }
+
+    private sealed class ThrowingDisposeTransport(IKeyAuthenticationSshTransport inner) : IKeyAuthenticationSshTransport
+    {
+        public KnownHostTrustAssessment? LastHostTrustAssessment => inner.LastHostTrustAssessment;
+
+        public Task ConnectWithPrivateKeyAsync(RemoteEndpoint endpoint, KnownHostIdentity trustedHost,
+            ExistingSshKeyLocation privateKey, TimeSpan timeout, CancellationToken cancellationToken) =>
+            inner.ConnectWithPrivateKeyAsync(endpoint, trustedHost, privateKey, timeout, cancellationToken);
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) =>
+            inner.ExecuteAsync(command, cancellationToken);
+
+        public async ValueTask DisposeAsync()
+        {
+            await inner.DisposeAsync().ConfigureAwait(false);
+            throw new InvalidOperationException("synthetic cleanup failure");
         }
     }
 }

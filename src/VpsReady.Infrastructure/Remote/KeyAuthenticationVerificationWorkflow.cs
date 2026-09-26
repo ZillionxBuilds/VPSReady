@@ -29,6 +29,7 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         ArgumentNullException.ThrowIfNull(request);
         var correlation = CorrelationIds.Create("key_auth_verify");
         IRemoteTransport? candidate = null;
+        var minimumVerified = false;
         using var timeoutCancellation = new CancellationTokenSource(request.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
         try
@@ -63,11 +64,26 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
                 maximumOutputBytes: 0);
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying the separate key-authenticated connection.", verification.Id.Value, null).ConfigureAwait(false);
             var commandResult = await candidate.ExecuteAsync(verification, linkedCancellation.Token).ConfigureAwait(false);
+            minimumVerified = commandResult.Succeeded;
             await ReportCommandAsync(correlation, commandResult, verification.Id.Value).ConfigureAwait(false);
             linkedCancellation.Token.ThrowIfCancellationRequested();
             if (!commandResult.Succeeded)
             {
                 return await FailAsync(correlation, OperationErrorCode.Verification, KeyAuthenticationVerificationErrorCatalog.Verification, DiagnosticPhase.Verify, verification.Id.Value).ConfigureAwait(false);
+            }
+
+            // A candidate that cannot be closed must not leave a successful
+            // terminal record behind an exception escaping from finally.
+            candidate = null;
+            try
+            {
+                await keyTransport.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                linkedCancellation.Token.ThrowIfCancellationRequested();
+                return await FailAsync(correlation, OperationErrorCode.Unexpected, KeyAuthenticationVerificationErrorCatalog.Unexpected,
+                    DiagnosticPhase.Recovery, verification.Id.Value, OperationVerification.Passed).ConfigureAwait(false);
             }
 
             // Verification and cancellation are decided before the terminal
@@ -80,12 +96,17 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         }
         catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
         {
-            return await FailAsync(correlation, OperationErrorCode.Timeout, KeyAuthenticationVerificationErrorCatalog.Timeout, DiagnosticPhase.Preflight, null).ConfigureAwait(false);
+            return await FailAsync(correlation, OperationErrorCode.Timeout, KeyAuthenticationVerificationErrorCatalog.Timeout,
+                minimumVerified ? DiagnosticPhase.Recovery : DiagnosticPhase.Preflight, null,
+                minimumVerified ? OperationVerification.Passed : null).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled, DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Separate key-authentication verification was cancelled.", null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged,
+                minimumVerified ? OperationVerification.Passed : OperationVerification.NotRun);
+            await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled,
+                minimumVerified ? DiagnosticPhase.Recovery : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled,
+                "Separate key-authentication verification was cancelled.", null, OperationErrorCode.Cancelled).ConfigureAwait(false);
             return new KeyAuthenticationVerificationResult(cancelled, KeyAuthenticationVerificationErrorCatalog.Cancelled);
         }
         catch (RemoteTransportException exception)
@@ -101,14 +122,23 @@ public sealed class KeyAuthenticationVerificationWorkflow : IKeyAuthenticationVe
         {
             if (candidate is not null)
             {
-                await candidate.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    await candidate.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    // A secondary cleanup error cannot replace an already
+                    // reported authentication, trust, or command failure.
+                }
             }
         }
     }
 
-    private async Task<KeyAuthenticationVerificationResult> FailAsync(CorrelationIds correlation, OperationErrorCode error, string verificationError, DiagnosticPhase phase, string? commandId)
+    private async Task<KeyAuthenticationVerificationResult> FailAsync(CorrelationIds correlation, OperationErrorCode error, string verificationError, DiagnosticPhase phase, string? commandId, OperationVerification? verification = null)
     {
-        var failed = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged, error == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun);
+        var failed = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged,
+            verification ?? (error == OperationErrorCode.Verification ? OperationVerification.Failed : OperationVerification.NotRun));
         await ReportAsync(correlation, DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, phase, DiagnosticStatus.Failed, "Separate key-authentication verification did not complete safely.", commandId, error).ConfigureAwait(false);
         return new KeyAuthenticationVerificationResult(failed, verificationError);
     }

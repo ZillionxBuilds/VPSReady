@@ -148,6 +148,73 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
     }
 
     [Fact]
+    public async Task CandidateCleanupFailureAfterVerifiedCommandCannotPublishSuccessOrEscape()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            DisposeFailure = new InvalidOperationException("synthetic cleanup failure"),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.True(transport.Disposed);
+        Assert.Single(transport.Commands);
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Unexpected, result.VerificationErrorCode);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, Assert.Single(TerminalEvents(diagnostics)).EventId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("synthetic cleanup failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CandidateCleanupFailureCannotReplacePriorAuthenticationFailure()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            ConnectFailure = new RemoteTransportException(RemoteTransportFailureKind.Authentication),
+            DisposeFailure = new InvalidOperationException("synthetic cleanup failure"),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.True(transport.Disposed);
+        Assert.Empty(transport.Commands);
+        Assert.Equal(OperationErrorCode.Authentication, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Authentication, result.VerificationErrorCode);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, Assert.Single(TerminalEvents(diagnostics)).EventId);
+    }
+
+    [Fact]
+    public async Task CancellationDuringCandidateCleanupPrecedesTerminalSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new RecordingKeyAuthenticationTransport { OnDispose = cancellation.Cancel };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+
+        Assert.True(transport.Disposed);
+        Assert.Single(transport.Commands);
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Cancelled, result.VerificationErrorCode);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Recovery, terminal.Phase);
+    }
+
+    private static IEnumerable<StructuredDiagnosticEvent> TerminalEvents(RecordingDiagnosticSink diagnostics) =>
+        diagnostics.Events.Where(item => item.EventId is DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded
+            or DiagnosticEventCatalog.KeyAuthenticationVerificationFailed
+            or DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled);
+
+    [Fact]
     public void RequestRejectsAHostOrPortThatIsNotTheExplicitTrustedIdentity()
     {
         Assert.Throws<ArgumentException>(() => new KeyAuthenticationVerificationRequest(
@@ -233,6 +300,10 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
 
         public Exception? ConnectFailure { get; init; }
 
+        public Exception? DisposeFailure { get; init; }
+
+        public Action? OnDispose { get; init; }
+
         public KnownHostTrustAssessment? Assessment { get; set; } = new(KnownHostTrustState.Matching, challenge: null, recoveredCorruptStore: false);
 
         public KnownHostTrustAssessment? LastHostTrustAssessment => Assessment;
@@ -267,6 +338,11 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
         public ValueTask DisposeAsync()
         {
             Disposed = true;
+            OnDispose?.Invoke();
+            if (DisposeFailure is not null)
+            {
+                throw DisposeFailure;
+            }
             return ValueTask.CompletedTask;
         }
     }
