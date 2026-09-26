@@ -69,7 +69,8 @@ public sealed class Ed25519OpenSshKeyPairGeneratorTests
     public async Task RejectsRelativePubAndCollisionTargetsWithoutOverwritingExistingFiles()
     {
         await using var workspace = new KeyWorkspace();
-        var generator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
+        var diagnostics = new CollectingDiagnosticSink();
+        var generator = new Ed25519OpenSshKeyPairGenerator(diagnostics);
         var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
 
         var relative = await generator.GenerateAsync(
@@ -78,6 +79,7 @@ public sealed class Ed25519OpenSshKeyPairGeneratorTests
             CancellationToken.None);
         Assert.False(relative.Succeeded);
         Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.InvalidTarget, relative.GenerationErrorCode);
+        Assert.Equal(DiagnosticPhase.Validate, Assert.Single(diagnostics.Events).Phase);
 
         var pubTarget = await generator.GenerateAsync(
             new LocalEd25519KeyGenerationRequest(workspace.PublicKeyPath),
@@ -146,6 +148,47 @@ public sealed class Ed25519OpenSshKeyPairGeneratorTests
                 Assert.DoesNotContain(item.Context, pair => pair.Key.Contains("path", StringComparison.OrdinalIgnoreCase));
             }
         });
+    }
+
+    [Fact]
+    public async Task DeniedTargetDirectoryReturnsSafePermissionResultBeforeAnyWrite()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        await using var workspace = new KeyWorkspace();
+        var deniedDirectory = Path.Combine(workspace.Root, "denied");
+        Directory.CreateDirectory(deniedDirectory);
+        var privatePath = Path.Combine(deniedDirectory, "owner-key");
+        var diagnostics = new CollectingDiagnosticSink();
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+        File.SetUnixFileMode(deniedDirectory, UnixFileMode.None);
+        try
+        {
+            Assert.True(Directory.Exists(deniedDirectory));
+            var result = await new Ed25519OpenSshKeyPairGenerator(diagnostics).GenerateAsync(
+                new LocalEd25519KeyGenerationRequest(privatePath), correlation, CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Permission, result.GenerationErrorCode);
+            Assert.Equal(OperationState.Unchanged, result.Operation.State);
+            Assert.Equal(OperationVerification.NotRun, result.Operation.Verification);
+            var failure = Assert.Single(diagnostics.Events);
+            Assert.Equal(DiagnosticEventCatalog.LocalKeyGenerationFailed, failure.EventId);
+            Assert.Equal(DiagnosticPhase.Validate, failure.Phase);
+            Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Permission, failure.ErrorCode);
+            Assert.Equal(correlation.OperationId, failure.Correlation.OperationId);
+            Assert.DoesNotContain(privatePath, failure.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(deniedDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        Assert.Empty(Directory.EnumerateFileSystemEntries(deniedDirectory));
     }
 
     [Fact]

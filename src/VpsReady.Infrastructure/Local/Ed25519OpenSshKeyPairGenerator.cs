@@ -63,7 +63,28 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(correlation);
 
-        if (!TryCreatePaths(request, out var paths))
+        KeyPairPaths paths;
+        bool validTarget;
+        try
+        {
+            validTarget = TryCreatePaths(request, out paths);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Target inspection can be denied before the transaction lock or
+            // any file write. Keep this a typed, unchanged local failure.
+            return await FailAsync(
+                correlation,
+                LocalEd25519KeyGenerationErrorCatalog.Permission,
+                OperationErrorCode.LocalIo,
+                OperationState.Unchanged,
+                OperationVerification.NotRun,
+                OperationRecovery.NotRequired,
+                cancellationToken,
+                DiagnosticPhase.Validate).ConfigureAwait(false);
+        }
+
+        if (!validTarget)
         {
             return await FailAsync(
                 correlation,
@@ -72,7 +93,8 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 OperationState.Unchanged,
                 OperationVerification.NotRun,
                 OperationRecovery.NotRequired,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                DiagnosticPhase.Validate).ConfigureAwait(false);
         }
 
         var gate = TargetLocks.GetOrAdd(paths.PrivateFinalPath, _ => new SemaphoreSlim(1, 1));
@@ -241,13 +263,14 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         OperationState state,
         OperationVerification verification,
         OperationRecovery recovery,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DiagnosticPhase phase = DiagnosticPhase.Apply)
     {
         var operation = OperationResult.Failure(correlation.OperationId, operationError, state, verification, recovery);
         await PublishAsync(
             DiagnosticEventCatalog.LocalKeyGenerationFailed,
             correlation,
-            recovery == OperationRecovery.Failed ? DiagnosticPhase.Recovery : DiagnosticPhase.Apply,
+            recovery == OperationRecovery.Failed ? DiagnosticPhase.Recovery : phase,
             DiagnosticStatus.Failed,
             generationErrorCode,
             CancellationToken.None).ConfigureAwait(false);
