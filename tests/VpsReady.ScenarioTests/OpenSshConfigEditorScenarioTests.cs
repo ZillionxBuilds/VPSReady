@@ -41,6 +41,30 @@ public sealed class OpenSshConfigEditorScenarioTests
     }
 
     [Fact]
+    public async Task ExtraWildcardIdentityRefusesFalseNoChangeInMutableLocalConfig()
+    {
+        using var services = ScenarioComposition.Create("ssh.config.edit.extra-identity");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var paths = services.GetRequiredService<IPlatformPaths>();
+        var request = Request(paths);
+        var configPath = paths.ResolvePath(LocalStorageArea.Ssh, "config");
+        var extraIdentity = paths.ResolvePath(LocalStorageArea.Ssh, "another_id");
+        var original = $"Host scenario-vps\n    HostName scenario.example\n    User scenario-user\n    Port 2222\n    IdentityFile \"{request.IdentityFile}\"\n    IdentitiesOnly yes\n\nHost *\n    IdentityFile \"{extraIdentity}\"\n";
+        var originalBytes = Encoding.UTF8.GetBytes(original);
+        state.LocalFiles.Files[configPath] = originalBytes;
+        var editor = new OpenSshConfigEditor(paths, services.GetRequiredService<ILocalFileStore>(), services.GetRequiredService<IDiagnosticSink>());
+
+        var result = await editor.AddAliasAsync(request, DiagnosticRunContext.StartSession().StartOperation("config_alias"), CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.AliasExists, result.ErrorCode);
+        Assert.Equal(originalBytes, state.LocalFiles.Files[configPath]);
+        Assert.Equal(0, state.LocalFiles.AtomicWriteCount);
+        Assert.DoesNotContain(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events,
+            item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
     public async Task InterruptedAtomicWriteRetainsOriginalAndNeverEmitsSuccess()
     {
         using var services = ScenarioComposition.Create("ssh.config.edit.interrupted");

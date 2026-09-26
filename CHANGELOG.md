@@ -27,6 +27,15 @@ See [issue #16](https://github.com/ZillionxBuilds/VPSReady/issues/16).
 See [issue #45](https://github.com/ZillionxBuilds/VPSReady/issues/45).
 **REAL VPS: NOT TESTED.**
 
+### OpenSSH alias identity safety (review branch)
+
+- Refuse a false no-change result when an existing alias would also use an
+  additional `IdentityFile` from its own block or a matching wildcard. Existing
+  user config is left untouched for explicit review.
+
+See [issue #26](https://github.com/ZillionxBuilds/VPSReady/issues/26).
+Local OpenSSH/config evidence is not a real-VPS test. **REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,
