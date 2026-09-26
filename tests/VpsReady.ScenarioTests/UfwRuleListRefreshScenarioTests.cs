@@ -81,6 +81,33 @@ public sealed class UfwRuleListRefreshScenarioTests
     }
 
     [Fact]
+    public async Task NulTerminatedCidrFromUntrustedReadCannotReplaceOrUnlockPriorSelection()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c302.nul-cidr");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var (refresher, _) = CreateRefresher();
+        var prior = await refresher.RefreshAsync(host, UfwSnapshot.StateOnly(UfwFirewallState.Unknown));
+        var selected = prior.Snapshot.Rules[0].Identity;
+
+        state.Ufw.NumberedStatusOverride = """
+            Status: active
+
+                 To                         Action      From
+                 --                         ------      ----
+            [ 1] 22/tcp                     ALLOW IN    Anywhere
+            [ 2] 53/udp                     ALLOW IN    10.0.0.0/8
+            """.Replace("10.0.0.0/8", "10.0.0.0/8\0", StringComparison.Ordinal);
+
+        var result = await refresher.RefreshAsync(host, prior.Snapshot);
+
+        Assert.False(result.Replaced);
+        Assert.Equal(UfwRuleListReadStatus.Unsupported, result.ReadStatus);
+        Assert.Same(prior.Snapshot, result.Snapshot);
+        Assert.Equal(UfwRuleSelectionStatus.Unavailable, result.GetSelectionStatus(selected));
+    }
+
+    [Fact]
     public async Task CancelledOrNonzeroReadCannotReplacePriorSnapshotOrMutateScenarioRules()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c302.cancel-and-fault");

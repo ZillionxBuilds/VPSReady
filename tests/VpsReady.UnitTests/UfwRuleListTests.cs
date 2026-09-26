@@ -138,6 +138,26 @@ public sealed class UfwRuleListTests
     }
 
     [Theory]
+    [InlineData("10.0.0.0/8", "10.0.0.0/8\0")]
+    [InlineData("10.0.0.0/8", "10.0.0.1\0")]
+    [InlineData("10.0.0.0/8", "10.0.0.0/\0")]
+    [InlineData("2001:db8::/32", "2001:db8::/32\0")]
+    public void MalformedSourceCannotReplaceATrustedRuleListing(string originalSource, string source)
+    {
+        var prior = UbuntuServerFactParser.ParseUfwRuleList(Result(ActiveRules)).Snapshot;
+        var malformed = ActiveRules.Replace(originalSource, source, StringComparison.Ordinal);
+
+        var read = UbuntuServerFactParser.ParseUfwRuleList(Result(malformed));
+        var refresh = UfwRuleRefresh.Apply(prior, read);
+
+        Assert.Equal(UfwRuleListReadStatus.Unsupported, read.Status);
+        Assert.False(read.IsComplete);
+        Assert.Empty(read.Snapshot.Rules);
+        Assert.False(refresh.Replaced);
+        Assert.Same(prior, refresh.Snapshot);
+    }
+
+    [Theory]
     [InlineData(0, "ufw=unavailable", UfwFirewallState.Absent, UfwRuleListReadStatus.Complete)]
     [InlineData(0, "Status: inactive", UfwFirewallState.Inactive, UfwRuleListReadStatus.Complete)]
     [InlineData(13, "Status: active", UfwFirewallState.Error, UfwRuleListReadStatus.PrivilegeFailure)]
