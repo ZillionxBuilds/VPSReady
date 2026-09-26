@@ -122,9 +122,14 @@ test insertion conflict was resolved by retaining both tests. Exact
 composite E0 locked restore/Release build/format/diff **PASS**, E1
 **884 PASS/3 declared SKIP**, E2 **214 PASS/3 declared SKIP**, and unsigned
 macOS arm64 E4 publish/embedded SHA/artifact-safety/bounded startup **PASS**.
-E3 was **NOT RUN on this new head**; earlier e92840b loopback proof is not
-transferred. Neither tree has independent QA, hosted/native Windows/Linux
-checks or approved release integration. Owner Stage 4/E5 and
+Disposable Ubuntu Noble ARM64 Docker loopback OpenSSH E3 on this exact
+head was **3 PASS/0 FAIL/0 SKIP**, including named generated-key login and
+wrong-key refusal; host-key/password/command/timeout checks and retained
+artifact-safety scan **PASS**. No port was published and no Owner material
+was used. Full contained Linux E0/E1/E2/E4 were **NOT RERUN** on this new
+head; earlier e92840b results are separate. Neither tree has independent
+QA, hosted/native Windows/Linux checks or approved release integration.
+Owner Stage 4/E5 and
 **REAL VPS: NOT TESTED**.
 
 ### Owner navigation-hover report — 2026-09-25 22:27 UTC
