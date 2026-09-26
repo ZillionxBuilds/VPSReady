@@ -3,6 +3,7 @@ using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
+using VpsReady.Desktop;
 using VpsReady.Infrastructure.Local;
 
 namespace VpsReady.UnitTests;
@@ -10,6 +11,119 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class SshManagementViewModelTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FaultedLocalKeyPickerCannotEscapeOrLeavePriorKeyDeployable(bool generating)
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("private-host.example", 22, "private-user"), new NoopTransport());
+        var diagnostics = new RecordingDiagnosticSink();
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+            OperationResult.Failure("unused", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget));
+        var selector = new RecordingSelector(SuccessSelection("prior-key"));
+        using var viewModel = CreateViewModel(session, generator: generator, selector: selector, diagnostics: diagnostics);
+        await viewModel.SelectAsync("prior-key");
+        viewModel.IsDeploymentConfirmed = true;
+        Assert.True(viewModel.CanDeploy);
+
+        var pickerFailure = new IOException("private-picker-path-should-not-appear");
+        if (generating)
+        {
+            await LocalKeyPickerFlow.GenerateAsync(viewModel, "new-key",
+                () => Task.FromException<string?>(pickerFailure));
+        }
+        else
+        {
+            await LocalKeyPickerFlow.SelectAsync(viewModel,
+                () => Task.FromException<string?>(pickerFailure));
+        }
+
+        Assert.Equal(SshManagementScreenState.Failed, viewModel.State);
+        Assert.Equal("LOCAL_IO_FAILED", viewModel.ErrorCode);
+        Assert.NotNull(viewModel.OperationId);
+        Assert.False(viewModel.HasSelectedKey);
+        Assert.False(viewModel.IsDeploymentConfirmed);
+        Assert.False(viewModel.CanDeploy);
+        Assert.Equal(0, generator.Calls);
+        Assert.Equal(1, selector.Calls);
+        Assert.DoesNotContain("private-picker-path", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains(diagnostics.Events, item =>
+            item.EventId == DiagnosticEventCatalog.OperationFailed
+            && item.Correlation.OperationId == viewModel.OperationId
+            && item.ErrorCode == "LOCAL_IO_FAILED");
+        Assert.DoesNotContain(diagnostics.Events, item =>
+            item.Message.Contains("private-picker-path", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CancelledLocalKeyPickerLeavesPriorSelectionUnchanged(bool generating)
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("private-host.example", 22, "private-user"), new NoopTransport());
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+            OperationResult.Failure("unused", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget));
+        var selector = new RecordingSelector(SuccessSelection("prior-key"));
+        using var viewModel = CreateViewModel(session, generator: generator, selector: selector);
+        await viewModel.SelectAsync("prior-key");
+        viewModel.IsDeploymentConfirmed = true;
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        if (generating)
+        {
+            await LocalKeyPickerFlow.GenerateAsync(viewModel, "new-key",
+                () => Task.FromCanceled<string?>(cancellation.Token));
+        }
+        else
+        {
+            await LocalKeyPickerFlow.SelectAsync(viewModel,
+                () => Task.FromCanceled<string?>(cancellation.Token));
+        }
+
+        Assert.Equal(SshManagementScreenState.KeySelected, viewModel.State);
+        Assert.True(viewModel.CanDeploy);
+        Assert.Equal(0, generator.Calls);
+        Assert.Equal(1, selector.Calls);
+    }
+
+    [Fact]
+    public async Task InvalidNameIsRejectedBeforeOpeningFolderPicker()
+    {
+        await using var session = new ApplicationSession();
+        var generator = new RecordingGenerator(LocalEd25519KeyGenerationResult.Failure(
+            OperationResult.Failure("unused", OperationErrorCode.Validation), LocalEd25519KeyGenerationErrorCatalog.InvalidTarget));
+        using var viewModel = CreateViewModel(session, generator: generator);
+        var pickerCalled = false;
+
+        await LocalKeyPickerFlow.GenerateAsync(viewModel, "../invalid", () =>
+        {
+            pickerCalled = true;
+            return Task.FromResult<string?>("unused");
+        });
+
+        Assert.False(pickerCalled);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.False(viewModel.HasSelectedKey);
+        Assert.Equal(0, generator.Calls);
+    }
+
+    [Fact]
+    public async Task ExistingKeyPickerPassesChosenPathToSelector()
+    {
+        await using var session = new ApplicationSession();
+        var selector = new RecordingSelector(SuccessSelection("chosen-key"));
+        using var viewModel = CreateViewModel(session, selector: selector);
+
+        await LocalKeyPickerFlow.SelectAsync(viewModel,
+            () => Task.FromResult<string?>("chosen-key"));
+
+        Assert.Equal("chosen-key", selector.LastRequest?.PrivateKeyPath);
+        Assert.Equal(SshManagementScreenState.KeySelected, viewModel.State);
+    }
+
     [Fact]
     public async Task NamedGenerationWithProductionGeneratorAndSelectorSelectsVerifiedPairWithoutDeploying()
     {
@@ -62,7 +176,8 @@ public sealed class SshManagementViewModelTests
             Assert.True(LocalSshKeyNamePolicy.IsValid(viewModel.NewKeyName));
             viewModel.NewKeyName = "owner-key_2026";
             Assert.True(viewModel.CanGenerateKey);
-            await viewModel.GenerateNamedAsync(root, viewModel.NewKeyName);
+            await LocalKeyPickerFlow.GenerateAsync(viewModel, viewModel.NewKeyName,
+                () => Task.FromResult<string?>(root));
 
             Assert.Equal(privatePath, generator.LastRequest?.PrivateKeyPath);
             Assert.Equal(SshManagementScreenState.KeySelected, viewModel.State);
@@ -650,9 +765,11 @@ public sealed class SshManagementViewModelTests
             Task.FromResult(ReadResult ?? new SelectedPublicKeyReadResult(OperationResult.Success(correlation.OperationId), new PublicKeyDeploymentMaterial("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest".AsSpan())));
 
         public int Calls { get; private set; }
+        public ExistingSshKeySelectionRequest? LastRequest { get; private set; }
         public virtual Task<ExistingSshKeySelectionResult> SelectAsync(ExistingSshKeySelectionRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
         {
             Calls++;
+            LastRequest = request;
             return Task.FromResult(result);
         }
     }
