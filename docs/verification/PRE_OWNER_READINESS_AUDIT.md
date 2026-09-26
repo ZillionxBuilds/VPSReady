@@ -41,7 +41,8 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90),
 [package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92),
 [reboot pre-apply cancellation PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94), and
-[setting Apply cancellation PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96)
+[setting Apply cancellation PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96), and
+[package exception-attribution PR #98](https://github.com/ZillionxBuilds/VPSReady/pull/98)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -137,6 +138,44 @@ Native interactive UI, physical Windows/Linux, hosted checks, independent
 review and Owner E5 remain NOT RUN or NOT VERIFIED. This is a developer
 collision preflight, **not** approved release integration or permission to
 test a real VPS.
+
+### F08 package exception attribution — 2026-09-26 UTC
+
+[#97/PR #98](https://github.com/ZillionxBuilds/VPSReady/pull/98) addresses
+thrown failures that previously identified the wrong command or mutation
+state. Four deterministic E1 cases were RED on both the exact release base
+and the prior local F08 composite: index preflight Timeout claimed `Unknown`
+before Apply, index Verify Timeout claimed Apply, upgrade revalidation
+Timeout claimed Preflight, and upgrade Verify Timeout claimed Apply. The
+isolated correction tracks active phase/command and Apply dispatch, retaining
+`Unchanged` before Apply and conservative `Unknown` afterward. Same-class
+review found initial upgrade-plan Timeout, network and unexpected exceptions
+also omitted the plan command ID; three more E1 cases were RED 0/3, then
+GREEN 3/3. Safe correlated diagnostics do not include thrown remote detail.
+
+Exact isolated source head `b467572df375bc02960f822b21fe8ba8263ab3b5`
+passed E0 locked restore, Release `-warnaserror` build (0 warnings/errors),
+format and diff checks; E1 617 PASS/2 declared SKIP; E2 176 PASS/3 declared
+SKIP, including two stateful post-Apply Verify-failure tests. E3 was NOT RUN
+for the isolated apt correction. E4 unsigned self-contained osx-arm64 Mach-O
+publish passed with embedded exact source SHA. Native UI, physical
+Windows/Linux and hosted checks were NOT RUN. E5 **REAL VPS: NOT TESTED**.
+
+The **local-only, unpushed** F08 composite at
+`a22b82d886f355b14cf6720e74cd988a9428cf87` adds the full #98 head to
+`b1fd875`, preserving #90/#92 cancellation behavior and all prior repairs.
+Conflict resolution retained both exception and cancellation regressions in
+the package workflows; the merged phase/command state is shared without
+discarding pre-dispatch cancellation checks. Exact clean composite E0 locked
+restore, Release `-warnaserror` build (0 warnings/errors), format and diff
+PASS; E1 754 PASS/3 declared SKIP; E2 198 PASS/3 declared SKIP. E3 in a
+disposable Ubuntu Noble ARM64 container passed 3/3 local loopback-only
+OpenSSH checks with no published port; this tests the SSH transport, not real
+apt. E4 unsigned self-contained osx-arm64 Mach-O publish passed with embedded
+exact composite SHA. Native interactive UI, physical Windows/Linux, hosted
+checks and independent review remain NOT RUN or NOT VERIFIED. This is a
+developer collision preflight, **not** release approval or permission for
+Owner VPS testing. E5 **REAL VPS: NOT TESTED**.
 
 ### F06/F09 session terminal evidence with key journey — 2026-09-26 UTC
 
@@ -1771,6 +1810,12 @@ tracks the separate E5 gate.
   #35 fresh-plan checks with #95 pre-dispatch and post-verify regressions;
   the `b1fd875` local conflict resolution and E0–E4 passes are compatibility
   evidence, not an approved candidate or real settings mutation proof.
+- Obtain independent same-class review of [PR #98](https://github.com/ZillionxBuilds/VPSReady/pull/98)
+  for package-index/upgrade exception phase, command and mutation-state
+  attribution, including initial plan failure diagnostics. Preserve #90/#92
+  cancellation checks and #42 plan-terminal authority in the approved
+  candidate. The `a22b82d` local E0–E4 pass is not a reviewed release or real
+  apt/VPS proof.
 - Obtain independent same-class review of [PR #52](https://github.com/ZillionxBuilds/VPSReady/pull/52)
   for F04 pre-terminal and pre-dispatch cancellation across
   add/remove/enable/disable/refresh, including `Unchanged` before dispatch
