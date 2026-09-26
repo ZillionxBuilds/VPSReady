@@ -16,6 +16,15 @@ stable-release announcement; exact verification belongs to the linked records.
   actions. This change has no real-VPS evidence.
 
 See [issue #16](https://github.com/ZillionxBuilds/VPSReady/issues/16).
+
+### Local SSH key recovery isolation (review branch)
+
+- An interrupted key-pair transaction for one name no longer blocks a different
+  name in the same folder when its ownership and manifest are valid. The other
+  transaction is left untouched for its own later recovery; malformed,
+  unexpected and case-ambiguous transactions still fail closed.
+
+See [issue #45](https://github.com/ZillionxBuilds/VPSReady/issues/45).
 **REAL VPS: NOT TESTED.**
 
 ### Desktop experience and local build entrypoints (review branch)

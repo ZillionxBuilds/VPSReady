@@ -593,7 +593,19 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         foreach (var directory in Directory.EnumerateDirectories(paths.ParentDirectory, $"{TransactionDirectoryPrefix}*", SearchOption.TopDirectoryOnly))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _ = RecoverTransaction(paths, directory);
+            var manifest = RequireOwnedTransactionManifest(directory);
+            if (ManifestMatches(paths, manifest))
+            {
+                _ = RecoverTransaction(paths, directory);
+            }
+            else if (string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.OrdinalIgnoreCase))
+            {
+                // Case-only names may alias on Windows or a case-insensitive macOS volume.
+                // Never treat an ambiguous transaction as safely unrelated.
+                throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+            }
+            // A validated other-name transaction remains untouched. Its staged
+            // key material is verified only when that exact target is recovered.
         }
 
         return Task.CompletedTask;
@@ -729,13 +741,9 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         }
     }
 
-    private static bool ManifestMatches(KeyPairPaths paths, string transactionDirectory, TransactionManifest manifest) =>
-        manifest.Version == ManifestVersion
-        && string.Equals(manifest.TransactionId, GetTransactionId(transactionDirectory), StringComparison.Ordinal)
-        && string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.Ordinal)
-        && string.Equals(manifest.PublicFileName, Path.GetFileName(paths.PublicFinalPath), StringComparison.Ordinal)
-        && IsSafeLeafName(manifest.PrivateFileName)
-        && IsSafeLeafName(manifest.PublicFileName);
+    private static bool ManifestMatches(KeyPairPaths paths, TransactionManifest manifest) =>
+        string.Equals(manifest.PrivateFileName, Path.GetFileName(paths.PrivateFinalPath), StringComparison.Ordinal)
+        && string.Equals(manifest.PublicFileName, Path.GetFileName(paths.PublicFinalPath), StringComparison.Ordinal);
 
     private static bool IsSafeLeafName(string value) =>
         !string.IsNullOrWhiteSpace(value)
@@ -771,14 +779,30 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
 
     private static void ValidateOwnedMatchingTransaction(KeyPairPaths paths, string transactionDirectory)
     {
+        var manifest = RequireOwnedTransactionManifest(transactionDirectory);
+        if (!ManifestMatches(paths, manifest))
+        {
+            throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
+        }
+    }
+
+    private static TransactionManifest RequireOwnedTransactionManifest(string transactionDirectory)
+    {
         if (!IsOwnedTransactionDirectory(transactionDirectory)
             || !TryReadManifest(transactionDirectory, out var manifest)
-            || !ManifestMatches(paths, transactionDirectory, manifest))
+            || manifest.Version != ManifestVersion
+            || !string.Equals(manifest.TransactionId, GetTransactionId(transactionDirectory), StringComparison.Ordinal)
+            || !IsSafeLeafName(manifest.PrivateFileName)
+            || string.Equals(Path.GetExtension(manifest.PrivateFileName), ".pub", StringComparison.OrdinalIgnoreCase)
+            || manifest.PrivateFileName.StartsWith(TransactionDirectoryPrefix, StringComparison.Ordinal)
+            || !IsSafeLeafName(manifest.PublicFileName)
+            || !string.Equals(manifest.PublicFileName, manifest.PrivateFileName + ".pub", StringComparison.Ordinal))
         {
             throw new KeyPairGenerationException(LocalEd25519KeyGenerationErrorCatalog.Recovery, OperationErrorCode.Recovery);
         }
 
         ValidateTransactionEntries(transactionDirectory);
+        return manifest;
     }
 
     private void DeleteTransactionDirectoryIfOwned(KeyPairPaths paths, string transactionDirectory)
