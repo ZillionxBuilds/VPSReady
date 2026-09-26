@@ -46,6 +46,32 @@ public sealed class RebootWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task CancellationAfterBootIdentityNeverMutatesTheStatefulHost()
+    {
+        await using var services = ScenarioComposition.Create("c504-preapply-cancel");
+        using var cancellation = new CancellationTokenSource();
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        await using var inner = services.GetRequiredService<IRemoteTransportFactory>().Create();
+        var transport = new CancelAfterBootIdentityTransport((IRebootReconnectTransport)inner, cancellation);
+
+        var result = await CreateWorkflow(diagnostics).RebootAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuRebootApply, transport.Commands);
+        Assert.Equal(0, state.Reboot.BootGeneration);
+        Assert.False(state.Reboot.IsRebooting);
+        var terminal = Assert.Single(recorder.Events, entry => entry.Correlation.OperationId == result.Result.OperationId
+            && entry.EventId is DiagnosticEventCatalog.RebootCancelled or DiagnosticEventCatalog.RebootSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.RebootCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuBootIdentityRead, terminal.CommandId);
+    }
+
+    [Fact]
     public async Task ReconnectTimeoutAndChangedHostFailClosedAfterConfirmedReboot()
     {
         await using var timeoutServices = ScenarioComposition.CreateProfile(ScenarioProfiles.RebootReconnectTimeout);
@@ -134,6 +160,32 @@ public sealed class RebootWorkflowScenarioTests
         new(new PrivilegePreflightWorkflow(diagnostics), diagnostics, TestPolicy, new DeterministicRecoveryTime());
 
     private static RebootRecoveryPolicy TestPolicy { get; } = new(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 3);
+
+    private sealed class CancelAfterBootIdentityTransport(IRebootReconnectTransport inner, CancellationTokenSource cancellation) : IRebootReconnectTransport
+    {
+        private int reads;
+        public List<string> Commands { get; } = [];
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            return inner.ExecuteAsync(command, CancellationToken.None);
+        }
+
+        public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+            inner.ReconnectAsync(timeout, CancellationToken.None);
+
+        public async Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            var result = await inner.ReadBootIdentityAsync(timeout, CancellationToken.None);
+            if (++reads == 1)
+            {
+                cancellation.Cancel();
+            }
+            return result;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class DeterministicRecoveryTime : IRebootRecoveryTime
     {
