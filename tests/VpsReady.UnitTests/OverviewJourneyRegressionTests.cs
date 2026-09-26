@@ -152,6 +152,7 @@ public sealed class OverviewJourneyRegressionTests
     [InlineData("/dev/fixture 10 1 -1 0% /", false)]
     [InlineData("/dev/fixture 10 11 0 100% /", false)]
     [InlineData("/dev/fixture 10 0 11 0% /", false)]
+    [InlineData("/dev/fixture 10 6 5 60% /", false)]
     [InlineData("/dev/fixture 10 0 1 101% /", false)]
     [InlineData("/dev/fixture 9223372036854775808 0 0 0% /", false)]
     [InlineData("/dev/fixture 79228162514264337593543950335P 0 0 0% /", false)]
