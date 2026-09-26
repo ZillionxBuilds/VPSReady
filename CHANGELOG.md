@@ -69,6 +69,15 @@ This is blind/local verification only; **REAL VPS: NOT TESTED.**
 See [issue #18](https://github.com/ZillionxBuilds/VPSReady/issues/18).
 Local tests and native macOS review are not real-VPS proof. **REAL VPS: NOT TESTED.**
 
+### Startup fallback diagnostics (review branch)
+
+- Correlate the limited-state startup error ID with its minimal local journal
+  record. Show the private diagnostic file path only when the fallback write
+  succeeds; keep a safe, usable window when it does not.
+
+See [issue #24](https://github.com/ZillionxBuilds/VPSReady/issues/24).
+This is local-only evidence; **REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

@@ -117,11 +117,12 @@ public sealed class AppViewModel : ObservableObject
             timezoneChanger);
     }
 
-    private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null)
+    private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null, string? startupJournalPath = null)
     {
         this.applicationSession = applicationSession;
         HasStartupFailure = hasStartupFailure;
         StartupErrorId = startupErrorId;
+        StartupJournalPath = startupJournalPath;
         ActivityDiagnostics = diagnosticsWorkspace is null
             ? null
             : new ActivityDiagnosticsViewModel(
@@ -163,6 +164,13 @@ public sealed class AppViewModel : ObservableObject
     /// </summary>
     public string? StartupErrorId { get; }
 
+    /// <summary>Local-only path shown after the minimal startup record was written successfully.</summary>
+    public string? StartupJournalPath { get; }
+
+    public bool HasStartupJournalPath => StartupJournalPath is not null;
+
+    public bool IsStartupJournalUnavailable => HasStartupFailure && !HasStartupJournalPath;
+
     public ActivityDiagnosticsViewModel? ActivityDiagnostics { get; }
     public ConnectionOverviewViewModel? ConnectionOverview { get; }
     public FirewallViewModel? Firewall { get; }
@@ -183,10 +191,20 @@ public sealed class AppViewModel : ObservableObject
         private set => SetProperty(ref selectedPage, value);
     }
 
-    public static AppViewModel CreateSafeStartupFailure(Exception startupException)
+    public static AppViewModel CreateSafeStartupFailure(
+        Exception startupException,
+        string? startupErrorId = null,
+        string? startupJournalPath = null)
     {
         ArgumentNullException.ThrowIfNull(startupException);
-        return new AppViewModel(null, true, $"startup-{Guid.NewGuid():N}");
+        var errorId = startupErrorId ?? $"startup-{Guid.NewGuid():N}";
+        if (errorId.Length != 40 || !errorId.StartsWith("startup-", StringComparison.Ordinal) ||
+            !Guid.TryParseExact(errorId.AsSpan(8), "N", out _))
+        {
+            throw new ArgumentException("A safe opaque startup error ID is required.", nameof(startupErrorId));
+        }
+
+        return new AppViewModel(null, true, errorId, startupJournalPath: startupJournalPath);
     }
 
     private ShellNavigationItem CreateItem(ShellPage page)
