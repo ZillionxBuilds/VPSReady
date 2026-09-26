@@ -65,6 +65,102 @@ public sealed class Ed25519OpenSshKeyPairGeneratorTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TerminalDiagnosticWriteFailureNeverClaimsACommittedPairWasUnchanged(bool recordedBeforeFailure)
+    {
+        await using var workspace = new KeyWorkspace();
+        var diagnostics = new RejectTerminalKeySuccessSink(recordedBeforeFailure);
+        var generator = new Ed25519OpenSshKeyPairGenerator(diagnostics);
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            correlation,
+            CancellationToken.None);
+
+        Assert.True(File.Exists(workspace.PrivateKeyPath));
+        Assert.True(File.Exists(workspace.PublicKeyPath));
+        Assert.True(result.Succeeded);
+        Assert.Equal(OperationState.Applied, result.Operation.State);
+        Assert.Equal(OperationVerification.Passed, result.Operation.Verification);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed, result.DiagnosticWarningCode);
+        Assert.True(DiagnosticErrorCatalog.IsKnown(result.DiagnosticWarningCode!));
+        Assert.Equal(correlation.OperationId, result.Operation.OperationId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationFailed);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationCancelled);
+        Assert.Equal(recordedBeforeFailure ? 1 : 0,
+            diagnostics.Events.Count(item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationSucceeded));
+        Assert.DoesNotContain(workspace.Root, result.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnavailableJournalBeforeCommitReturnsSafeFailureWithoutCreatingAKeyPair()
+    {
+        await using var workspace = new KeyWorkspace();
+        var diagnostics = new RejectAllKeyGenerationDiagnosticsSink();
+        var generator = new Ed25519OpenSshKeyPairGenerator(diagnostics);
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            correlation,
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.LocalIo, result.GenerationErrorCode);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed, result.DiagnosticWarningCode);
+        Assert.True(DiagnosticErrorCatalog.IsKnown(result.DiagnosticWarningCode!));
+        Assert.Equal(correlation.OperationId, result.Operation.OperationId);
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+        Assert.Empty(Directory.EnumerateDirectories(workspace.Root, ".vpsready-keytxn-*"));
+        Assert.Equal(
+            [DiagnosticEventCatalog.LocalKeyGenerationStarted, DiagnosticEventCatalog.LocalKeyGenerationFailed],
+            diagnostics.AttemptedEventIds);
+        Assert.DoesNotContain(workspace.Root, result.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvalidTargetStillReturnsValidationFailureWhenTerminalJournalWriteFails()
+    {
+        var diagnostics = new RejectAllKeyGenerationDiagnosticsSink();
+        var result = await new Ed25519OpenSshKeyPairGenerator(diagnostics).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest("relative-key-name"),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.InvalidTarget, result.GenerationErrorCode);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed, result.DiagnosticWarningCode);
+        Assert.Equal([DiagnosticEventCatalog.LocalKeyGenerationFailed], diagnostics.AttemptedEventIds);
+    }
+
+    [Fact]
+    public async Task CancellationStillReturnsCancelledWhenTerminalJournalWriteFails()
+    {
+        await using var workspace = new KeyWorkspace();
+        var diagnostics = new RejectAllKeyGenerationDiagnosticsSink();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var result = await new Ed25519OpenSshKeyPairGenerator(diagnostics).GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            cancellation.Token);
+
+        Assert.True(result.Operation.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.Cancelled, result.GenerationErrorCode);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed, result.DiagnosticWarningCode);
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+        Assert.Equal([DiagnosticEventCatalog.LocalKeyGenerationCancelled], diagnostics.AttemptedEventIds);
+    }
+
     [Fact]
     public async Task RejectsRelativePubAndCollisionTargetsWithoutOverwritingExistingFiles()
     {
@@ -294,6 +390,33 @@ public sealed class Ed25519OpenSshKeyPairGeneratorScenarioTests
         Assert.False(File.Exists(workspace.PublicKeyPath));
         Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationCancelled);
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.LocalKeyGenerationSucceeded);
+    }
+
+    [Fact]
+    public async Task StagedFileFailureStillRecoversWhenFailureJournalWriteFails()
+    {
+        await using var workspace = new KeyWorkspace();
+        var diagnostics = new RejectFailedKeyGenerationDiagnosticSink();
+        var generator = new Ed25519OpenSshKeyPairGenerator(
+            diagnostics,
+            new ThrowAtTransactionStage(KeyPairTransactionStage.PrivateFinalized));
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.LocalIo, result.GenerationErrorCode);
+        Assert.Equal(LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed, result.DiagnosticWarningCode);
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+        Assert.Empty(Directory.EnumerateDirectories(workspace.Root, ".vpsready-keytxn-*"));
+        Assert.Equal(
+            [DiagnosticEventCatalog.LocalKeyGenerationStarted, DiagnosticEventCatalog.LocalKeyGenerationFailed],
+            diagnostics.AttemptedEventIds);
     }
 
     [Fact]
@@ -542,6 +665,57 @@ internal sealed class CancelOnKeySuccessSink(CancellationTokenSource cancellatio
             cancellationToken.ThrowIfCancellationRequested();
         }
 
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class RejectAllKeyGenerationDiagnosticsSink : IDiagnosticSink
+{
+    public List<string> AttemptedEventIds { get; } = [];
+
+    public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        AttemptedEventIds.Add(diagnosticEvent.EventId);
+        throw new IOException("Synthetic diagnostic store unavailable.");
+    }
+}
+
+internal sealed class RejectFailedKeyGenerationDiagnosticSink : IDiagnosticSink
+{
+    public List<string> AttemptedEventIds { get; } = [];
+
+    public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        AttemptedEventIds.Add(diagnosticEvent.EventId);
+        if (diagnosticEvent.EventId == DiagnosticEventCatalog.LocalKeyGenerationFailed)
+        {
+            throw new IOException("Synthetic terminal journal failure.");
+        }
+
+        return Task.CompletedTask;
+    }
+}
+
+internal sealed class RejectTerminalKeySuccessSink(bool recordedBeforeFailure) : IDiagnosticSink
+{
+    public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+    public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (diagnosticEvent.EventId == DiagnosticEventCatalog.LocalKeyGenerationSucceeded)
+        {
+            if (recordedBeforeFailure)
+            {
+                Events.Add(diagnosticEvent);
+            }
+
+            throw new IOException("Synthetic local journal write failure.");
+        }
+
+        Events.Add(diagnosticEvent);
         return Task.CompletedTask;
     }
 }
