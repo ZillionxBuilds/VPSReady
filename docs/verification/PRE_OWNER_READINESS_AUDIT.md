@@ -59,7 +59,8 @@ valid for **that exact tree only**. They must not be cited as proof that all
 open repairs interact safely. This correction supersedes broader coverage
 wording elsewhere in this historical log without erasing those results.
 
-An isolated **local, unpushed** reconciliation branch,
+An isolated reconciliation branch in draft
+[integration PR #101](https://github.com/ZillionxBuilds/VPSReady/pull/101),
 `codex/15-all-open-preflight` at
 `2459a35b1e6a3d7f8a8a202b881bc4698e1da0aa`, descends from the unchanged
 release base `9965c5bcdb445947d6bd593344fbade62d9c55a4`. At the
@@ -78,8 +79,8 @@ firewall pre-terminal cancellation versus session diagnostics and exact SSH
 allow protection (#52/#54/#34). It also combined the missing Overview/UFW
 parser corrections (#68/#70/#72/#74/#78/#80/#82/#86), diagnostic privacy
 (#38/#40), package exception attribution (#98) and the previously selected
-repairs. The independent product PRs remain draft/unmerged; this branch is
-only developer compatibility evidence.
+repairs. The independent product PRs remain draft/unmerged; PR #101 is for
+external review of their interaction, not permission to integrate them.
 
 | Class | Exact `2459a35` result | Boundary |
 | --- | --- | --- |
