@@ -10,6 +10,57 @@ namespace VpsReady.ScenarioTests;
 public sealed class TimezoneChangeWorkflowScenarioTests
 {
     [Fact]
+    public async Task ExternallyChangedTimezoneInvalidatesOldPlanBeforeApply()
+    {
+        await using var services = ScenarioComposition.Create("f08-timezone-stale-plan");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var workflow = new TimezoneChangeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var plan = await workflow.PlanAsync(host, "Asia/Bangkok");
+        Assert.True(plan.IsReady);
+
+        state.Timezone = "Europe/London";
+        var result = await workflow.ChangeAsync(host, plan, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(TimezoneChangeErrorCatalog.StalePlan, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("Europe/London", state.Timezone);
+        Assert.Contains(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId
+            && item.EventId == DiagnosticEventCatalog.TimezoneChangeFailed
+            && item.Phase == DiagnosticPhase.Preflight
+            && item.CommandId == RemoteCommandCatalog.UbuntuTimezoneCurrentRead);
+        Assert.DoesNotContain(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId
+            && item.CommandId == RemoteCommandCatalog.UbuntuTimezoneApply);
+        Assert.DoesNotContain(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId && item.EventId == DiagnosticEventCatalog.TimezoneChangeSucceeded);
+    }
+
+    [Fact]
+    public async Task RemovedTimezoneSelectionInvalidatesOldPlanBeforeApply()
+    {
+        await using var services = ScenarioComposition.Create("f08-timezone-removed-selection");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var workflow = new TimezoneChangeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var plan = await workflow.PlanAsync(host, "Asia/Bangkok");
+        Assert.True(plan.IsReady);
+
+        state.Ubuntu.AvailableTimezones.Remove("Asia/Bangkok");
+        var result = await workflow.ChangeAsync(host, plan, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(TimezoneChangeErrorCatalog.StalePlan, result.ErrorCode);
+        Assert.Equal("Etc/UTC", state.Timezone);
+        Assert.DoesNotContain(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId
+            && item.CommandId == RemoteCommandCatalog.UbuntuTimezoneApply);
+        Assert.DoesNotContain(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId && item.EventId == DiagnosticEventCatalog.TimezoneChangeSucceeded);
+    }
+
+    [Fact]
     public async Task ConfirmedChangeMutatesStateAndFreshVerificationPrecedesSuccess()
     {
         await using var services = ScenarioComposition.Create("c506-timezone-happy");
