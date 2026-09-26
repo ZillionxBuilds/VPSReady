@@ -118,6 +118,31 @@ public sealed class OverviewJourneyRegressionTests
         });
     }
 
+    [Fact]
+    public async Task MalformedIdleTimeOnlyMakesUptimeUnknownInProductionOverview()
+    {
+        await using var session = new ApplicationSession();
+        var transport = new FactTransport { UptimeOutput = "3600.00 invalid-idle" };
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 2222, "fixture"), transport);
+        var sink = new Sink();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new NoFactory(), sink);
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, new ServerOverviewReader(sink));
+
+        await vm.RefreshAsync();
+
+        Assert.Equal(12, vm.Facts.Count);
+        var uptime = Assert.Single(vm.Facts, row => row.Label == "Uptime");
+        Assert.False(uptime.IsKnown);
+        Assert.Equal("Unknown", uptime.Value);
+        Assert.All(vm.Facts.Where(row => row.Label != "Uptime"), row => Assert.True(row.IsKnown));
+        Assert.All(sink.Events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+            Assert.DoesNotContain("invalid-idle", entry.Message, StringComparison.Ordinal);
+        });
+    }
+
     [Theory]
     // Synthetic byte evidence, not reconstructed from rounded human units.
     [InlineData("/dev/fixture 33822867456 5558272 31997505536 0% /", true)]
@@ -507,6 +532,7 @@ public sealed class OverviewJourneyRegressionTests
         public string MemoryOutput { get; init; } = "MemTotal: 1024 kB\nMemAvailable: 512 kB";
         public string DiskOutput { get; init; } = "/dev/vda1 10000 1000 9000 10% /";
         public string UfwStatusOutput { get; init; } = "Status: inactive";
+        public string UptimeOutput { get; init; } = "3600.00 2000.00";
         public bool Block { get; init; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -522,7 +548,7 @@ public sealed class OverviewJourneyRegressionTests
                 RemoteCommandCatalog.UbuntuOsReleaseRead => "ID=ubuntu\nVERSION=\"24.04 LTS\"",
                 RemoteCommandCatalog.UbuntuKernelArchitectureRead => "Linux 6.8.0 x86_64",
                 RemoteCommandCatalog.UbuntuHostnameRead => "fixture-host",
-                RemoteCommandCatalog.UbuntuUptimeRead => "3600.00 2000.00",
+                RemoteCommandCatalog.UbuntuUptimeRead => UptimeOutput,
                 RemoteCommandCatalog.UbuntuCurrentUserRead => "fixture",
                 RemoteCommandCatalog.UbuntuPrivilegeRead => "root=false\nsudo=available",
                 RemoteCommandCatalog.UbuntuCpuRead => CpuOutput,

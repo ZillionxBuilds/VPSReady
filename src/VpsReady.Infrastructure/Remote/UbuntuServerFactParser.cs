@@ -19,6 +19,7 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex MemInfo = new("^(?<key>MemTotal|MemAvailable):\\s*(?<value>[0-9]+)\\s*kB$", RegexOptions.CultureInvariant);
     private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*(?<index>[0-9]+)$", RegexOptions.CultureInvariant);
     private static readonly Regex CpuModel = new("^(?<key>model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UptimeDecimal = new("\\A[0-9]+(?:\\.[0-9]+)?\\z", RegexOptions.CultureInvariant);
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
@@ -144,13 +145,23 @@ public static partial class UbuntuServerFactParser
     {
         var parts = SplitSingleLine(output);
         if (parts is null || parts.Length != 2
+            || !UptimeDecimal.IsMatch(parts[0]) || !UptimeDecimal.IsMatch(parts[1])
             || !double.TryParse(parts[0], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds)
-            || !double.IsFinite(seconds) || seconds < 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
+            || !double.TryParse(parts[1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var idleSeconds)
+            || !double.IsFinite(seconds) || !double.IsFinite(idleSeconds)
+            || seconds >= TimeSpan.MaxValue.TotalSeconds)
         {
             return ServerFact.Unknown<TimeSpan>();
         }
 
-        return ServerFact.Known(TimeSpan.FromSeconds(seconds));
+        try
+        {
+            return ServerFact.Known(TimeSpan.FromSeconds(seconds));
+        }
+        catch (OverflowException)
+        {
+            return ServerFact.Unknown<TimeSpan>();
+        }
     }
 
     public static ServerFact<PrivilegeCapability> ParsePrivilege(string output)

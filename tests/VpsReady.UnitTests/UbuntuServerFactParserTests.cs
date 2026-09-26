@@ -101,6 +101,27 @@ public sealed class UbuntuServerFactParserTests
         Assert.False(UbuntuServerFactParser.ParsePrivilege("root=true\nsudo=available").IsKnown);
     }
 
+    [Theory]
+    [InlineData("3600.00 not-a-number")]
+    [InlineData("3600.00 -1.00")]
+    [InlineData("3600.00 1.00\0")]
+    [InlineData("3600.00\0 1.00")]
+    [InlineData("922337203685.4775 1.00")]
+    [InlineData("1.00 1e309")]
+    public void MalformedUptimeEvidenceCannotProduceKnownFact(string output)
+    {
+        Assert.False(UbuntuServerFactParser.ParseUptime(output).IsKnown);
+    }
+
+    [Fact]
+    public void MulticoreIdleTimeCanExceedUptime()
+    {
+        var uptime = UbuntuServerFactParser.ParseUptime("3600.25 7200.50");
+
+        Assert.True(uptime.IsKnown);
+        Assert.Equal(TimeSpan.FromSeconds(3600.25), uptime.Value);
+    }
+
     [Fact]
     public void AggregatorKeepsValidFactsWhenOtherCommandsArePartialOrMalformed()
     {
