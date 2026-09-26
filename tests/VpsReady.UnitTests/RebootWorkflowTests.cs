@@ -111,6 +111,88 @@ public sealed class RebootWorkflowTests
         Assert.Equal(RebootErrorCatalog.Verification, unavailable.ErrorCode);
     }
 
+    [Theory]
+    [InlineData("timeout", OperationErrorCode.Timeout, RebootErrorCatalog.PreRecovery)]
+    [InlineData("host-trust", OperationErrorCode.HostTrust, RebootErrorCatalog.PreRecovery)]
+    public async Task BootIdentityFailureBeforeDispatchDoesNotClaimReconnectStarted(string failure, OperationErrorCode expectedError, string expectedCode)
+    {
+        var transport = new RebootTransport
+        {
+            FirstBootIdentityFailure = failure == "timeout"
+                ? new TimeoutException()
+                : new RemoteTransportException(RemoteTransportFailureKind.HostTrust),
+        };
+        var sink = new Sink();
+
+        var result = await CreateWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(expectedError, result.Result.ErrorCode);
+        Assert.Equal(expectedCode, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationRecovery.NotRequired, result.Result.Recovery);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.Equal(0, result.ReconnectAttempts);
+        Assert.Equal(0, transport.ReconnectCalls);
+        Assert.Empty(transport.Commands);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuBootIdentityRead, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+    }
+
+    [Theory]
+    [InlineData("timeout", OperationErrorCode.Timeout, RebootErrorCatalog.PreRecovery)]
+    [InlineData("host-trust", OperationErrorCode.HostTrust, RebootErrorCatalog.PreRecovery)]
+    [InlineData("unexpected", OperationErrorCode.Unexpected, RebootErrorCatalog.Unexpected)]
+    public async Task ApplyExceptionBeforeRecoveryKeepsMutationUncertainWithoutClaimingReconnect(string failure, OperationErrorCode expectedError, string expectedCode)
+    {
+        Exception exception = failure switch
+        {
+            "timeout" => new TimeoutException(),
+            "host-trust" => new RemoteTransportException(RemoteTransportFailureKind.HostTrust),
+            _ => new InvalidOperationException("untrusted remote detail"),
+        };
+        var transport = new RebootTransport(exception);
+        var sink = new Sink();
+
+        var result = await CreateWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(expectedError, result.Result.ErrorCode);
+        Assert.Equal(expectedCode, result.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(OperationRecovery.NotAttempted, result.Result.Recovery);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.Equal(0, result.ReconnectAttempts);
+        Assert.Equal(0, transport.ReconnectCalls);
+        Assert.Equal([RemoteCommandCatalog.UbuntuRebootApply], transport.Commands.Select(command => command.Id.Value));
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticPhase.Apply, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuRebootApply, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.DoesNotContain(sink.Events, entry => entry.Message.Contains("untrusted remote detail", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyCancellationBeforeRecoveryDoesNotClaimReconnectCancellation()
+    {
+        var transport = new RebootTransport(new OperationCanceledException());
+        var sink = new Sink();
+
+        var result = await CreateWorkflow(new AllowedPreflight(), sink).RebootAsync(transport, confirmed: true);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.Equal(0, result.ReconnectAttempts);
+        Assert.Equal(0, transport.ReconnectCalls);
+        Assert.Equal([RemoteCommandCatalog.UbuntuRebootApply], transport.Commands.Select(command => command.Id.Value));
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId == DiagnosticEventCatalog.RebootCancelled);
+        Assert.Equal(DiagnosticPhase.Apply, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuRebootApply, terminal.CommandId);
+    }
+
     [Fact]
     public async Task ReconnectTimeoutIsFiniteAndHostTrustFailsClosed()
     {
@@ -351,6 +433,7 @@ public sealed class RebootWorkflowTests
         private int bootIdentityReads;
         public Action? OnReconnect { get; init; }
         public Action<int>? OnBootIdentityRead { get; init; }
+        public Exception? FirstBootIdentityFailure { get; init; }
         public Action<RemoteCommand>? OnCommand { get; init; }
 
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
@@ -385,6 +468,10 @@ public sealed class RebootWorkflowTests
             cancellationToken.ThrowIfCancellationRequested();
             var read = ++bootIdentityReads;
             OnBootIdentityRead?.Invoke(read);
+            if (read == 1 && FirstBootIdentityFailure is { } failure)
+            {
+                return Task.FromException<BootIdentityReadResult>(failure);
+            }
             var value = BootIdentities.Count > 0
                 ? BootIdentities.Dequeue()
                 : read == 1 ? "11111111-1111-1111-1111-111111111111" : "22222222-2222-2222-2222-222222222222";
