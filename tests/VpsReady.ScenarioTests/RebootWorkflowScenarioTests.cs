@@ -100,6 +100,42 @@ public sealed class RebootWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task BootIdentityTimeoutBeforeRebootKeepsStateAndReconnectUntouched()
+    {
+        await using var services = ScenarioComposition.Create("c504-pre-recovery-boot-timeout");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
+        var wasConnected = state.Ssh.IsConnected;
+        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.Timeout, "c504-boot-identity-timeout", RemoteCommandCatalog.UbuntuBootIdentityRead);
+
+        var result = await CreateWorkflow(diagnostics).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(RebootErrorCatalog.PreRecovery, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationRecovery.NotRequired, result.Result.Recovery);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.Equal(0, state.Reboot.BootGeneration);
+        Assert.Equal(0, state.Reboot.ReconnectAttempts);
+        Assert.False(state.Reboot.IsRebooting);
+        Assert.Equal(wasConnected, state.Ssh.IsConnected);
+        var events = recorder.Events.Where(entry => entry.Correlation.OperationId == result.Result.OperationId).ToArray();
+        var terminal = Assert.Single(events, entry => entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuBootIdentityRead, terminal.CommandId);
+        Assert.DoesNotContain(events, entry => entry.EventId is DiagnosticEventCatalog.RebootRecoveryRequired or DiagnosticEventCatalog.RebootSucceeded);
+        Assert.All(events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+        });
+    }
+
+    [Fact]
     public async Task ReconnectTimeoutAndChangedHostFailClosedAfterConfirmedReboot()
     {
         await using var timeoutServices = ScenarioComposition.CreateProfile(ScenarioProfiles.RebootReconnectTimeout);
