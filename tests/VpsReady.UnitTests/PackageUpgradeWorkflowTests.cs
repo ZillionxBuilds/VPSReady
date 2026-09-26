@@ -71,6 +71,48 @@ public sealed class PackageUpgradeWorkflowTests
         Assert.Equal(sink.Events[0].Correlation.OperationId, terminals[0].Correlation.OperationId);
     }
 
+    [Theory]
+    [InlineData(RemoteCommandCatalog.UbuntuAptUpgradeApply)]
+    [InlineData(RemoteCommandCatalog.UbuntuAptUpgradeVerify)]
+    [InlineData(RemoteCommandCatalog.UbuntuRebootRequiredRead)]
+    public async Task CancellationAfterUpgradeCommandEvidenceCannotDispatchNextStepOrReportSuccess(string cancelAtCommand)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var sink = new Sink(entry =>
+        {
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.CommandId == cancelAtCommand)
+            {
+                cancellation.Cancel();
+            }
+        });
+        var transport = new IgnoringCancellationTransport(
+            Ok("upgrade_plan_packages=1:" + new string('a', 64)),
+            Ok("upgrade_plan_packages=1:" + new string('a', 64)),
+            Ok("done"), Ok("package_upgrade=verified"), Ok("reboot_required=false"));
+        var workflow = new PackageUpgradeWorkflow(new AllowedPreflight(), sink);
+        var plan = await workflow.PlanAsync(transport);
+
+        var result = await workflow.UpgradeAsync(transport, plan, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(PackageUpgradeErrorCatalog.Cancelled, result.ErrorCode);
+        var terminal = Assert.Single(sink.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.PackageUpgradeCancelled or DiagnosticEventCatalog.PackageUpgradeSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.PackageUpgradeCancelled, terminal.EventId);
+        Assert.Equal(cancelAtCommand == RemoteCommandCatalog.UbuntuAptUpgradeApply ? DiagnosticPhase.Apply : DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(cancelAtCommand, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+        if (cancelAtCommand == RemoteCommandCatalog.UbuntuAptUpgradeApply)
+        {
+            Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuAptUpgradeVerify);
+        }
+        else if (cancelAtCommand == RemoteCommandCatalog.UbuntuAptUpgradeVerify)
+        {
+            Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuRebootRequiredRead);
+        }
+    }
+
     [Fact]
     public void CatalogAllowsOnlyTheNormalBoundedUpgrade()
     {
@@ -178,6 +220,18 @@ public sealed class PackageUpgradeWorkflowTests
         private readonly Queue<RemoteCommandResult> results = new(results);
         public List<RemoteCommand> Commands { get; } = [];
         public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) { cancellationToken.ThrowIfCancellationRequested(); Commands.Add(command); return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Dequeue(), cancellationToken); }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class IgnoringCancellationTransport(params RemoteCommandResult[] results) : IRemoteTransport
+    {
+        private readonly Queue<RemoteCommandResult> results = new(results);
+        public List<RemoteCommand> Commands { get; } = [];
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Dequeue(), CancellationToken.None);
+        }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Remote;
 
@@ -24,6 +25,31 @@ public sealed class PackageUpgradeWorkflowScenarioTests
         Assert.Equal(1, state.Apt.UpgradeGeneration);
         Assert.Contains(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PrivilegePreflightSucceeded && item.Correlation.OperationId == result.Result.OperationId);
         Assert.All(recorder.Events.Where(item => item.EventId.StartsWith("apt.upgrade", StringComparison.Ordinal) && item.Correlation.OperationId == result.Result.OperationId), item => Assert.Equal(result.Result.OperationId, item.Correlation.OperationId));
+    }
+
+    [Fact]
+    public async Task CancellationAfterApplyEvidenceKeepsMutatedStateUnknownWithoutVerifying()
+    {
+        await using var services = ScenarioComposition.Create("c503-post-apply-cancel");
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelAfterApplyEvidenceSink(services.GetRequiredService<IDiagnosticSink>(), cancellation);
+        var transport = new IgnoringCancellationTransport(services.GetRequiredService<DeterministicScenarioHost>());
+        var workflow = new PackageUpgradeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var plan = await workflow.PlanAsync(transport);
+
+        var result = await workflow.UpgradeAsync(transport, plan, true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(1, services.GetRequiredService<ScenarioHostState>().Apt.UpgradeGeneration);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuAptUpgradeVerify, transport.Commands);
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var terminal = Assert.Single(recorder.Events, entry => entry.EventId is
+            DiagnosticEventCatalog.PackageUpgradeCancelled or DiagnosticEventCatalog.PackageUpgradeSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.PackageUpgradeCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Apply, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptUpgradeApply, terminal.CommandId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
     }
 
     [Theory]
@@ -91,5 +117,28 @@ public sealed class PackageUpgradeWorkflowScenarioTests
 
         Assert.False(plan.IsReady);
         Assert.Equal(0, services.GetRequiredService<ScenarioHostState>().Apt.UpgradeGeneration);
+    }
+
+    private sealed class IgnoringCancellationTransport(DeterministicScenarioHost host) : IRemoteTransport
+    {
+        public List<string> Commands { get; } = [];
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            return host.ExecuteAsync(command, CancellationToken.None);
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancelAfterApplyEvidenceSink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(entry, cancellationToken);
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted && entry.CommandId == RemoteCommandCatalog.UbuntuAptUpgradeApply)
+            {
+                cancellation.Cancel();
+            }
+        }
     }
 }

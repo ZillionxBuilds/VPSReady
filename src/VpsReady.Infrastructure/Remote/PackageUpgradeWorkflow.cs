@@ -59,6 +59,8 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         var correlation = CorrelationIds.Create("apt_upgrade");
         var apply = UbuntuPackageCommandCatalog.CreateUpgradeApplyRequest();
         var applyAttempted = false;
+        var cancellationPhase = DiagnosticPhase.Preflight;
+        string? cancellationCommandId = null;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
@@ -77,6 +79,9 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             // Re-run the same privileged, sanitized-environment preview just
             // before mutation. Equal counts do not prove equal package versions.
             var revalidate = UbuntuPackageCommandCatalog.CreateUpgradePlanRequest();
+            cancellationToken.ThrowIfCancellationRequested();
+            cancellationPhase = DiagnosticPhase.Plan;
+            cancellationCommandId = revalidate.Id.Value;
             var current = await transport.ExecuteAsync(revalidate, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, current, revalidate.Id.Value).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -91,8 +96,11 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             applyAttempted = true;
+            cancellationPhase = DiagnosticPhase.Apply;
+            cancellationCommandId = apply.Id.Value;
             var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!applied.Succeeded)
             {
                 var (error, code) = applied.AptLockContended ? (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Locked) : applied.ExitCode switch
@@ -106,16 +114,23 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             var verify = UbuntuPackageCommandCatalog.CreateUpgradeVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            cancellationPhase = DiagnosticPhase.Verify;
+            cancellationCommandId = verify.Id.Value;
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
             }
 
             var reboot = UbuntuPackageCommandCatalog.CreateRebootRequiredRequest();
+            cancellationToken.ThrowIfCancellationRequested();
+            cancellationCommandId = reboot.Id.Value;
             var rebootState = await transport.ExecuteAsync(reboot, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, rebootState, reboot.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!rebootState.Succeeded || rebootState.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuRebootRequiredRead, Flag: { } rebootRequired })
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, reboot.Id.Value, OperationState.Applied).ConfigureAwait(false);
@@ -128,7 +143,7 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, applyAttempted ? apply.Id.Value : null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, cancellationPhase, DiagnosticStatus.Cancelled, cancellationCommandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
             return new PackageUpgradeResult(cancelled, PackageUpgradeErrorCatalog.Cancelled, null);
         }
         catch (TimeoutException)
