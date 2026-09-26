@@ -14,6 +14,9 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         ArgumentNullException.ThrowIfNull(transport);
         var correlation = CorrelationIds.Create("apt_index_update");
         var update = UbuntuPackageCommandCatalog.CreateUpdateRequest();
+        var applyAttempted = false;
+        var cancellationPhase = DiagnosticPhase.Preflight;
+        string? cancellationCommandId = null;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
@@ -23,7 +26,12 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
                 return await CompletePreflightFailureAsync(correlation, privilege.Result).ConfigureAwait(false);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, update.Id.Value, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            applyAttempted = true;
+            cancellationPhase = DiagnosticPhase.Apply;
+            cancellationCommandId = update.Id.Value;
             var applied = await transport.ExecuteAsync(update, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, update.Id.Value).ConfigureAwait(false);
             // Apt may already have changed the cache; cancellation cannot claim rollback.
@@ -37,6 +45,9 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
 
             var verify = UbuntuPackageCommandCatalog.CreateVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            cancellationPhase = DiagnosticPhase.Verify;
+            cancellationCommandId = verify.Id.Value;
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
             if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
@@ -50,8 +61,8 @@ public sealed class PackageIndexUpdateWorkflow(IPrivilegePreflight preflight, ID
         }
         catch (OperationCanceledException)
         {
-            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateCancelled, DiagnosticPhase.Apply, DiagnosticStatus.Cancelled, update.Id.Value, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageIndexUpdateCancelled, cancellationPhase, DiagnosticStatus.Cancelled, cancellationCommandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
             return new PackageIndexUpdateResult(cancelled, PackageIndexUpdateErrorCatalog.Cancelled);
         }
         catch (TimeoutException)
