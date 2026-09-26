@@ -1239,6 +1239,28 @@ and Thai README on draft PR #14. Interactive key-auth UI, physical
 Windows/Linux hosts, hosted checks, independent QA and Owner Stage 4 remain
 **NOT RUN/NOT VERIFIED**. **REAL VPS: NOT TESTED.**
 
+### Exact-composite six-RID local build check — 2026-09-26
+
+On clean local composite `ad832ae599c5cb5c515ccac2c85bdadf5daab8f4`,
+locked restore and direct unsigned self-contained Release publishes passed for
+the four remaining RIDs. `file` identified the expected apphost types; each
+Desktop DLL embedded the same source SHA:
+
+| RID | Apphost type | Desktop DLL SHA-256 |
+| --- | --- | --- |
+| `osx-x64` | Mach-O x86_64 | `dc51f3f208d0ed41ea73f27d27f1f8b27c15103e6872b294679e5b876b56dd80` |
+| `win-x64` | PE32+ x86-64 | `fef149010d23b1ea1ea5dccd2efa23df806f8c50620cc7c34ffb2c45478b81da` |
+| `win-arm64` | PE32+ Aarch64 | `1cbc359e59ee6ae97e4199a1335388186b19c65214e99833d50af3a3686aa358` |
+| `linux-x64` | ELF x86-64 | `f5116881adca9de23494f3daa07bbefa94c72d0e65f6301e7502787d7552bc05` |
+
+The retained-output safety scan passed for those four local folders. Together
+with the exact-composite macOS arm64 and contained Linux ARM64 publishes
+above, all six configured RIDs have local build/type/SHA evidence. The four
+cross-published RIDs were **NOT startup-smoked** on native hosts; official
+PowerShell candidate packaging was **NOT RUN** (`pwsh` unavailable). There is
+no hosted check, signed/manifested candidate, independent QA or Owner E5
+claim. These are ignored developer outputs, not retained release artifacts.
+
 ## F02–F09 source and evidence map
 
 | Capability | Production trace on current release | Representative blind evidence | Current verdict / next check |
