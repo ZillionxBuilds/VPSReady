@@ -40,9 +40,10 @@ It is **not** release approval or an Owner VPS test result. Product baseline:
 [selected-key config freshness PR #88](https://github.com/ZillionxBuilds/VPSReady/pull/88),
 [package-index cancellation PR #90](https://github.com/ZillionxBuilds/VPSReady/pull/90),
 [package-upgrade cancellation PR #92](https://github.com/ZillionxBuilds/VPSReady/pull/92),
-[reboot pre-apply cancellation PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94), and
-[setting Apply cancellation PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96), and
-[package exception-attribution PR #98](https://github.com/ZillionxBuilds/VPSReady/pull/98)
+[reboot pre-apply cancellation PR #94](https://github.com/ZillionxBuilds/VPSReady/pull/94),
+[setting Apply cancellation PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96),
+[package exception-attribution PR #98](https://github.com/ZillionxBuilds/VPSReady/pull/98), and
+[reboot pre-recovery outcome PR #100](https://github.com/ZillionxBuilds/VPSReady/pull/100)
 are separate, unmerged changes. The baseline below excludes them; a later
 developer-only local composite preflight is recorded separately and does not
 approve release integration.
@@ -176,6 +177,42 @@ exact composite SHA. Native interactive UI, physical Windows/Linux, hosted
 checks and independent review remain NOT RUN or NOT VERIFIED. This is a
 developer collision preflight, **not** release approval or permission for
 Owner VPS testing. E5 **REAL VPS: NOT TESTED**.
+
+### F08 reboot failures before reconnect starts — 2026-09-26 UTC
+
+[#99/PR #100](https://github.com/ZillionxBuilds/VPSReady/pull/100) separates
+pre-recovery failure from actual reconnect failure. A boot-identity timeout
+or host-trust error before reboot Apply returned reconnect `TimedOut` or
+`HostTrustRejected` even though no reboot or reconnect was dispatched. A
+thrown Apply timeout, host-trust error or unexpected exception also claimed
+a reconnect outcome before recovery began. Five focused E1 cases were RED
+0/5 on the release base. The correction returns `NotStarted` until Recovery,
+preserves `Unchanged` before Apply and `Unknown` after Apply attempt, and
+uses safe `REBOOT_PRE_RECOVERY_FAILED` for typed pre-recovery timeout/transport
+failures. Actual reconnect timeout/trust outcomes and fail-closed behavior
+remain unchanged. A separate Apply-cancellation case also passes.
+
+Exact isolated source head `84ba727e3d2a0eadd85144e02e7863ea923edfc5`
+passed E0 locked restore, Release `-warnaserror` build (0 warnings/errors),
+format and diff; E1 614 PASS/2 declared SKIP, including focused reboot
+workflow 24/24; E2 175 PASS/3 declared SKIP. Stateful scenario
+`c504-pre-recovery-boot-timeout` retained boot generation 0 and no reconnect
+or success event. E3 real reboot/SSH protocol was NOT RUN for the isolated
+change. E4 unsigned osx-arm64 Mach-O self-contained publish passed with
+embedded exact source SHA. Native UI, physical Windows/Linux and hosted
+checks were NOT RUN. E5 **REAL VPS: NOT TESTED**.
+
+The **local-only, unpushed** composite at
+`33b2596f39e842a99edf1729d047f4ece00ed7c3` adds #100 to the prior
+`a22b82d` tree, preserving #83/#93 cancellation regressions alongside the
+new outcome tests. Exact clean composite E0 locked restore, Release
+`-warnaserror` build (0 warnings/errors), format and diff PASS; E1 760
+PASS/3 declared SKIP; E2 199 PASS/3 declared SKIP. Disposable Ubuntu Noble
+ARM64 loopback-only OpenSSH E3 passed 3/3 with no published port, but this
+does **not** test a real reboot. E4 unsigned osx-arm64 Mach-O publish passed
+with embedded exact composite SHA. Independent safety review, hosted/native
+platform checks and Owner Stage 5 remain pending. This is collision
+preflight, **not** an approved candidate. E5 **REAL VPS: NOT TESTED**.
 
 ### F06/F09 session terminal evidence with key journey — 2026-09-26 UTC
 
@@ -1805,6 +1842,11 @@ tracks the separate E5 gate.
   pre-dispatch `Unchanged/NotStarted` remains distinct from post-attempt
   `Unknown/recovery`. Preserve #84 read-only and #94 mutation regressions in
   the approved candidate; local loopback E3 is not a real reboot test.
+- Obtain independent safety review of [PR #100](https://github.com/ZillionxBuilds/VPSReady/pull/100)
+  for pre-recovery `NotStarted` outcomes and the new safe error code. Confirm
+  #93 pre-Apply cancellation and #83 reboot-required tests survive approved
+  integration; `33b2596` is only a local collision preflight. Actual reboot
+  and reconnect on a disposable VPS remain Owner Stage 5/E5, NOT TESTED.
 - Obtain independent same-class review of [PR #96](https://github.com/ZillionxBuilds/VPSReady/pull/96)
   for hostname/timezone Apply and Verify cancellation boundaries. Preserve
   #35 fresh-plan checks with #95 pre-dispatch and post-verify regressions;
