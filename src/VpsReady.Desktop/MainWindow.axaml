@@ -133,8 +133,12 @@
               <TextBlock Text="{Binding SshManagement.TrustedHostStatus}" TextWrapping="Wrap" />
               <TextBlock IsVisible="{Binding SshManagement.OperationId}" FontFamily="Consolas" Text="{Binding SshManagement.OperationId}" TextWrapping="Wrap" />
               <TextBlock IsVisible="{Binding SshManagement.ErrorCode}" FontFamily="Consolas" Text="{Binding SshManagement.ErrorCode}" TextWrapping="Wrap" />
+              <TextBlock FontWeight="SemiBold" Text="New key name" />
+              <TextBox AutomationProperties.Name="New SSH key name" Text="{Binding SshManagement.NewKeyName, Mode=TwoWay}" />
+              <TextBlock Text="Use 1–64 A–Z, a–z, 0–9, hyphens or underscores; start with a letter or number. A .pub companion is created automatically. Existing names are never overwritten." TextWrapping="Wrap" />
+              <TextBlock IsVisible="{Binding SshManagement.HasInvalidKeyName}" Foreground="#A43044" Text="Start with A–Z, a–z or 0–9. Reserved system names and other characters are not allowed." TextWrapping="Wrap" />
               <WrapPanel ItemSpacing="8" LineSpacing="8">
-                <Button Click="GenerateSshKeyAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Generate local Ed25519 key" />
+                <Button Click="GenerateSshKeyAsync" IsEnabled="{Binding SshManagement.CanGenerateKey}" Content="Choose folder and generate key" />
                 <Button Click="SelectSshKeyAsync" IsEnabled="{Binding SshManagement.CanStartOperation}" Content="Select existing local key" />
                 <Button Command="{Binding SshManagement.CancelCommand}" IsEnabled="{Binding SshManagement.CanCancel}" Content="Cancel operation" />
               </WrapPanel>

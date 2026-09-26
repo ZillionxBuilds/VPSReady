@@ -7,6 +7,17 @@ stable-release announcement; exact verification belongs to the linked records.
 
 ## Unreleased — v0.1 Core Basic
 
+### Local SSH key naming (review branch)
+
+- Added an explicit name field and folder choice for generated Ed25519 pairs.
+  Portable names are validated before generation; existing private or public
+  files are never silently replaced, and a collision prompts another choice.
+- Kept public-key view/copy, key selection and deployment as separate verified
+  actions. This change has no real-VPS evidence.
+
+See [issue #16](https://github.com/ZillionxBuilds/VPSReady/issues/16).
+**REAL VPS: NOT TESTED.**
+
 ### Desktop experience and local build entrypoints (review branch)
 
 - Refreshed the Avalonia workspace with clearer navigation, session status,

@@ -37,8 +37,11 @@ public sealed class SshManagementViewModelScenarioTests
                 diagnostics);
             var privatePath = Path.Combine(root, "id_ed25519");
 
-            await viewModel.GenerateAsync(privatePath);
+            viewModel.NewKeyName = "id_ed25519";
+            await viewModel.GenerateNamedAsync(root, viewModel.NewKeyName);
             Assert.Equal(SshManagementScreenState.KeySelected, viewModel.State);
+            Assert.True(File.Exists(privatePath));
+            Assert.True(File.Exists(privatePath + ".pub"));
 
             viewModel.IsDeploymentConfirmed = true;
             await viewModel.DeployAsync();

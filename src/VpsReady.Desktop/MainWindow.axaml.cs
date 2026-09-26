@@ -239,15 +239,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        var selected = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        var requestedName = ssh.NewKeyName;
+        if (!VpsReady.Core.Local.LocalSshKeyNamePolicy.IsValid(requestedName))
         {
-            Title = "Choose a local private-key destination",
-            SuggestedFileName = "id_ed25519",
+            return;
+        }
+
+        var selected = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose a local folder for the named SSH key pair",
+            AllowMultiple = false,
         });
-        var path = selected?.Path.LocalPath;
+        var path = selected.Count == 1 ? selected[0].Path.LocalPath : null;
         if (!string.IsNullOrWhiteSpace(path))
         {
-            await ssh.GenerateAsync(path);
+            await ssh.GenerateNamedAsync(path, requestedName);
         }
     }
 
