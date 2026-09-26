@@ -427,9 +427,17 @@ SHA and artifact-safety **PASS**; startup/interactive UI **NOT RUN**.
 Local-only all-pending `18b9f19` cherry-picks that correction onto
 `33b2596` without conflicts with the existing generator repairs (#46, #58,
 #62); exact E0 build/format **PASS**, E1 **761 PASS/3 SKIP**, E2 **199
-PASS/3 SKIP**. E3/E4 were **NOT RERUN** on this new composite. This is
-developer compatibility evidence, not independent QA, a merged candidate or
-Owner Stage 4/E5. **REAL VPS: NOT TESTED.**
+PASS/3 SKIP**. Exact E3 on disposable Ubuntu Noble ARM64 Docker/loopback
+OpenSSH **3 PASS/0 FAIL/0 SKIP**, including named generated-key login and
+wrong-key refusal; trust/password/command/timeout checks and retained
+artifact-safety **PASS**. No port was published outside the container.
+Exact E4 unsigned macOS arm64 publish, Mach-O architecture, embedded
+`18b9f19` SHA and artifact-safety **PASS**. The app process remained alive
+for a five-second smoke and was deliberately stopped; clean exit and
+interactive UI are **NOT VERIFIED**. This is developer compatibility
+evidence, not hosted CI, independent QA, a merged candidate or Owner Stage
+4/E5. Native Windows/Linux desktop checks remain **NOT RUN**.
+**REAL VPS: NOT TESTED.**
 
 ### F05 named-key UI with current navigation and safety dependencies — 2026-09-26
 
