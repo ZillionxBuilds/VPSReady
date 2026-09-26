@@ -30,6 +30,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
             var current = await transport.ExecuteAsync(UbuntuTimezoneCommandCatalog.CreateCurrentReadRequest(), cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, current, activeCommand).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!current.Succeeded)
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Command, TimezoneChangeErrorCatalog.Command, DiagnosticPhase.Plan, activeCommand).ConfigureAwait(false);
@@ -43,6 +44,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             activeCommand = RemoteCommandCatalog.UbuntuTimezoneAvailableList;
             var available = await transport.ExecuteAsync(UbuntuTimezoneCommandCatalog.CreateAvailableListRequest(), cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, available, activeCommand).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!available.Succeeded)
             {
                 return await PlanFailureAsync(correlation, OperationErrorCode.Command, TimezoneChangeErrorCatalog.Command, DiagnosticPhase.Plan, activeCommand).ConfigureAwait(false);
@@ -104,6 +106,7 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             activePhase = DiagnosticPhase.Preflight;
             var privilege = await preflight.CheckAsync(transport, PrivilegeOperationIntent.Mutation, correlation, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!privilege.Result.Succeeded)
             {
                 if (privilege.Result.Cancelled)
@@ -162,9 +165,11 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             var apply = UbuntuTimezoneCommandCatalog.CreateApplyRequest(plan.SelectedTimezone!);
             activeCommand = apply.Id.Value;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, activePhase, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             applyAttempted = true;
             var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, activePhase, applied, activeCommand).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!applied.Succeeded)
             {
                 return await FailureAsync(correlation, applied.ExitCode is 13 or 77 ? OperationErrorCode.Privilege : OperationErrorCode.Command, applied.ExitCode is 13 or 77 ? TimezoneChangeErrorCatalog.Privilege : TimezoneChangeErrorCatalog.Command, activePhase, activeCommand, OperationState.Unknown).ConfigureAwait(false);
@@ -174,8 +179,10 @@ public sealed class TimezoneChangeWorkflow(IPrivilegePreflight preflight, IDiagn
             var verify = UbuntuTimezoneCommandCatalog.CreateVerifyReadRequest();
             activeCommand = verify.Id.Value;
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, activePhase, DiagnosticStatus.Running, activeCommand, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, activePhase, verified, activeCommand).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!verified.Succeeded || !TryParseSingleTimezone(verified.StandardOutput, out var observed) || !string.Equals(observed, plan.SelectedTimezone, StringComparison.Ordinal))
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, TimezoneChangeErrorCatalog.Verification, activePhase, activeCommand, OperationState.Applied).ConfigureAwait(false);
