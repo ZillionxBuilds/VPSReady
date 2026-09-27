@@ -36,6 +36,62 @@ public sealed class OpenSshConfigEditorTests
         Assert.Contains("port 2222", added.Output, StringComparison.Ordinal);
     }
 
+    [UnixFact]
+    public async Task NewAliasWithWildcardIdentityFileFailsClosedWithoutChangingEffectiveConfig()
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var shell = new ShellSandbox();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "default_id");
+        var original = $"Host *\n    IdentityFile \"{extraIdentity}\"\n";
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath);
+        var before = await shell.RunAsync(command + " new-alias");
+        Assert.Equal(0, before.ExitCode);
+        Assert.Contains($"identityfile {extraIdentity}", before.Output, StringComparison.Ordinal);
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics);
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("config");
+
+        var result = await editor.AddAliasAsync(workspace.Request("new-alias"), correlation, CancellationToken.None);
+        var after = await shell.RunAsync(command + " new-alias");
+
+        Assert.False(result.Succeeded, "Do not report a new alias as saved when a matching wildcard already selects another identity.");
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InheritedIdentityConflict, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.Equal(0, after.ExitCode);
+        Assert.Equal(before.Output, after.Output);
+        Assert.DoesNotContain($"identityfile {workspace.IdentityPath}", after.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.All(diagnostics.Events, item =>
+        {
+            Assert.Equal(correlation.OperationId, item.Correlation.OperationId);
+            Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(extraIdentity, item.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [UnixTheory]
+    [InlineData("Host unrelated-*")]
+    [InlineData("Host * !new-alias")]
+    public async Task NewAliasIsAllowedWhenIdentityWildcardDoesNotMatch(string hostPattern)
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var shell = new ShellSandbox();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "unrelated_id");
+        await File.WriteAllTextAsync(workspace.ConfigPath, $"{hostPattern}\n    IdentityFile \"{extraIdentity}\"\n");
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath);
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink())
+            .AddAliasAsync(workspace.Request("new-alias"), DiagnosticRunContext.StartSession().StartOperation("config"), CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        var effective = await shell.RunAsync(command + " new-alias");
+        Assert.Equal(0, effective.ExitCode);
+        Assert.Contains($"identityfile {workspace.IdentityPath}", effective.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain($"identityfile {extraIdentity}", effective.Output, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("ServerAliveInterval 60\n\nHost existing\n    HostName existing.example\n")]
     [InlineData("ServerAliveInterval 60\r\nHost existing\r\n    HostName existing.example")]

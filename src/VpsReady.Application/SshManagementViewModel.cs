@@ -537,6 +537,10 @@ public sealed class SshManagementViewModel : ObservableObject, IDisposable
                 ? "The local OpenSSH alias was verified. It does not change the current server session."
                 : null,
                 result.Succeeded ? SshManagementScreenState.Configured : null);
+            if (result.ErrorCode == OpenSshConfigEditErrorCatalog.InheritedIdentityConflict)
+            {
+                Status = "A matching OpenSSH pattern has an IdentityFile setting. No config change was made; review the local wildcard settings manually before retrying.";
+            }
         }
         finally
         {

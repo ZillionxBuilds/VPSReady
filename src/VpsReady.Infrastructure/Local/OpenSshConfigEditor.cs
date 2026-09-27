@@ -71,6 +71,15 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
                 return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.AliasExists, OperationErrorCode.Validation, DiagnosticPhase.Preflight, OperationState.Unchanged, OperationVerification.NotRun).ConfigureAwait(false);
             }
 
+            // IdentityFile is additive across matching Host blocks. Inserting
+            // a new exact alias cannot override a key inherited from a matching
+            // wildcard, so refuse to claim that the selected identity is the
+            // only effective key. Leave the user's config untouched for review.
+            if (GetEffectiveValues(blocks, desired.Alias).IdentityFileCount > 0)
+            {
+                return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.InheritedIdentityConflict, OperationErrorCode.Validation, DiagnosticPhase.Preflight, OperationState.Unchanged, OperationVerification.NotRun).ConfigureAwait(false);
+            }
+
             // Keep global directives global. Place the exact alias before any
             // Host defaults, while leaving the original preamble and all blocks
             // in their original scope. Complex includes/matches are refused.
