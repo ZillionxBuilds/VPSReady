@@ -33,6 +33,8 @@ public sealed class UfwToggleWorkflow
         }
 
         var mutated = false;
+        var activeSshPort = 0;
+        var ipv6Enabled = false;
         try
         {
             var portResult = await Execute(correlation, "EnableFirewall", DiagnosticPhase.Preflight, transport, portCommand, cancellationToken).ConfigureAwait(false);
@@ -40,6 +42,7 @@ public sealed class UfwToggleWorkflow
             {
                 return await Failure(correlation, "EnableFirewall", DiagnosticPhase.Preflight, portCommand.Id.Value, portResult.Succeeded ? OperationErrorCode.Parse : OperationErrorCode.Command, OperationState.Unchanged, null).ConfigureAwait(false);
             }
+            activeSshPort = port;
 
             var preflight = await Read(correlation, "EnableFirewall", DiagnosticPhase.Preflight, transport, list, cancellationToken).ConfigureAwait(false);
             if (!preflight.IsComplete || preflight.Snapshot.State is UfwFirewallState.Absent or UfwFirewallState.Error or UfwFirewallState.Unknown)
@@ -55,6 +58,7 @@ public sealed class UfwToggleWorkflow
                 return await Failure(correlation, "EnableFirewall", DiagnosticPhase.Preflight, storedCommand.Id.Value, storedResult.Succeeded ? OperationErrorCode.Unsupported : ErrorForApply(storedResult), OperationState.Unchanged, preflight.Snapshot,
                     message: "Stored firewall policy could not be verified. Enable was not attempted. Review privileges, IPv6 configuration and custom firewall rules before trying again.").ConfigureAwait(false);
             }
+            ipv6Enabled = stored.Ipv6Enabled;
 
             if (preflight.Snapshot.State == UfwFirewallState.Active)
             {
@@ -117,7 +121,9 @@ public sealed class UfwToggleWorkflow
         }
         catch (OperationCanceledException)
         {
-            return await Cancelled(correlation, "EnableFirewall", list.Id.Value, mutated).ConfigureAwait(false);
+            return mutated
+                ? await CancelAfterEnableMutation(correlation, transport, list, activeSshPort, ipv6Enabled).ConfigureAwait(false)
+                : await Cancelled(correlation, "EnableFirewall", list.Id.Value, mutated).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
@@ -311,6 +317,76 @@ public sealed class UfwToggleWorkflow
         catch { return await Failure(c, action, DiagnosticPhase.Recovery, list.Id.Value, OperationErrorCode.Recovery, affectedState, null, OperationVerification.NotRun, OperationRecovery.Failed).ConfigureAwait(false); }
     }
 
+    private async Task<UfwToggleOperationResult> CancelAfterEnableMutation(WorkflowDiagnosticContext c, IRemoteTransport transport, RemoteCommand list, int port, bool ipv6Enabled)
+    {
+        await Report(c, "EnableFirewall", DiagnosticEventCatalog.OperationRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired,
+            "Firewall enable was cancelled after a possible mutation; checking state and SSH continuity without further firewall changes.", list.Id.Value).ConfigureAwait(false);
+
+        UfwRuleListRead refreshed;
+        try
+        {
+            // The caller token is already cancelled. This bounded command is
+            // deliberately read-only so the resulting state can still be known.
+            refreshed = await Read(c, "EnableFirewall", DiagnosticPhase.Recovery, transport, list, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await CancelledAfterRecovery(c, list.Id.Value, OperationState.Unknown, OperationVerification.Unknown, OperationRecovery.Failed, null, port,
+                "Firewall enable was cancelled, but its current state could not be confirmed.",
+                "Do not retry firewall changes yet. Inspect UFW and the active SSH allow rules through a separate verified access path.").ConfigureAwait(false);
+        }
+
+        if (!refreshed.IsComplete || refreshed.Snapshot.State is UfwFirewallState.Absent or UfwFirewallState.Error or UfwFirewallState.Unknown)
+        {
+            return await CancelledAfterRecovery(c, list.Id.Value, OperationState.Unknown, OperationVerification.Unknown, OperationRecovery.Failed, null, port,
+                "Firewall enable was cancelled, but its current state could not be confirmed.",
+                "Do not retry firewall changes yet. Inspect UFW and the active SSH allow rules through a separate verified access path.").ConfigureAwait(false);
+        }
+
+        if (refreshed.Snapshot.State != UfwFirewallState.Active)
+        {
+            return await CancelledAfterRecovery(c, list.Id.Value, OperationState.PartiallyApplied, OperationVerification.Failed, OperationRecovery.Succeeded, refreshed.Snapshot, port,
+                "Firewall enable was cancelled. UFW is currently inactive; earlier SSH allow-rule changes may still have been applied.",
+                "Refresh the firewall page and verify the active SSH port allow rules before a later enable attempt.").ConfigureAwait(false);
+        }
+
+        var sshAllows = port is >= 1 and <= 65535 && HasSshAllows(refreshed.Snapshot, port, ipv6Enabled);
+        var continuity = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.SshConnectionTest);
+        RemoteCommandResult continuityResult;
+        try
+        {
+            // Always test the existing authenticated channel after observing
+            // active UFW, even if the numbered rule listing is unsafe.
+            continuityResult = await Execute(c, "EnableFirewall", DiagnosticPhase.Recovery, transport, continuity, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await CancelledAfterRecovery(c, continuity.Id.Value, OperationState.PartiallyApplied, OperationVerification.Unknown, OperationRecovery.Failed, refreshed.Snapshot, port,
+                "UFW is active after cancellation, but SSH session continuity could not be confirmed.",
+                "Do not retry firewall changes. Use a separate verified access path to check SSH reachability and firewall rules.").ConfigureAwait(false);
+        }
+
+        if (sshAllows && continuityResult.Succeeded)
+        {
+            return await CancelledAfterRecovery(c, continuity.Id.Value, OperationState.Applied, OperationVerification.Passed, OperationRecovery.Succeeded, refreshed.Snapshot, port,
+                "Firewall enable was cancelled, but the active state, SSH allow rules and current-session continuity were verified.",
+                "Refresh the firewall page before starting another firewall change.").ConfigureAwait(false);
+        }
+
+        return await CancelledAfterRecovery(c, continuity.Id.Value, OperationState.PartiallyApplied, OperationVerification.Failed, OperationRecovery.Failed, refreshed.Snapshot, port,
+            "UFW is active after cancellation, but the required SSH access safety checks did not all pass.",
+            "Do not retry firewall changes. Use a separate verified access path to check the active SSH port allow rules and SSH reachability.").ConfigureAwait(false);
+    }
+
+    private async Task<UfwToggleOperationResult> CancelledAfterRecovery(WorkflowDiagnosticContext c, string command, OperationState state, OperationVerification verification, OperationRecovery recovery, UfwSnapshot? snapshot, int port, string userMessage, string nextAction)
+    {
+        var result = OperationResult.Cancellation(c.OperationId, state, verification, recovery, userMessage, nextAction);
+        await Report(c, "EnableFirewall", DiagnosticEventCatalog.OperationCancelled, DiagnosticPhase.Recovery, DiagnosticStatus.Cancelled,
+            "Firewall enable was cancelled; post-mutation state verification did not report operation success.", command, OperationErrorCode.Cancelled,
+            verification: verification, recovery: recovery).ConfigureAwait(false);
+        return new(result, snapshot, snapshot is not null, port);
+    }
+
     private async Task<UfwRuleListRead> Read(WorkflowDiagnosticContext c, string action, DiagnosticPhase phase, IRemoteTransport t, RemoteCommand command, CancellationToken token)
     {
         var result = await Execute(c, action, phase, t, command, token).ConfigureAwait(false);
@@ -371,4 +447,4 @@ public sealed class UfwToggleWorkflow
     private static OperationErrorCode ToError(RemoteTransportFailureKind kind) => kind switch { RemoteTransportFailureKind.Network => OperationErrorCode.Network, RemoteTransportFailureKind.ConnectionRefused => OperationErrorCode.ConnectionRefused, RemoteTransportFailureKind.Timeout => OperationErrorCode.Timeout, RemoteTransportFailureKind.Authentication => OperationErrorCode.Authentication, RemoteTransportFailureKind.HostTrust => OperationErrorCode.HostTrust, _ => OperationErrorCode.Unexpected };
 }
 
-public sealed record UfwToggleOperationResult(OperationResult Result, UfwSnapshot? Snapshot);
+public sealed record UfwToggleOperationResult(OperationResult Result, UfwSnapshot? Snapshot, bool SnapshotIsCurrent = false, int? SessionSshPort = null);

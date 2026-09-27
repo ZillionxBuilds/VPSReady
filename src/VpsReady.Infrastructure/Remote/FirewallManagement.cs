@@ -129,7 +129,16 @@ public sealed class FirewallManagement : IFirewallManagement
         var result = sessionDiagnostics is null
             ? await toggle.EnableAsync(transport, confirmed, cancellationToken).ConfigureAwait(false)
             : await toggle.EnableAsync(transport, confirmed, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
-        return await WithCurrentEvidenceAsync(transport, new FirewallOperationResult(result.Result, result.Snapshot), sessionDiagnostics, cancellationToken).ConfigureAwait(false);
+        var projected = new FirewallOperationResult(result.Result, result.Snapshot);
+        if (result.Result.Cancelled && result.SnapshotIsCurrent && result.Snapshot is not null)
+        {
+            // The toggle workflow already performed a complete post-cancel
+            // read-only refresh. Do not repeat it with the cancelled caller
+            // token or discard the current SSH port it captured in preflight.
+            return projected with { SnapshotIsCurrent = true, SessionSshPort = result.SessionSshPort };
+        }
+
+        return await WithCurrentEvidenceAsync(transport, projected, sessionDiagnostics, cancellationToken).ConfigureAwait(false);
     }
 
     public Task<FirewallOperationResult> DisableAsync(

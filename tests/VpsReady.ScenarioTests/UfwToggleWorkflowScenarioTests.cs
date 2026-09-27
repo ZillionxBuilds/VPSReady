@@ -53,6 +53,43 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task LateEnableCancellationVerifiesStateAndContinuityWithoutAnotherFirewallMutation()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.enable-cancel-after-effect");
+        state.Ufw.Rules.Clear();
+        state.Ssh.IsConnected = true;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        using var cancellation = new CancellationTokenSource();
+        var transport = new LateEnableCancellationScenarioTransport(host)
+        {
+            AfterEnableEffect = cancellation.Cancel,
+        };
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var outcome = await workflow.EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(outcome.Result.Cancelled);
+        Assert.Equal(OperationState.Applied, outcome.Result.State);
+        Assert.Equal(OperationVerification.Passed, outcome.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, outcome.Result.Recovery);
+        Assert.True(outcome.SnapshotIsCurrent);
+        Assert.Equal(ScenarioUfwStatus.Active, state.Ufw.Status);
+        Assert.True(state.Ssh.IsConnected);
+        Assert.Contains(state.Ufw.Rules, rule => rule.Port == state.Ssh.ActiveSshPort && rule.IpFamily == ScenarioIpFamily.Ipv4);
+        Assert.Contains(state.Ufw.Rules, rule => rule.Port == state.Ssh.ActiveSshPort && rule.IpFamily == ScenarioIpFamily.Ipv6);
+
+        var enableIndex = transport.CommandIds.IndexOf(RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.True(enableIndex >= 0);
+        Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest],
+            transport.CommandIds.Skip(enableIndex + 1));
+        Assert.DoesNotContain(transport.CommandIds.Skip(enableIndex + 1), commandId => commandId is
+            RemoteCommandCatalog.UbuntuUfwEnable or RemoteCommandCatalog.UbuntuUfwDisable or RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired && item.Phase == DiagnosticPhase.Recovery);
+        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled && item.Phase == DiagnosticPhase.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task MalformedSessionPortEvidenceBlocksFirewallEnableBeforeMutation()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.session-port-nul");

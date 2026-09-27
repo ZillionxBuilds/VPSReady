@@ -75,15 +75,19 @@ public sealed class OperationResultTests
     public void CancellationPreservesACompletedRecoveryResult()
     {
         var result = OperationResult.Cancellation(
-            "local.key.generate",
+            "firewall.enable",
             OperationState.Applied,
             OperationVerification.Passed,
-            OperationRecovery.Succeeded);
+            OperationRecovery.Succeeded,
+            "The firewall and SSH continuity were verified after cancellation.",
+            "Refresh the firewall page before another change.");
 
         Assert.Equal(OperationCompletion.Cancelled, result.Completion);
         Assert.Equal(OperationState.Applied, result.State);
         Assert.Equal(OperationVerification.Passed, result.Verification);
         Assert.Equal(OperationRecovery.Succeeded, result.Recovery);
+        Assert.Equal("The firewall and SSH continuity were verified after cancellation.", result.UserMessage);
+        Assert.Equal("Refresh the firewall page before another change.", result.NextAction);
         Assert.False(result.Succeeded);
     }
 }

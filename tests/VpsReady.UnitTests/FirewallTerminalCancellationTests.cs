@@ -60,12 +60,14 @@ public sealed class FirewallTerminalCancellationTests
         var transport = new RecordingTransport(
             Result("22"), Result("Status: inactive"), Result(StoredUfwFixture.Create(allow4: false, allow6: false)),
             Result(string.Empty), Result(string.Empty), Result(StoredUfwFixture.Create()), Result(string.Empty),
-            Result(ActiveWithSshAllows), Result(string.Empty));
+            Result(ActiveWithSshAllows), Result(string.Empty), Result(ActiveWithSshAllows), Result(string.Empty));
         var workflow = new UfwToggleWorkflow(Wrap(sink));
 
         var result = await workflow.EnableAsync(transport, confirmed: true, cancellation.Token);
 
-        AssertCancelledOnly(result.Result, sink.Events, OperationState.PartiallyApplied);
+        AssertCancelledOnly(result.Result, sink.Events, OperationState.Applied);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
         Assert.Equal(RemoteCommandCatalog.SshConnectionTest, transport.Commands[^1].Id.Value);
     }
 

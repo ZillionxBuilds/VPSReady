@@ -323,8 +323,10 @@ public sealed class FirewallViewModel : ObservableObject, IDisposable
             await operationDiagnostics.FinalizeAsync(result).ConfigureAwait(false);
 
             if (!MayPublish(expectedSession, currentGeneration)) { return; }
+            var cancelledWithFreshListing = result.Cancelled && completed is { SnapshotIsCurrent: true };
             if (completed is { Snapshot: not null, SnapshotIsCurrent: true }
-                && ReferenceEquals(result, completed.Result) && !cancellation.IsCancellationRequested)
+                && ReferenceEquals(result, completed.Result)
+                && (!cancellation.IsCancellationRequested || cancelledWithFreshListing))
             {
                 snapshot = completed.Snapshot;
                 SelectedRule = null;

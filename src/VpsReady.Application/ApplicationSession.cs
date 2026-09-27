@@ -344,7 +344,13 @@ public sealed class ApplicationSession : IApplicationSession
 
                 if (linkedCancellation.IsCancellationRequested)
                 {
-                    return OperationResult.Cancellation(operationId, OperationState.Unknown);
+                    // Preserve a workflow's explicit cancellation only when it
+                    // completed a recovery decision. Ordinary late results
+                    // still collapse to the session's generic cancellation,
+                    // and no late success or failure can override the caller.
+                    return result.Cancelled && result.Recovery != OperationRecovery.NotRequired
+                        ? result
+                        : OperationResult.Cancellation(operationId, OperationState.Unknown);
                 }
 
                 return result;

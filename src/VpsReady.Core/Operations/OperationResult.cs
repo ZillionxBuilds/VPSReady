@@ -168,7 +168,9 @@ public sealed record OperationResult
         string operationId,
         OperationState state = OperationState.Unknown,
         OperationVerification verification = OperationVerification.NotRun,
-        OperationRecovery recovery = OperationRecovery.NotRequired)
+        OperationRecovery recovery = OperationRecovery.NotRequired,
+        string? userMessage = null,
+        string? nextAction = null)
     {
         var message = OperationErrorCatalog.Get(OperationErrorCode.Cancelled);
         return new OperationResult(
@@ -178,8 +180,8 @@ public sealed record OperationResult
             verification,
             recovery,
             OperationErrorCode.Cancelled,
-            WithStateWarning(message.UserMessage, state),
-            message.NextAction);
+            userMessage ?? WithStateWarning(message.UserMessage, state),
+            nextAction ?? message.NextAction);
     }
 
     private static string WithStateWarning(string userMessage, OperationState state)

@@ -128,7 +128,7 @@ public sealed class UfwToggleWorkflowTests
     {
         using var cancellation = new CancellationTokenSource();
         var transport = new CancellationIgnoringTransport(cancellation, RemoteCommandCatalog.UbuntuUfwStoredSshRead, 2,
-            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredSshAllows), Result(""), Result(ActiveWithSshAllows), Result(""));
+            Result("22"), Result("Status: inactive"), Result(StoredEmpty), Result(""), Result(""), Result(StoredSshAllows), Result("Status: inactive"), Result(ActiveWithSshAllows), Result(""));
         var diagnostics = new RecordingSanitizedSink();
 
         var result = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
@@ -138,6 +138,79 @@ public sealed class UfwToggleWorkflowTests
         Assert.Equal(2, transport.Commands.Count(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure));
         Assert.DoesNotContain(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
         Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
+    public async Task CancellationAfterEnableDispatchVerifiesCurrentStateAndSshContinuityWithoutFurtherMutation()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new LateEnableCancellationTransport(cancellation);
+        var diagnostics = new RecordingSanitizedSink();
+
+        var outcome = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(outcome.Result.Cancelled);
+        Assert.Equal(OperationState.Applied, outcome.Result.State);
+        Assert.Equal(OperationVerification.Passed, outcome.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, outcome.Result.Recovery);
+        Assert.True(outcome.SnapshotIsCurrent);
+        Assert.Equal(UfwFirewallState.Active, outcome.Snapshot?.State);
+        Assert.Equal(22, outcome.SessionSshPort);
+        Assert.Equal("Firewall enable was cancelled, but the active state, SSH allow rules and current-session continuity were verified.", outcome.Result.UserMessage);
+        Assert.Equal(DiagnosticEventCatalog.OperationCancelled, Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled).EventId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+
+        var enableIndex = transport.Commands.FindIndex(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.True(enableIndex >= 0);
+        Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest],
+            transport.Commands.Skip(enableIndex + 1).Select(command => command.Id.Value));
+        Assert.DoesNotContain(transport.Commands.Skip(enableIndex + 1), command => command.Id.Value is
+            RemoteCommandCatalog.UbuntuUfwEnable or RemoteCommandCatalog.UbuntuUfwDisable or RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure);
+    }
+
+    [Fact]
+    public async Task CancellationAfterEnableWithUnreadableStateReportsUnknownAndSafeNextStep()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new LateEnableCancellationTransport(cancellation, lateStateExitCode: 1);
+        var diagnostics = new RecordingSanitizedSink();
+
+        var outcome = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(outcome.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, outcome.Result.State);
+        Assert.Equal(OperationVerification.Unknown, outcome.Result.Verification);
+        Assert.Equal(OperationRecovery.Failed, outcome.Result.Recovery);
+        Assert.False(outcome.SnapshotIsCurrent);
+        Assert.Null(outcome.Snapshot);
+        Assert.Contains("Do not retry", outcome.Result.NextAction, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+
+        var enableIndex = transport.Commands.FindIndex(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Skip(enableIndex + 1).Select(command => command.Id.Value));
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task CancellationAfterEnableFailsClosedWhenSshRulesOrContinuityAreNotVerified(bool missingIpv6, bool failContinuity)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new LateEnableCancellationTransport(
+            cancellation,
+            lateStateOutput: missingIpv6 ? ActiveMissingV6 : null,
+            continuityExitCode: failContinuity ? 255 : 0);
+        var diagnostics = new RecordingSanitizedSink();
+
+        var outcome = await Workflow(diagnostics).EnableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(outcome.Result.Cancelled);
+        Assert.Equal(OperationState.PartiallyApplied, outcome.Result.State);
+        Assert.Equal(OperationVerification.Failed, outcome.Result.Verification);
+        Assert.Equal(OperationRecovery.Failed, outcome.Result.Recovery);
+        Assert.True(outcome.SnapshotIsCurrent);
+        Assert.Equal(UfwFirewallState.Active, outcome.Snapshot?.State);
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
@@ -555,6 +628,75 @@ public sealed class UfwToggleWorkflowTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class LateEnableCancellationTransport(
+        CancellationTokenSource cancellation,
+        string? lateStateOutput = null,
+        int lateStateExitCode = 0,
+        int continuityExitCode = 0) : IRemoteTransport
+    {
+        private int storedReads;
+        private int listReads;
+        private bool active;
+        private bool allowedIpv4;
+        private bool allowedIpv6;
+
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var (output, exitCode) = command.Id.Value switch
+            {
+                RemoteCommandCatalog.SshSessionPortRead => ("22", 0),
+                RemoteCommandCatalog.UbuntuUfwRuleListRead => listReads++ == 0
+                    ? ("Status: inactive", 0)
+                    : (lateStateOutput ?? (active ? ActiveWithSshAllows : "Status: inactive"), lateStateExitCode),
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead => storedReads++ == 0 ? (StoredEmpty, 0) : (StoredSshAllows, 0),
+                RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure => EnsureSshAllow(command),
+                RemoteCommandCatalog.UbuntuUfwEnable => EnableAfterEffect(cancellationToken),
+                RemoteCommandCatalog.SshConnectionTest => (string.Empty, continuityExitCode),
+                _ => throw new InvalidOperationException($"Unexpected test command '{command.Id.Value}'."),
+            };
+
+            return await VpsReady.Tests.ProductionOutput.CaptureAsync(command, Result(output, exitCode), cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private (string Output, int ExitCode) EnsureSshAllow(RemoteCommand command)
+        {
+            if (command.SafeArgumentSummary == "family=ipv4 port=22")
+            {
+                allowedIpv4 = true;
+            }
+            else if (command.SafeArgumentSummary == "family=ipv6 port=22")
+            {
+                allowedIpv6 = true;
+            }
+            else
+            {
+                throw new InvalidOperationException("Unexpected SSH-allow request in the cancellation regression.");
+            }
+
+            return (string.Empty, 0);
+        }
+
+        private (string Output, int ExitCode) EnableAfterEffect(CancellationToken cancellationToken)
+        {
+            if (!allowedIpv4 || !allowedIpv6)
+            {
+                throw new InvalidOperationException("UFW enable was dispatched before both SSH families were allowed.");
+            }
+
+            active = true;
+            cancellation.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return (string.Empty, 0);
+        }
     }
 
     private sealed class RecordingSanitizedSink : ISanitizedDiagnosticSink

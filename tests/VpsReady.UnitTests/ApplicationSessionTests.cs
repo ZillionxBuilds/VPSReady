@@ -107,6 +107,38 @@ public sealed class ApplicationSessionTests
         Assert.Equal(OperationErrorCode.Timeout, timedOut.ErrorCode);
     }
 
+    [Fact]
+    public async Task CallerCancellationPreservesAnExplicitCancelledOutcomeWithVerifiedRecovery()
+    {
+        await using var session = new ApplicationSession();
+        await session.StartAsync(new RemoteEndpoint("server.example", 22, "ubuntu"), new RecordingTransport());
+        using var cancellation = new CancellationTokenSource();
+        var verifiedCancellation = OperationResult.Cancellation(
+            "firewall.enable",
+            OperationState.Applied,
+            OperationVerification.Passed,
+            OperationRecovery.Succeeded,
+            "The firewall and SSH continuity were verified after cancellation.",
+            "Refresh the firewall page before another change.");
+
+        var result = await session.RunOperationAsync(
+            "firewall.session-operation",
+            TimeSpan.FromSeconds(5),
+            (_, _) =>
+            {
+                cancellation.Cancel();
+                return Task.FromResult(verifiedCancellation);
+            },
+            cancellation.Token);
+
+        Assert.Same(verifiedCancellation, result);
+        Assert.True(result.Cancelled);
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Applied, result.State);
+        Assert.Equal(OperationVerification.Passed, result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Recovery);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
