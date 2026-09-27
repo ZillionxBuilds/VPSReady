@@ -408,6 +408,135 @@ public sealed class OpenSshConfigEditorTests
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
     }
 
+    [Fact]
+    public async Task AtomicReplaceRaceRestoresExternalEditAndDoesNotReportSuccess()
+    {
+        await using var workspace = new ConfigWorkspace();
+        await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+
+        var externalEdit = Encoding.UTF8.GetBytes("# newer external edit at replace boundary\nHost external-target\n    User retained-user\n");
+        var injected = 0;
+        var store = new AtomicFileStore(path =>
+        {
+            if (Interlocked.Exchange(ref injected, 1) != 0)
+            {
+                return;
+            }
+
+            var externalPath = path + ".external-edit";
+            File.WriteAllBytes(externalPath, externalEdit);
+            File.Move(externalPath, path, overwrite: true);
+        });
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, store, diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.ConcurrentModification, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
+    public async Task AtomicReplaceRaceThatCannotBeSafelyRecoveredReportsUnknownAndRetainsBothVersions()
+    {
+        await using var workspace = new ConfigWorkspace();
+        await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+
+        var firstExternalEdit = Encoding.UTF8.GetBytes("# concurrent version displaced by initial replace\nHost first-target\n");
+        var laterExternalEdit = Encoding.UTF8.GetBytes("# later concurrent version remains at target\nHost later-target\n");
+        var diagnostics = new CollectingDiagnosticSink();
+        var store = new AtomicFileStore(
+            path => ReplaceWithExternalEdit(path, ".first-edit", firstExternalEdit),
+            path => ReplaceWithExternalEdit(path, ".later-edit", laterExternalEdit));
+        var editor = new OpenSshConfigEditor(workspace, store, diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        var targetAfterFailure = await File.ReadAllBytesAsync(workspace.ConfigPath);
+        Assert.True(
+            laterExternalEdit.SequenceEqual(targetAfterFailure),
+            $"Error={result.ErrorCode}; operationError={result.Operation.ErrorCode}; recovery={result.Operation.Recovery}");
+        Assert.Equal(firstExternalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath + ".bak"));
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.LocalIo, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.Recovery, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Operation.State);
+        Assert.Equal(OperationRecovery.Failed, result.Operation.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("concurrent version", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AtomicReplaceRaceWithoutRequestedBackupCleansVerifiedRecoveryCapture()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var original = Encoding.UTF8.GetBytes("# original snapshot\nHost *\n");
+        await File.WriteAllBytesAsync(workspace.ConfigPath, original);
+        var externalEdit = Encoding.UTF8.GetBytes("# newer external edit\nHost external-target\n");
+        var injected = 0;
+        var store = new AtomicFileStore(path =>
+        {
+            if (Interlocked.Exchange(ref injected, 1) == 0)
+            {
+                ReplaceWithExternalEdit(path, ".external-edit", externalEdit);
+            }
+        });
+
+        var error = await Assert.ThrowsAsync<LocalFilePreconditionFailedException>(() => store.WriteAtomicallyAsync(
+            workspace.ConfigPath,
+            "# replacement\n"u8.ToArray(),
+            new AtomicWriteOptions(
+                LocalFileCollisionPolicy.ReplaceWithBackup,
+                CreateBackup: false,
+                ExpectedTargetSnapshot: new LocalFileSnapshot(true, original)),
+            CancellationToken.None));
+
+        Assert.True(error.RecoverySucceeded);
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(workspace.ConfigPath)!, "*.vpsready-recovery-*"));
+    }
+
+    [Fact]
+    public async Task ExpectedSnapshotWriteWithoutBackupSucceedsAndCleansVerifiedCapture()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var original = Encoding.UTF8.GetBytes("# original snapshot\nHost *\n");
+        var replacement = Encoding.UTF8.GetBytes("# replacement\nHost work-vps\n");
+        await File.WriteAllBytesAsync(workspace.ConfigPath, original);
+
+        var result = await new AtomicFileStore().WriteAtomicallyAsync(
+            workspace.ConfigPath,
+            replacement,
+            new AtomicWriteOptions(
+                LocalFileCollisionPolicy.ReplaceWithBackup,
+                CreateBackup: false,
+                ExpectedTargetSnapshot: new LocalFileSnapshot(true, original)),
+            CancellationToken.None);
+
+        Assert.Equal(replacement, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(workspace.ConfigPath)!, "*.vpsready-recovery-*"));
+        Assert.Null(result.BackupPath);
+    }
+
+    private static void ReplaceWithExternalEdit(string path, string suffix, byte[] contents)
+    {
+        var externalPath = path + suffix;
+        File.WriteAllBytes(externalPath, contents);
+        File.Move(externalPath, path, overwrite: true);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

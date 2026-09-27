@@ -104,6 +104,23 @@ public sealed class SecureLocalStorage(IPlatformPaths platformPaths, ILocalFileS
 public sealed class AtomicFileStore : IRecoverableLocalFileStore
 {
     private static readonly SemaphoreSlim CommitGate = new(1, 1);
+    private readonly Action<string>? beforeReplaceForTesting;
+    private readonly Action<string>? afterReplaceForTesting;
+
+    public AtomicFileStore()
+    {
+    }
+
+    internal AtomicFileStore(Action<string> beforeReplaceForTesting)
+        : this(beforeReplaceForTesting, null)
+    {
+    }
+
+    internal AtomicFileStore(Action<string>? beforeReplaceForTesting, Action<string>? afterReplaceForTesting)
+    {
+        this.beforeReplaceForTesting = beforeReplaceForTesting;
+        this.afterReplaceForTesting = afterReplaceForTesting;
+    }
 
     public async Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken)
     {
@@ -185,8 +202,24 @@ public sealed class AtomicFileStore : IRecoverableLocalFileStore
                     }
 
                     backupPath = options.CreateBackup ? path + ".bak" : null;
-                    File.Replace(temporaryPath, path, backupPath, ignoreMetadataErrors: true);
+                    var displacedPath = backupPath ?? (options.ExpectedTargetSnapshot is { Exists: true } ? CreateRecoveryFilePath(path) : null);
+                    // File.Replace has no expected-content argument. Keep a copy of
+                    // the displaced file for a post-replace comparison and release the
+                    // old handle so that copy can be read on platforms with file-share locks.
+                    targetGuard?.Dispose();
+                    targetGuard = null;
+                    beforeReplaceForTesting?.Invoke(path);
+                    File.Replace(temporaryPath, path, displacedPath, ignoreMetadataErrors: true);
                     replacedExisting = true;
+                    if (options.ExpectedTargetSnapshot is { Exists: true })
+                    {
+                        afterReplaceForTesting?.Invoke(path);
+                        VerifyDisplacedTargetAndRestoreIfChanged(path, displacedPath!, contents, options.ExpectedTargetSnapshot.Contents);
+                        if (backupPath is null)
+                        {
+                            File.Delete(displacedPath!);
+                        }
+                    }
                 }
                 else if (File.Exists(path))
                 {
@@ -196,6 +229,7 @@ public sealed class AtomicFileStore : IRecoverableLocalFileStore
                     }
 
                     backupPath = options.CreateBackup ? path + ".bak" : null;
+                    beforeReplaceForTesting?.Invoke(path);
                     File.Replace(temporaryPath, path, backupPath, ignoreMetadataErrors: true);
                     replacedExisting = true;
                 }
@@ -318,6 +352,53 @@ public sealed class AtomicFileStore : IRecoverableLocalFileStore
             throw new LocalFilePreconditionFailedException();
         }
     }
+
+    private static void VerifyDisplacedTargetAndRestoreIfChanged(
+        string path,
+        string displacedPath,
+        ReadOnlyMemory<byte> writtenContents,
+        ReadOnlyMemory<byte> expectedContents)
+    {
+        try
+        {
+            var displacedContents = File.ReadAllBytes(displacedPath);
+            if (expectedContents.Span.SequenceEqual(displacedContents))
+            {
+                return;
+            }
+
+            var currentContents = File.ReadAllBytes(path);
+            if (!writtenContents.Span.SequenceEqual(currentContents))
+            {
+                throw new LocalFileRecoveryFailedException();
+            }
+
+            var recoveryPath = CreateRecoveryFilePath(path);
+            File.Replace(displacedPath, path, recoveryPath, ignoreMetadataErrors: true);
+
+            var restoredContents = File.ReadAllBytes(path);
+            var displacedByRecovery = File.ReadAllBytes(recoveryPath);
+            if (!displacedContents.AsSpan().SequenceEqual(restoredContents)
+                || !writtenContents.Span.SequenceEqual(displacedByRecovery))
+            {
+                throw new LocalFileRecoveryFailedException();
+            }
+
+            File.Delete(recoveryPath);
+        }
+        catch (LocalFileRecoveryFailedException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            throw new LocalFileRecoveryFailedException();
+        }
+
+        throw new LocalFilePreconditionFailedException(recoverySucceeded: true);
+    }
+
+    private static string CreateRecoveryFilePath(string path) => $"{path}.vpsready-recovery-{Guid.NewGuid():N}";
 
     public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken)
     {
