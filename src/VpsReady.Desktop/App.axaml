@@ -62,6 +62,18 @@
     <Style Selector="Button.danger">
       <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
     </Style>
+    <Style Selector="ToolTip">
+      <Setter Property="Background" Value="#FFFFFF" />
+      <Setter Property="Foreground" Value="#17243A" />
+      <Setter Property="BorderBrush" Value="#B8C7DA" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="Padding" Value="10,6" />
+    </Style>
+    <Style Selector="ToolTip TextBlock">
+      <Setter Property="Foreground" Value="#17243A" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
     <Style Selector="Button.nav">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="Foreground" Value="#E8F0FC" />

@@ -5,15 +5,31 @@ namespace VpsReady.UnitTests;
 public sealed class NavigationContrastTests
 {
     [Fact]
-    public void NavigationKeepsAccessibleHelpWithoutDisplayingAVisualTooltip()
+    public void NavigationTooltipUsesTheHintAndKeepsItsAccessibleNameAndHelp()
     {
         XDocument window = LoadMarkup("MainWindow.axaml");
         XElement button = Assert.Single(window.Descendants(), element =>
             element.Name.LocalName == "Button" && (string?)element.Attribute("Classes") == "nav");
 
-        Assert.Null(button.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "ToolTip.Tip"));
+        Assert.Equal("{Binding Hint}", button.Attributes().Single(attribute =>
+            attribute.Name.LocalName == "ToolTip.Tip").Value);
+        Assert.Equal("{Binding Label}", button.Attributes().Single(attribute =>
+            attribute.Name.LocalName == "AutomationProperties.Name").Value);
         Assert.Equal("{Binding Hint}", button.Attributes().Single(attribute =>
             attribute.Name.LocalName == "AutomationProperties.HelpText").Value);
+    }
+
+    [Fact]
+    public void NavigationTooltipHasReadableTextAgainstItsPopupSurface()
+    {
+        XDocument styles = LoadMarkup("App.axaml");
+        string foreground = SetterValue(styles, "ToolTip", "Foreground");
+        string background = SetterValue(styles, "ToolTip", "Background");
+        string contentForeground = SetterValue(styles, "ToolTip TextBlock", "Foreground");
+
+        Assert.Equal(foreground, contentForeground);
+        Assert.True(ContrastRatio(foreground, background) >= 4.5,
+            $"Tooltip foreground {foreground} is not readable on background {background}.");
     }
 
     [Theory]
