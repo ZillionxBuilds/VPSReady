@@ -22,6 +22,7 @@ public enum OperationErrorCode
     LocalIo,
     Apt,
     Reconnect,
+    ConcurrentModification,
     Unexpected,
 }
 
@@ -212,6 +213,7 @@ public static class OperationErrorCodeExtensions
         OperationErrorCode.LocalIo => "LOCAL_IO_FAILED",
         OperationErrorCode.Apt => "APT_OPERATION_FAILED",
         OperationErrorCode.Reconnect => "RECONNECT_FAILED",
+        OperationErrorCode.ConcurrentModification => "LOCAL_FILE_CHANGED",
         OperationErrorCode.Unexpected => "UNEXPECTED_FAILURE",
         _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unknown operation error code."),
     };
@@ -239,6 +241,7 @@ internal static class OperationErrorCatalog
         OperationErrorCode.LocalIo => new("A required local file operation could not be completed.", "Check local file access and available storage, then try again."),
         OperationErrorCode.Apt => new("The package operation did not complete.", "Refresh the server state and resolve any package-manager issue before trying again."),
         OperationErrorCode.Reconnect => new("The server did not reconnect in the expected time.", "Wait briefly, then refresh the connection state before trying again."),
+        OperationErrorCode.ConcurrentModification => new("The local SSH configuration changed while the alias was being prepared; no replacement was accepted.", "Review the current SSH configuration, preserve any edits, and retry."),
         OperationErrorCode.Unexpected => new("The operation could not be completed safely.", "Refresh the server state and include the operation ID in a safe issue report if it persists."),
         _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unknown operation error code."),
     };

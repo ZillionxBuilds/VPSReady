@@ -61,6 +61,39 @@ public sealed class OpenSshConfigEditorScenarioTests
         Assert.DoesNotContain(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ConcurrentLocalConfigEditBeforeCommitIsRejectedWithoutMutation(bool configExistsAtSnapshot)
+    {
+        using var services = ScenarioComposition.Create("ssh.config.edit.concurrent-change");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var paths = services.GetRequiredService<IPlatformPaths>();
+        var configPath = paths.ResolvePath(LocalStorageArea.Ssh, "config");
+        if (configExistsAtSnapshot)
+        {
+            state.LocalFiles.Files[configPath] = "# original snapshot\nHost *\n    User prior\n"u8.ToArray();
+        }
+
+        var externalEdit = "# external edit retained\nHost external-target\n    User retained\n"u8.ToArray();
+        var store = new ScenarioChangeBeforeCommitStore(state, new ScenarioLocalFileStore(state), externalEdit);
+        var editor = new OpenSshConfigEditor(paths, store, services.GetRequiredService<IDiagnosticSink>());
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+
+        var result = await editor.AddAliasAsync(Request(paths), DiagnosticRunContext.StartSession().StartOperation("config_alias"), CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.ConcurrentModification, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.ConcurrentModification, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(externalEdit, state.LocalFiles.Files[configPath]);
+        Assert.Equal(0, state.LocalFiles.AtomicWriteCount);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.Contains(recorder.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditFailed && item.ErrorCode == OpenSshConfigEditErrorCatalog.ConcurrentModification);
+        Assert.DoesNotContain(Encoding.UTF8.GetString(externalEdit), recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain(configPath, recorder.ToJsonLines(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task PostCommitCancellationRestoresTheExactMutableScenarioConfig()
     {
@@ -82,6 +115,38 @@ public sealed class OpenSshConfigEditorScenarioTests
         Assert.Equal(original, state.LocalFiles.Files[configPath]);
         Assert.Equal(original, state.LocalFiles.Files[configPath + ".bak"]);
         Assert.DoesNotContain(services.GetRequiredService<ScenarioDiagnosticRecorder>().Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task CancellationRecoveryNeverOverwritesAnExternalEdit(bool configExistsAtSnapshot)
+    {
+        using var services = ScenarioComposition.Create("ssh.config.edit.concurrent-recovery");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var paths = services.GetRequiredService<IPlatformPaths>();
+        var configPath = paths.ResolvePath(LocalStorageArea.Ssh, "config");
+        if (configExistsAtSnapshot)
+        {
+            state.LocalFiles.Files[configPath] = "# original snapshot\nHost *\n    User prior\n"u8.ToArray();
+        }
+
+        var externalEdit = "# external edit during recovery\nHost retained-target\n    User retained\n"u8.ToArray();
+        using var cancellation = new CancellationTokenSource();
+        var store = new ScenarioExternalEditAfterCommitStore(state, new ScenarioLocalFileStore(state), externalEdit, cancellation);
+        var editor = new OpenSshConfigEditor(paths, store, services.GetRequiredService<IDiagnosticSink>());
+
+        var result = await editor.AddAliasAsync(Request(paths), DiagnosticRunContext.StartSession().StartOperation("config_alias"), cancellation.Token);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Unknown, result.Operation.State);
+        Assert.Equal(OperationErrorCode.Recovery, result.Operation.ErrorCode);
+        Assert.Equal(OperationRecovery.Failed, result.Operation.Recovery);
+        Assert.Equal(externalEdit, state.LocalFiles.Files[configPath]);
+        var serialized = services.GetRequiredService<ScenarioDiagnosticRecorder>().ToJsonLines();
+        Assert.DoesNotContain(DiagnosticEventCatalog.OpenSshConfigEditSucceeded, serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(Encoding.UTF8.GetString(externalEdit), serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain(configPath, serialized, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -129,6 +194,48 @@ public sealed class OpenSshConfigEditorScenarioTests
         }
         public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
         public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class ScenarioChangeBeforeCommitStore(ScenarioHostState state, ScenarioLocalFileStore inner, byte[] externalEdit) : IRecoverableLocalFileStore
+    {
+        private bool changed;
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) => inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+        public Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            if (!changed)
+            {
+                changed = true;
+                state.LocalFiles.Files[path] = externalEdit.ToArray();
+            }
+
+            return inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+        }
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class ScenarioExternalEditAfterCommitStore(ScenarioHostState state, ScenarioLocalFileStore inner, byte[] externalEdit, CancellationTokenSource cancellation) : IRecoverableLocalFileStore
+    {
+        private int writes;
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) => inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            var result = await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+            if (Interlocked.Increment(ref writes) == 1)
+            {
+                state.LocalFiles.Files[path] = externalEdit.ToArray();
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 
@@ -160,6 +267,7 @@ public sealed class OpenSshConfigEditorScenarioTests
             return actual;
         }
         public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 }
