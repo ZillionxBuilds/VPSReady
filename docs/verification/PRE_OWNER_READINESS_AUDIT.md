@@ -2390,3 +2390,19 @@ UFW, provider-network or Owner E5 behavior. The exact source tree and prior
 E0/E1/E2/E4 evidence are unchanged. Hosted checks, independent review,
 approved release integration and Owner E5 remain pending. **REAL VPS: NOT
 TESTED.**
+
+### F06 session-terminal reconciliation on the current composite — 2026-09-27 UTC
+
+The release-baseline finding above is **not** still RED on the current #101
+composite. PR #50 head `93622e089de5fda11850a2dac5d1b50dd95fde4f` is an
+ancestor of exact composite `b83fcf6be9164af0da2e530c45c7b1b0f2a957ce`.
+`SessionOperationDiagnostics` withholds terminal workflow events until the
+enclosing session selects its authoritative result. On that exact composite,
+the late deployment/session-cancellation regression passed 1/1, the SSH
+session-completion regression suite passed 18/18, and public-key deployment
+scenarios passed 10/10. This verifies local E1/E2 candidate behavior; it is
+not independent review or hosted CI. Issue #49 and draft PR #50 remain open,
+and the correction is **not** in `release/0.1.0` until separately reviewed and
+integrated. Remote key state can already have changed when cancellation wins;
+the result deliberately does not claim rollback. Owner Stage 4 and E5 remain
+NOT RUN. **REAL VPS: NOT TESTED.**
