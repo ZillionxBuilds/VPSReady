@@ -52,6 +52,38 @@ public sealed class ConnectionSessionLifecycleTests
     }
 
     [Fact]
+    public async Task CandidateDisposeFailureDoesNotEscapeOrPreventNextConnection()
+    {
+        var session = new ApplicationSession();
+        var failedCandidate = new RecordingPasswordTransport
+        {
+            VerificationExitCode = 1,
+            DisposeFailure = new InvalidOperationException("synthetic disposal failure"),
+        };
+        var nextCandidate = new RecordingPasswordTransport();
+        await using var lifecycle = new ConnectionSessionLifecycle(
+            session,
+            new QueueTransportFactory(failedCandidate, nextCandidate),
+            new RecordingDiagnosticsSink());
+        using var firstInput = CreateInput("dispose-failure.example");
+
+        var failed = await lifecycle.TestConnectionAsync(firstInput);
+
+        Assert.False(failed.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Verification, failed.Result.ErrorCode);
+        Assert.True(firstInput.Password.IsCleared);
+        Assert.False(session.Snapshot.IsConnected);
+        Assert.Equal(1, failedCandidate.DisposeCount);
+
+        using var secondInput = CreateInput("next-connection.example");
+        var next = await lifecycle.TestConnectionAsync(secondInput);
+
+        Assert.True(next.Result.Succeeded);
+        Assert.True(session.Snapshot.IsConnected);
+        Assert.Equal(1, nextCandidate.ConnectCount);
+    }
+
+    [Fact]
     public async Task DuplicateClickIsRejectedAndDisconnectCancelsTheInFlightCandidate()
     {
         var session = new ApplicationSession();
@@ -183,6 +215,8 @@ public sealed class ConnectionSessionLifecycleTests
 
         public bool ReturnHostTrustOnCancellation { get; init; }
 
+        public Exception? DisposeFailure { get; init; }
+
         public KnownHostTrustAssessment? LastHostTrustAssessment { get; private set; }
 
         public async Task ConnectAsync(RemoteEndpoint endpoint, IPasswordCredential password, TimeSpan timeout, CancellationToken cancellationToken)
@@ -218,7 +252,9 @@ public sealed class ConnectionSessionLifecycleTests
         public ValueTask DisposeAsync()
         {
             DisposeCount++;
-            return ValueTask.CompletedTask;
+            return DisposeFailure is { } failure
+                ? new ValueTask(Task.FromException(failure))
+                : ValueTask.CompletedTask;
         }
     }
 

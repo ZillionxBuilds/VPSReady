@@ -253,17 +253,32 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         finally
         {
             ClearActiveCancellation(linkedCancellation);
-            if (candidate is not null)
+            try
             {
-                await candidate.DisposeAsync().ConfigureAwait(false);
+                if (candidate is not null)
+                {
+                    await candidate.DisposeAsync().ConfigureAwait(false);
+                }
             }
-
-            if (!sensitiveReferenceTransferred)
+            catch
             {
-                input.Password.Clear();
+                // A discarded transport's cleanup failure must not replace the
+                // safe operation result or bypass credential and gate cleanup.
             }
-
-            testGate.Release();
+            finally
+            {
+                try
+                {
+                    if (!sensitiveReferenceTransferred)
+                    {
+                        input.Password.Clear();
+                    }
+                }
+                finally
+                {
+                    testGate.Release();
+                }
+            }
         }
     }
 
