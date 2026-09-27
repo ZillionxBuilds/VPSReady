@@ -2406,3 +2406,18 @@ and the correction is **not** in `release/0.1.0` until separately reviewed and
 integrated. Remote key state can already have changed when cancellation wins;
 the result deliberately does not claim rollback. Owner Stage 4 and E5 remain
 NOT RUN. **REAL VPS: NOT TESTED.**
+
+### F06 separate key-authentication cleanup recheck — 2026-09-27 UTC
+
+The current #101 composite also contains draft PR #23 head
+`ed06ffc9cc7b753ded0987243da2334e6c4b85f1` (verified ancestor of `b83fcf6`).
+On that exact candidate, `KeyAuthenticationVerificationWorkflowTests` passed
+12/12 and `KeyAuthenticationVerificationWorkflowScenarioTests` passed 7/7.
+Coverage includes refusing success when the disposable candidate cannot be
+closed, preserving the verified-command evidence on a cleanup failure,
+preventing a cleanup exception from replacing an earlier authentication
+failure, and cancellation during cleanup. The workflow uses a separate,
+trusted key-authenticated connection and does not alter the password session.
+This is developer E1/E2 only; #23 remains open for review and the release base
+is unchanged. Owner separate-login proof, Stage 4 and E5 remain NOT RUN.
+**REAL VPS: NOT TESTED.**
