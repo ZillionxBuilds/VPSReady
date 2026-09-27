@@ -273,6 +273,58 @@ public sealed class UfwToggleWorkflowTests
         Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.UbuntuUfwDisable, RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Select(command => command.Id.Value));
     }
 
+    [Fact]
+    public async Task DisableThatDropsAfterApplyingReconnectsAndRunsSeparatelyCorrelatedVerifiedEnable()
+    {
+        var diagnostics = new RecordingSanitizedSink();
+        var run = DiagnosticRunContext.StartSession();
+        var disableCorrelation = run.StartOperation("disable_firewall");
+        var disableDiagnostics = SessionOperationDiagnostics.ForFirewall(disableCorrelation, fallbackSink: null, "disable");
+        var transport = new PostEffectDropTransport();
+
+        var result = await Workflow(diagnostics).DisableAsync(transport, confirmed: true, disableDiagnostics);
+        await disableDiagnostics.FinalizeAsync(result.Result);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("NETWORK_UNAVAILABLE", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.True(transport.FirewallActive);
+        Assert.Equal(1, transport.ReconnectAttempts);
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure
+            && command.SafeArgumentSummary == "family=ipv4 port=22");
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure
+            && command.SafeArgumentSummary == "family=ipv6 port=22");
+        Assert.Equal(
+            [
+                RemoteCommandCatalog.UbuntuUfwRuleListRead,
+                RemoteCommandCatalog.UbuntuUfwDisable,
+                RemoteCommandCatalog.SshSessionPortRead,
+                RemoteCommandCatalog.UbuntuUfwRuleListRead,
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead,
+                RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure,
+                RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure,
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead,
+                RemoteCommandCatalog.UbuntuUfwEnable,
+                RemoteCommandCatalog.UbuntuUfwRuleListRead,
+                RemoteCommandCatalog.SshConnectionTest,
+            ],
+            transport.Commands.Select(command => command.Id.Value));
+
+        var disableStarted = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationStarted && item.Action == "DisableFirewall");
+        var recoveryStarted = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationStarted && item.Action == "EnableFirewall");
+        Assert.NotEqual(disableStarted.Correlation.OperationId, recoveryStarted.Correlation.OperationId);
+        Assert.Equal(disableStarted.Correlation.SessionId, recoveryStarted.Correlation.SessionId);
+        Assert.Equal(disableStarted.Correlation.RunId, recoveryStarted.Correlation.RunId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationFailed
+            && item.Correlation.OperationId == disableStarted.Correlation.OperationId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && item.Correlation.OperationId == disableStarted.Correlation.OperationId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && item.Correlation.OperationId == recoveryStarted.Correlation.OperationId);
+    }
+
     [Theory]
     [InlineData(22, true)]
     [InlineData(2222, true)]
@@ -338,6 +390,98 @@ public sealed class UfwToggleWorkflowTests
             return VpsReady.Tests.ProductionOutput.CaptureAsync(command, results.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : results.Dequeue(), cancellationToken);
         }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class PostEffectDropTransport : IRebootReconnectTransport
+    {
+        private bool connected = true;
+        private bool allowedIpv4 = true;
+        private bool allowedIpv6 = true;
+        private bool droppedAfterDisable;
+
+        public List<RemoteCommand> Commands { get; } = [];
+        public bool FirewallActive { get; private set; } = true;
+        public int ReconnectAttempts { get; private set; }
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Commands.Add(command);
+            if (!connected)
+            {
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwDisable && !droppedAfterDisable)
+            {
+                FirewallActive = false;
+                droppedAfterDisable = true;
+                connected = false;
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            var output = command.Id.Value switch
+            {
+                RemoteCommandCatalog.SshSessionPortRead => "22",
+                RemoteCommandCatalog.UbuntuUfwRuleListRead => FirewallActive ? ActiveWithSshAllows : "Status: inactive",
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead => StoredSshAllows,
+                RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure => EnsureSshAllow(command),
+                RemoteCommandCatalog.UbuntuUfwEnable => EnableFirewall(),
+                RemoteCommandCatalog.SshConnectionTest => FirewallActive && allowedIpv4 && allowedIpv6
+                    ? string.Empty
+                    : throw new RemoteTransportException(RemoteTransportFailureKind.Network),
+                _ => throw new InvalidOperationException($"Unexpected test command '{command.Id.Value}'."),
+            };
+
+            return await ProductionOutput.CaptureAsync(command, Result(output), cancellationToken);
+        }
+
+        public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeout));
+            }
+
+            ReconnectAttempts++;
+            connected = true;
+            return Task.CompletedTask;
+        }
+
+        public Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+            Task.FromResult(BootIdentityReadResult.Unavailable);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private string EnsureSshAllow(RemoteCommand command)
+        {
+            if (command.SafeArgumentSummary == "family=ipv4 port=22")
+            {
+                allowedIpv4 = true;
+            }
+            else if (command.SafeArgumentSummary == "family=ipv6 port=22")
+            {
+                allowedIpv6 = true;
+            }
+            else
+            {
+                throw new InvalidOperationException("Unexpected SSH-allow request in the recovery test.");
+            }
+
+            return string.Empty;
+        }
+
+        private string EnableFirewall()
+        {
+            if (!allowedIpv4 || !allowedIpv6)
+            {
+                throw new InvalidOperationException("Firewall recovery was attempted before SSH allows were ensured.");
+            }
+
+            FirewallActive = true;
+            return string.Empty;
+        }
     }
 
     // Deliberately ignores the caller token to model a transport that returns

@@ -8,6 +8,7 @@ namespace VpsReady.Infrastructure.Remote;
 /// <summary>C305's explicit, verified UFW enable/disable workflows.</summary>
 public sealed class UfwToggleWorkflow
 {
+    private static readonly TimeSpan DisableRecoveryReconnectTimeout = TimeSpan.FromSeconds(15);
     private readonly IDiagnosticSink diagnostics;
 
     public UfwToggleWorkflow(IDiagnosticSink diagnostics) => this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
@@ -171,19 +172,132 @@ public sealed class UfwToggleWorkflow
             var disabled = await Execute(correlation, "DisableFirewall", DiagnosticPhase.Apply, transport, disable, cancellationToken).ConfigureAwait(false);
             if (!disabled.Succeeded)
             {
-                return await Recover(correlation, "DisableFirewall", transport, list, ErrorForApply(disabled), cancellationToken).ConfigureAwait(false);
+                return await RecoverUnverifiedDisable(correlation, transport, list, ErrorForApply(disabled), cancelled: false).ConfigureAwait(false);
             }
 
             var verified = await Read(correlation, "DisableFirewall", DiagnosticPhase.Verify, transport, list, cancellationToken).ConfigureAwait(false);
             return verified.IsComplete && verified.Snapshot.State == UfwFirewallState.Inactive
                 ? await Success(correlation, "DisableFirewall", list.Id.Value, verified.Snapshot, OperationState.Applied, cancellationToken).ConfigureAwait(false)
-                : await Recover(correlation, "DisableFirewall", transport, list, verified.IsComplete ? OperationErrorCode.Verification : ErrorForRead(verified), cancellationToken).ConfigureAwait(false);
+                : await RecoverUnverifiedDisable(correlation, transport, list, verified.IsComplete ? OperationErrorCode.Verification : ErrorForRead(verified), cancelled: false).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) { return await Cancelled(correlation, "DisableFirewall", list.Id.Value, mutated).ConfigureAwait(false); }
-        catch (RemoteTransportException exception) { return await Failure(correlation, "DisableFirewall", mutated ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, list.Id.Value, ToError(exception.Kind), mutated ? OperationState.PartiallyApplied : OperationState.Unchanged, null).ConfigureAwait(false); }
-        catch (TimeoutException) { return await Failure(correlation, "DisableFirewall", mutated ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, list.Id.Value, OperationErrorCode.Timeout, mutated ? OperationState.PartiallyApplied : OperationState.Unchanged, null).ConfigureAwait(false); }
-        catch { return await Failure(correlation, "DisableFirewall", mutated ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, list.Id.Value, OperationErrorCode.Unexpected, mutated ? OperationState.PartiallyApplied : OperationState.Unchanged, null).ConfigureAwait(false); }
+        catch (OperationCanceledException)
+        {
+            return mutated
+                ? await RecoverUnverifiedDisable(correlation, transport, list, OperationErrorCode.Cancelled, cancelled: true).ConfigureAwait(false)
+                : await Cancelled(correlation, "DisableFirewall", list.Id.Value, mutated: false).ConfigureAwait(false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            return mutated
+                ? await RecoverUnverifiedDisable(correlation, transport, list, ToError(exception.Kind), cancelled: false).ConfigureAwait(false)
+                : await Failure(correlation, "DisableFirewall", DiagnosticPhase.Preflight, list.Id.Value, ToError(exception.Kind), OperationState.Unchanged, null).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return mutated
+                ? await RecoverUnverifiedDisable(correlation, transport, list, OperationErrorCode.Timeout, cancelled: false).ConfigureAwait(false)
+                : await Failure(correlation, "DisableFirewall", DiagnosticPhase.Preflight, list.Id.Value, OperationErrorCode.Timeout, OperationState.Unchanged, null).ConfigureAwait(false);
+        }
+        catch
+        {
+            return mutated
+                ? await RecoverUnverifiedDisable(correlation, transport, list, OperationErrorCode.Unexpected, cancelled: false).ConfigureAwait(false)
+                : await Failure(correlation, "DisableFirewall", DiagnosticPhase.Preflight, list.Id.Value, OperationErrorCode.Unexpected, OperationState.Unchanged, null).ConfigureAwait(false);
+        }
     }
+
+    private async Task<UfwToggleOperationResult> RecoverUnverifiedDisable(
+        WorkflowDiagnosticContext correlation,
+        IRemoteTransport transport,
+        RemoteCommand list,
+        OperationErrorCode originalError,
+        bool cancelled)
+    {
+        await Report(correlation, "DisableFirewall", DiagnosticEventCatalog.OperationRecoveryRequired, DiagnosticPhase.Recovery,
+            DiagnosticStatus.RecoveryRequired, "Disable was not verified; attempting one trusted reconnect before restoring the prior active firewall state.",
+            list.Id.Value, originalError).ConfigureAwait(false);
+
+        if (transport is not ITrustedSessionReconnectTransport reconnectTransport)
+        {
+            return await DisableRecoveryFailed(correlation, list, cancelled, OperationErrorCode.Recovery,
+                "The firewall state is unconfirmed and this session cannot perform a trusted reconnect. No recovery mutation was sent; verify and restore firewall access through another trusted session.").ConfigureAwait(false);
+        }
+
+        try
+        {
+            await reconnectTransport.ReconnectAsync(DisableRecoveryReconnectTimeout, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            var error = exception.Kind == RemoteTransportFailureKind.HostTrust ? OperationErrorCode.HostTrust : OperationErrorCode.Recovery;
+            var message = exception.Kind == RemoteTransportFailureKind.HostTrust
+                ? "The firewall state is unconfirmed because the SSH host identity did not pass trust verification. No recovery mutation was sent; review the displayed fingerprint and verify firewall state through a trusted access path."
+                : "The firewall state is unconfirmed because the trusted reconnect failed. No recovery mutation was sent; verify and restore firewall access through another trusted session.";
+            return await DisableRecoveryFailed(correlation, list, cancelled, error, message).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await DisableRecoveryFailed(correlation, list, cancelled, OperationErrorCode.Recovery,
+                "The firewall state is unconfirmed because the trusted reconnect failed. No recovery mutation was sent; verify and restore firewall access through another trusted session.").ConfigureAwait(false);
+        }
+
+        var recoveryCorrelation = correlation.Correlation with
+        {
+            OperationId = DiagnosticCorrelationFactory.NewOperationId(),
+            StepId = "firewall_recovery_enable",
+        };
+        var recoveryDiagnostics = SessionOperationDiagnostics.ForFirewall(recoveryCorrelation, fallbackSink: null, "enable");
+        UfwToggleOperationResult restoration;
+        try
+        {
+            restoration = await EnableCoreAsync(transport, confirmed: true, recoveryDiagnostics, CancellationToken.None).ConfigureAwait(false);
+            await recoveryDiagnostics.FinalizeAsync(restoration.Result).ConfigureAwait(false);
+        }
+        catch
+        {
+            try
+            {
+                await recoveryDiagnostics.FinalizeAsync(OperationResult.Failure(
+                    recoveryCorrelation.OperationId,
+                    OperationErrorCode.Recovery,
+                    OperationState.Unknown,
+                    OperationVerification.Unknown,
+                    OperationRecovery.Failed)).ConfigureAwait(false);
+            }
+            catch { }
+
+            return await DisableRecoveryFailed(correlation, list, cancelled, OperationErrorCode.Recovery,
+                "The compensating firewall enable did not complete safely. Firewall state is unconfirmed; stop further changes and verify or restore access through a trusted session or provider console.").ConfigureAwait(false);
+        }
+
+        if (restoration.Result.Succeeded
+            && restoration.Result.Verification == OperationVerification.Passed
+            && restoration.Snapshot?.State == UfwFirewallState.Active)
+        {
+            return cancelled
+                ? await Cancelled(correlation, "DisableFirewall", list.Id.Value, mutated: true, snapshot: restoration.Snapshot,
+                    state: OperationState.Unchanged, verification: OperationVerification.Failed, recovery: OperationRecovery.Succeeded,
+                    message: "Disable was cancelled before verification; the previously active firewall state was restored and verified.").ConfigureAwait(false)
+                : await Failure(correlation, "DisableFirewall", DiagnosticPhase.Recovery, list.Id.Value, originalError,
+                    OperationState.Unchanged, restoration.Snapshot, OperationVerification.Failed, OperationRecovery.Succeeded,
+                    "Firewall disable did not complete; the previously active state was restored and verified. The requested disable remains unsuccessful.").ConfigureAwait(false);
+        }
+
+        return await DisableRecoveryFailed(correlation, list, cancelled, OperationErrorCode.Recovery,
+            "The compensating enable could not verify an active firewall with the required SSH access. The resulting firewall state is unknown; stop further changes and verify or restore access through a trusted session or provider console.").ConfigureAwait(false);
+    }
+
+    private async Task<UfwToggleOperationResult> DisableRecoveryFailed(
+        WorkflowDiagnosticContext correlation,
+        RemoteCommand list,
+        bool cancelled,
+        OperationErrorCode error,
+        string message) =>
+        cancelled
+            ? await Cancelled(correlation, "DisableFirewall", list.Id.Value, mutated: true, state: OperationState.Unknown,
+                verification: OperationVerification.Unknown, recovery: OperationRecovery.Failed, message: message).ConfigureAwait(false)
+            : await Failure(correlation, "DisableFirewall", DiagnosticPhase.Recovery, list.Id.Value, error,
+                OperationState.Unknown, null, OperationVerification.Unknown, OperationRecovery.Failed, message).ConfigureAwait(false);
 
     private async Task<UfwToggleOperationResult> Recover(WorkflowDiagnosticContext c, string action, IRemoteTransport t, RemoteCommand list, OperationErrorCode original, CancellationToken token, OperationState affectedState = OperationState.PartiallyApplied)
     {
@@ -228,7 +342,26 @@ public sealed class UfwToggleWorkflow
             verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
         return new UfwToggleOperationResult(result, snapshot);
     }
-    private async Task<UfwToggleOperationResult> Cancelled(WorkflowDiagnosticContext c, string action, string command, bool mutated) { var r = OperationResult.Cancellation(c.OperationId, mutated ? OperationState.PartiallyApplied : OperationState.Unchanged); await Report(c, action, DiagnosticEventCatalog.OperationCancelled, mutated ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Firewall operation was cancelled before verified success.", command, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false); return new(r, null); }
+    private async Task<UfwToggleOperationResult> Cancelled(
+        WorkflowDiagnosticContext c,
+        string action,
+        string command,
+        bool mutated,
+        UfwSnapshot? snapshot = null,
+        OperationState? state = null,
+        OperationVerification verification = OperationVerification.NotRun,
+        OperationRecovery recovery = OperationRecovery.NotRequired,
+        string? message = null)
+    {
+        var r = OperationResult.Cancellation(c.OperationId, state ?? (mutated ? OperationState.PartiallyApplied : OperationState.Unchanged), verification, recovery);
+        var phase = recovery is OperationRecovery.Succeeded or OperationRecovery.Failed
+            ? DiagnosticPhase.Recovery
+            : mutated ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight;
+        await Report(c, action, DiagnosticEventCatalog.OperationCancelled, phase,
+            DiagnosticStatus.Cancelled, message ?? "Firewall operation was cancelled before verified success.", command,
+            OperationErrorCode.Cancelled, verification: verification, recovery: recovery).ConfigureAwait(false);
+        return new(r, snapshot);
+    }
     private async Task<UfwToggleOperationResult> Failure(WorkflowDiagnosticContext c, string action, DiagnosticPhase phase, string command, OperationErrorCode error, OperationState state, UfwSnapshot? snapshot, OperationVerification verification = OperationVerification.NotRun, OperationRecovery recovery = OperationRecovery.NotRequired, string? message = null) { var r = OperationResult.Failure(c.OperationId, error, state, verification, recovery); await Report(c, action, DiagnosticEventCatalog.OperationFailed, phase, DiagnosticStatus.Failed, message ?? "Firewall operation did not complete safely.", command, error, verification: verification, recovery: recovery).ConfigureAwait(false); return new(r, snapshot); }
     private async Task Report(WorkflowDiagnosticContext c, string action, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, string command, OperationErrorCode? error = null, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null) { try { await c.WriteAsync(diagnostics, new StructuredDiagnosticEvent(eventId, "Firewall", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, c.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, command, error?.ToStableCode(), action, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery)).ConfigureAwait(false); } catch { } }
     private static bool HasSshAllows(UfwSnapshot snapshot, int port, bool ipv6) => (ipv6 ? new[] { UfwIpFamily.Ipv4, UfwIpFamily.Ipv6 } : [UfwIpFamily.Ipv4]).All(family => snapshot.Rules.Any(rule => rule.Protocol == UfwRuleProtocol.Tcp && rule.Port == port && rule.EndPort is null && rule.Action == UfwRuleAction.Allow && rule.Family == family && rule.Source == "Anywhere"));

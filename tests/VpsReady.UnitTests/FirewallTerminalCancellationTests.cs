@@ -79,7 +79,10 @@ public sealed class FirewallTerminalCancellationTests
 
         var result = await workflow.DisableAsync(transport, confirmed: true, cancellation.Token);
 
-        AssertCancelledOnly(result.Result, sink.Events, OperationState.PartiallyApplied);
+        AssertCancelledOnly(result.Result, sink.Events, OperationState.Unknown);
+        Assert.Equal(OperationVerification.Unknown, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Failed, result.Result.Recovery);
+        Assert.Null(result.Snapshot);
         Assert.Equal(RemoteCommandCatalog.UbuntuUfwRuleListRead, transport.Commands[^1].Id.Value);
     }
 

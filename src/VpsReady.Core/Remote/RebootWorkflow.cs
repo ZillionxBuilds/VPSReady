@@ -102,14 +102,18 @@ public enum RebootReconnectOutcome { NotStarted, Reconnected, TimedOut, Cancelle
 public sealed record RebootOperationResult(OperationResult Result, string? ErrorCode, int ReconnectAttempts, RebootReconnectOutcome ReconnectOutcome);
 
 /// <summary>
-/// A session transport able to reconnect using the already established session
+/// A session transport able to reconnect using its already established
 /// identity. Implementations must repeat trusted-host assessment on every
-/// reconnect and must not retain credentials in this workflow contract.
+/// reconnect and must not expose or persist credentials through this contract.
 /// </summary>
-public interface IRebootReconnectTransport : IRemoteTransport
+public interface ITrustedSessionReconnectTransport : IRemoteTransport
 {
     Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken);
+}
 
+/// <summary>A trusted session transport that can also inspect boot identity.</summary>
+public interface IRebootReconnectTransport : ITrustedSessionReconnectTransport
+{
     Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken);
 }
 

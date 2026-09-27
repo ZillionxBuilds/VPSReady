@@ -229,6 +229,33 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task DisableAfterEffectWithChangedHostKeyDoesNotAttemptCompensatingEnable()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.disable-post-effect-changed-host-key");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var transport = new PostEffectTrustChangeTransport(host);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.DisableAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(OperationVerification.Unknown, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Failed, result.Result.Recovery);
+        Assert.Equal(OperationErrorCode.HostTrust, result.Result.ErrorCode);
+        Assert.Null(result.Snapshot);
+        Assert.Equal(ScenarioUfwStatus.Inactive, state.Ufw.Status);
+        Assert.Equal(ScenarioHostKeyState.Changed, state.Ssh.HostKey);
+        Assert.False(state.Ssh.IsConnected);
+        Assert.Equal(1, transport.ReconnectAttempts);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuUfwEnable, transport.CommandIds);
+        Assert.DoesNotContain(diagnostics.Events, diagnosticEvent => diagnosticEvent.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Contains(diagnostics.Events, diagnosticEvent => diagnosticEvent.EventId == DiagnosticEventCatalog.OperationFailed);
+        Assert.Contains("fingerprint", result.Result.NextAction, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task PrivilegeFailureOnEnableCannotActivateFirewallOrReportSuccess()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.enable-privilege");
@@ -298,6 +325,54 @@ public sealed class UfwToggleWorkflowScenarioTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class PostEffectTrustChangeTransport : IRebootReconnectTransport
+    {
+        private readonly DeterministicScenarioHost host;
+        private readonly PhasedScenarioTransport phased;
+        private readonly ScenarioSessionTransport trustedReconnect;
+        private bool disconnectAfterDisable;
+
+        public PostEffectTrustChangeTransport(DeterministicScenarioHost host)
+        {
+            this.host = host;
+            phased = new PhasedScenarioTransport(host);
+            trustedReconnect = new ScenarioSessionTransport(host, new ScenarioKnownHostTrustStore(host.State));
+        }
+
+        public List<string> CommandIds { get; } = [];
+        public int ReconnectAttempts { get; private set; }
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            CommandIds.Add(command.Id.Value);
+            var result = await phased.ExecuteAsync(command, cancellationToken);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwDisable && !disconnectAfterDisable)
+            {
+                disconnectAfterDisable = true;
+                host.State.Ssh.HostKey = ScenarioHostKeyState.Changed;
+                host.State.Ssh.IsConnected = false;
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            return result;
+        }
+
+        public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            ReconnectAttempts++;
+            return trustedReconnect.ReconnectAsync(timeout, cancellationToken);
+        }
+
+        public Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+            trustedReconnect.ReadBootIdentityAsync(timeout, cancellationToken);
+
+        public async ValueTask DisposeAsync()
+        {
+            await trustedReconnect.DisposeAsync();
+            await phased.DisposeAsync();
+        }
     }
 
     private sealed class CancellingScenarioTransport(

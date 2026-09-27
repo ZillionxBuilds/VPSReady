@@ -6,6 +6,8 @@ internal sealed class WorkflowDiagnosticContext(CorrelationIds correlation, Sess
 {
     public string OperationId => correlation.OperationId;
 
+    public CorrelationIds Correlation => correlation;
+
     public CorrelationIds ForStep(string stepId) => correlation.ForStep(stepId);
 
     public Task WriteAsync(IDiagnosticSink sink, StructuredDiagnosticEvent entry) =>
