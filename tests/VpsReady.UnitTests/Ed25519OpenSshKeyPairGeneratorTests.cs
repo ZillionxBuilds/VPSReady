@@ -540,6 +540,50 @@ public sealed class Ed25519OpenSshKeyPairGeneratorScenarioTests
         Assert.True(File.Exists(workspace.PublicKeyPath));
     }
 
+    [Fact]
+    public async Task ConcurrentNewTransactionDirectoryDoesNotBlockGenerationForAnotherName()
+    {
+        await using var workspace = new KeyWorkspace();
+        var firstPrivatePath = Path.Combine(workspace.Root, "first_ed25519");
+        var secondPrivatePath = Path.Combine(workspace.Root, "second_ed25519");
+        using var pause = new PauseAtTransactionStage(KeyPairTransactionStage.StagingCreated);
+        var firstGenerator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink(), pause);
+        var firstTask = Task.Run(() => firstGenerator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(firstPrivatePath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None));
+
+        Task<LocalEd25519KeyGenerationResult>? secondTask = null;
+        var secondFinishedBeforeManifest = false;
+        try
+        {
+            await pause.Reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var secondGenerator = new Ed25519OpenSshKeyPairGenerator(new CollectingDiagnosticSink());
+            secondTask = secondGenerator.GenerateAsync(
+                new LocalEd25519KeyGenerationRequest(secondPrivatePath),
+                DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+                CancellationToken.None);
+            secondFinishedBeforeManifest = secondTask.IsCompleted;
+        }
+        finally
+        {
+            pause.Continue.Set();
+        }
+
+        var first = await firstTask;
+        Assert.NotNull(secondTask);
+        var second = await secondTask;
+
+        Assert.False(secondFinishedBeforeManifest, "Another key generation must wait until the active transaction has a durable manifest.");
+        Assert.True(second.Succeeded, second.GenerationErrorCode);
+        Assert.True(first.Succeeded, first.GenerationErrorCode);
+        Assert.True(File.Exists(firstPrivatePath));
+        Assert.True(File.Exists(firstPrivatePath + ".pub"));
+        Assert.True(File.Exists(secondPrivatePath));
+        Assert.True(File.Exists(secondPrivatePath + ".pub"));
+        Assert.Empty(Directory.EnumerateDirectories(workspace.Root, ".vpsready-keytxn-*"));
+    }
+
     private static async Task<string> PrivateKeyDigestAsync(string path)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -622,6 +666,29 @@ internal sealed class ThrowAtTransactionStage(KeyPairTransactionStage stage, Exc
             throw exception ?? new IOException("Injected key-pair transaction fault.");
         }
     }
+}
+
+internal sealed class PauseAtTransactionStage(KeyPairTransactionStage stage) : IKeyPairTransactionFaultInjector, IDisposable
+{
+    private int reached;
+
+    public TaskCompletionSource<bool> Reached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public ManualResetEventSlim Continue { get; } = new(initialState: false);
+
+    public void ThrowIfInjected(KeyPairTransactionStage currentStage)
+    {
+        if (currentStage == stage && Interlocked.Exchange(ref reached, 1) == 0)
+        {
+            Reached.TrySetResult(true);
+            if (!Continue.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("Timed out waiting for the deterministic transaction interleaving.");
+            }
+        }
+    }
+
+    public void Dispose() => Continue.Dispose();
 }
 
 internal sealed class SimulatedKeyProcessCrashException : Exception
