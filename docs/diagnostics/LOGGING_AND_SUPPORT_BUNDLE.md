@@ -30,6 +30,8 @@ Two explicit user actions:
 1. **Copy Safe Issue Report** — Markdown designed for a public GitHub issue, aggressively anonymized.
 2. **Export Sanitized Support Bundle** — ZIP retained locally and shared only after the Owner reviews its contents.
 
+When either action starts from a selected Activity entry, scope the report and bundle to both that entry's opaque `run_id` and `operation_id`. Do not include sibling operations from the same run. Callers that intentionally request a run-wide export may supply only `run_id`.
+
 VPSReady must never auto-upload logs, create telemetry, send crash reports or contact a hosted backend.
 
 ## 2. Storage boundary

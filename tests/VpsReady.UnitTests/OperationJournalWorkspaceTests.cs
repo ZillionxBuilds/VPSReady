@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
@@ -188,6 +189,112 @@ public sealed class OperationJournalWorkspaceTests
             {
                 Directory.Delete(root, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task ActivitySelectedIssueReportUsesOnlySelectedOperationWithinSharedRun()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var run = DiagnosticRunContext.StartSession();
+            var selectedOperation = run.StartOperation("overview");
+            var laterOperation = run.StartOperation("firewall");
+            await WriteFailureAsync(workspace, selectedOperation, "Overview", new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            await WriteFailureAsync(workspace, laterOperation, "Firewall", new DateTimeOffset(2040, 1, 1, 0, 1, 0, TimeSpan.Zero));
+            string? copiedReport = null;
+            var viewModel = new ActivityDiagnosticsViewModel(workspace, report => copiedReport = report);
+            viewModel.SelectedEntry = Assert.Single(viewModel.Entries, entry => entry.OperationId == selectedOperation.OperationId);
+
+            viewModel.CopySafeIssueReportCommand.Execute(null);
+
+            Assert.NotNull(copiedReport);
+            Assert.Contains(selectedOperation.OperationId, copiedReport, StringComparison.Ordinal);
+            Assert.DoesNotContain(laterOperation.OperationId, copiedReport, StringComparison.Ordinal);
+            Assert.Contains("Overview", copiedReport, StringComparison.Ordinal);
+            Assert.DoesNotContain("Firewall", copiedReport, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ActivitySelectedSupportBundleContainsOnlySelectedOperationWithinSharedRun()
+    {
+        var root = CreateTemporaryDirectory();
+        var exports = Path.Combine(root, "selected-export");
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var run = DiagnosticRunContext.StartSession();
+            var selectedOperation = run.StartOperation("overview");
+            var laterOperation = run.StartOperation("firewall");
+            await WriteFailureAsync(workspace, selectedOperation, "Overview", new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            await WriteFailureAsync(workspace, laterOperation, "Firewall", new DateTimeOffset(2040, 1, 1, 0, 1, 0, TimeSpan.Zero));
+            var viewModel = new ActivityDiagnosticsViewModel(workspace, _ => { });
+            viewModel.SelectedEntry = Assert.Single(viewModel.Entries, entry => entry.OperationId == selectedOperation.OperationId);
+
+            await viewModel.ExportSanitizedSupportBundleAsync(exports);
+
+            var bundlePath = Assert.Single(Directory.GetFiles(exports, "*.zip"));
+            using var archive = ZipFile.OpenRead(bundlePath);
+            var events = await ReadBundleEntryAsync(archive, "events.jsonl");
+            var report = await ReadBundleEntryAsync(archive, "issue-report.md");
+            var summary = await ReadBundleEntryAsync(archive, "run-summary.md");
+            using var manifest = JsonDocument.Parse(await ReadBundleEntryAsync(archive, "manifest.json"));
+            foreach (var content in new[] { events, report })
+            {
+                Assert.Contains(selectedOperation.OperationId, content, StringComparison.Ordinal);
+                Assert.DoesNotContain(laterOperation.OperationId, content, StringComparison.Ordinal);
+                Assert.Contains("Overview", content, StringComparison.Ordinal);
+                Assert.DoesNotContain("Firewall", content, StringComparison.Ordinal);
+            }
+
+            Assert.Contains(selectedOperation.OperationId, summary, StringComparison.Ordinal);
+            Assert.DoesNotContain(laterOperation.OperationId, summary, StringComparison.Ordinal);
+            Assert.Equal(selectedOperation.OperationId, manifest.RootElement.GetProperty("operation_id").GetString());
+            Assert.Equal(run.RunId, manifest.RootElement.GetProperty("run_id").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OperationScopedReportAndBundleRejectMalformedOperationIdBeforeExportSideEffects()
+    {
+        var root = CreateTemporaryDirectory();
+        var destination = Path.Combine(root, "invalid-operation-export");
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var run = DiagnosticRunContext.StartSession();
+
+            var reportException = Assert.Throws<ArgumentException>(() => workspace.CreateSafeIssueReport(run.RunId, "op-not-opaque"));
+            var bundleException = await Assert.ThrowsAsync<ArgumentException>(() => workspace.ExportSanitizedSupportBundleAsync(
+                run.RunId,
+                destination,
+                CancellationToken.None,
+                "op-not-opaque"));
+
+            Assert.Equal("operationId", reportException.ParamName);
+            Assert.Equal("operationId", bundleException.ParamName);
+            Assert.False(Directory.Exists(destination));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+
+            var missingOperation = run.StartOperation("missing");
+            var emptyReport = workspace.CreateSafeIssueReport(run.RunId, missingOperation.OperationId);
+            Assert.Contains($"- Run ID: {run.RunId}", emptyReport, StringComparison.Ordinal);
+            Assert.Contains($"- Operation ID: {missingOperation.OperationId}", emptyReport, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -831,6 +938,38 @@ public sealed class OperationJournalWorkspaceTests
 
         Assert.DoesNotContain("authorized_keys", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("known_hosts", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static OperationJournalWorkspace CreateWorkspace(string root) => new(
+        new FixedPlatformPaths(root),
+        new FailClosedRedactor(),
+        new FixedClock(),
+        new DiagnosticEnvironment("0.1.0-test", "activity-operation-scope", "test-os", "test-arch"),
+        new RecordingFolderOpener());
+
+    private static Task WriteFailureAsync(
+        OperationJournalWorkspace workspace,
+        CorrelationIds correlation,
+        string action,
+        DateTimeOffset occurredAtUtc) => workspace.WriteSanitizedAsync(
+            new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                action,
+                DiagnosticLevel.Error,
+                correlation,
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Failed,
+                $"{action} operation failed safely.",
+                Action: action,
+                TimestampUtc: occurredAtUtc),
+            CancellationToken.None);
+
+    private static async Task<string> ReadBundleEntryAsync(ZipArchive archive, string name)
+    {
+        var entry = archive.GetEntry(name);
+        Assert.NotNull(entry);
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        return await reader.ReadToEndAsync();
     }
 
     private static void AssertOmittedPublicKey(string content, string publicKeyLine, string encodedKey)

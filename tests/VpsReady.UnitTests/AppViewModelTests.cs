@@ -140,9 +140,9 @@ public sealed class AppViewModelTests
 
         public Task OpenLogFolderAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public string CreateSafeIssueReport(string? runId = null) => "safe report";
+        public string CreateSafeIssueReport(string? runId = null, string? operationId = null) => "safe report";
 
-        public Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(string? runId, string destinationDirectory, CancellationToken cancellationToken) =>
+        public Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(string? runId, string destinationDirectory, CancellationToken cancellationToken, string? operationId = null) =>
             Task.FromResult(new SupportBundleExportResult("safe-bundle.zip", "safe-checksum", runId));
     }
 }

@@ -466,12 +466,13 @@ public interface IDiagnosticsWorkspace
 
     Task OpenLogFolderAsync(CancellationToken cancellationToken);
 
-    string CreateSafeIssueReport(string? runId = null);
+    string CreateSafeIssueReport(string? runId = null, string? operationId = null);
 
     Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(
         string? runId,
         string destinationDirectory,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        string? operationId = null);
 }
 
 /// <summary>Build and host metadata that is safe to place in a local support bundle.</summary>

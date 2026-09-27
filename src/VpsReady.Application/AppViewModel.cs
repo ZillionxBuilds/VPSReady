@@ -128,7 +128,7 @@ public sealed class AppViewModel : ObservableObject
             : new ActivityDiagnosticsViewModel(
                 diagnosticsWorkspace,
                 report => SafeIssueReportReady?.Invoke(report),
-                runId => SupportBundleExportRequested?.Invoke(runId));
+                (runId, operationId) => SupportBundleExportRequested?.Invoke(runId, operationId));
 
         if (applicationSession is not null)
         {
@@ -181,7 +181,7 @@ public sealed class AppViewModel : ObservableObject
     public event Action<string>? SafeIssueReportReady;
 
     /// <summary>Desktop hosts choose a user-approved local destination before export.</summary>
-    public event Action<string?>? SupportBundleExportRequested;
+    public event Action<string?, string?>? SupportBundleExportRequested;
 
     public IReadOnlyList<ShellNavigationItem> NavigationItems => navigationItems;
 
@@ -236,23 +236,23 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
 {
     private readonly IDiagnosticsWorkspace workspace;
     private readonly Action<string> copySafeIssueReport;
-    private readonly Action<string?> requestSupportBundleExport;
+    private readonly Action<string?, string?> requestSupportBundleExport;
     private string filter = string.Empty;
     private string status = "No local diagnostic events have been recorded in this session.";
 
     public ActivityDiagnosticsViewModel(
         IDiagnosticsWorkspace workspace,
         Action<string> copySafeIssueReport,
-        Action<string?>? requestSupportBundleExport = null)
+        Action<string?, string?>? requestSupportBundleExport = null)
     {
         this.workspace = workspace;
         this.copySafeIssueReport = copySafeIssueReport;
-        this.requestSupportBundleExport = requestSupportBundleExport ?? (_ => { });
+        this.requestSupportBundleExport = requestSupportBundleExport ?? ((_, _) => { });
         RefreshCommand = new DelegateCommand(Refresh);
         ClearCommand = new DelegateCommand(() => _ = ClearAsync());
         OpenFolderCommand = new DelegateCommand(() => _ = OpenFolderAsync());
         CopySafeIssueReportCommand = new DelegateCommand(CopySafeIssueReport);
-        ExportSanitizedSupportBundleCommand = new DelegateCommand(() => this.requestSupportBundleExport(SelectedEntry?.RunId));
+        ExportSanitizedSupportBundleCommand = new DelegateCommand(() => this.requestSupportBundleExport(SelectedEntry?.RunId, SelectedEntry?.OperationId));
         Refresh();
     }
 
@@ -306,7 +306,7 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
             $"Run ID: {entry.RunId ?? "not-recorded"}",
             $"Duration: {entry.Duration?.ToString() ?? "not-recorded"}",
             $"Next safe action: {entry.NextSafeAction ?? "No additional action is required."}")
-        : "Select a safe Activity entry to view its operation detail or export that run's sanitized support material.";
+        : "Select a safe Activity entry to view its operation detail or export that operation's sanitized support material.";
 
     public string LogDirectory => workspace.GetLogDirectory();
 
@@ -354,7 +354,7 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
     {
         try
         {
-            copySafeIssueReport(workspace.CreateSafeIssueReport(SelectedEntry?.RunId));
+            copySafeIssueReport(workspace.CreateSafeIssueReport(SelectedEntry?.RunId, SelectedEntry?.OperationId));
             Status = "A sanitized issue report was copied. The repository is public; review any attachment before sharing.";
         }
         catch
@@ -363,11 +363,17 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
         }
     }
 
-    public async Task ExportSanitizedSupportBundleAsync(string destinationDirectory, string? runId = null)
+    public async Task ExportSanitizedSupportBundleAsync(string destinationDirectory, string? runId = null, string? operationId = null)
     {
         try
         {
-            var exported = await workspace.ExportSanitizedSupportBundleAsync(runId ?? SelectedEntry?.RunId, destinationDirectory, CancellationToken.None).ConfigureAwait(false);
+            var selectedRunId = runId ?? SelectedEntry?.RunId;
+            var selectedOperationId = operationId ?? (runId is null ? SelectedEntry?.OperationId : null);
+            var exported = await workspace.ExportSanitizedSupportBundleAsync(
+                selectedRunId,
+                destinationDirectory,
+                CancellationToken.None,
+                selectedOperationId).ConfigureAwait(false);
             Status = $"Sanitized support bundle created locally: {Path.GetFileName(exported.BundlePath)}. Review it before sharing.";
         }
         catch

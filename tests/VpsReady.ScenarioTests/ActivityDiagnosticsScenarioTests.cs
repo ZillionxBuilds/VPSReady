@@ -36,7 +36,15 @@ public sealed class ActivityDiagnosticsScenarioTests
         var workspace = new MutableDiagnosticsWorkspace();
         string? copied = null;
         string? requestedRunId = null;
-        var viewModel = new ActivityDiagnosticsViewModel(workspace, report => copied = report, runId => requestedRunId = runId);
+        string? requestedOperationId = null;
+        var viewModel = new ActivityDiagnosticsViewModel(
+            workspace,
+            report => copied = report,
+            (runId, operationId) =>
+            {
+                requestedRunId = runId;
+                requestedOperationId = operationId;
+            });
         viewModel.SelectedEntry = viewModel.Entries.Single(entry => entry.OperationId == "op_firewall");
 
         viewModel.CopySafeIssueReportCommand.Execute(null);
@@ -45,8 +53,11 @@ public sealed class ActivityDiagnosticsScenarioTests
 
         Assert.Equal(MutableDiagnosticsWorkspace.SafeReport, copied);
         Assert.Equal("run_firewall", workspace.LastReportRunId);
+        Assert.Equal("op_firewall", workspace.LastReportOperationId);
         Assert.Equal("run_firewall", requestedRunId);
+        Assert.Equal("op_firewall", requestedOperationId);
         Assert.Equal("run_firewall", workspace.LastExportRunId);
+        Assert.Equal("op_firewall", workspace.LastExportOperationId);
         Assert.Contains("State: Failed", viewModel.SelectedDetail, StringComparison.Ordinal);
         Assert.Contains("Review plan", viewModel.SelectedDetail, StringComparison.Ordinal);
 
@@ -90,7 +101,11 @@ public sealed class ActivityDiagnosticsScenarioTests
 
         public string? LastReportRunId { get; private set; }
 
+        public string? LastReportOperationId { get; private set; }
+
         public string? LastExportRunId { get; private set; }
+
+        public string? LastExportOperationId { get; private set; }
 
         public bool ThrowOnExport { get; set; }
 
@@ -116,16 +131,18 @@ public sealed class ActivityDiagnosticsScenarioTests
             return Task.CompletedTask;
         }
 
-        public string CreateSafeIssueReport(string? runId = null)
+        public string CreateSafeIssueReport(string? runId = null, string? operationId = null)
         {
             LastReportRunId = runId;
+            LastReportOperationId = operationId;
             return SafeReport;
         }
 
-        public Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(string? runId, string destinationDirectory, CancellationToken cancellationToken)
+        public Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(string? runId, string destinationDirectory, CancellationToken cancellationToken, string? operationId = null)
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastExportRunId = runId;
+            LastExportOperationId = operationId;
             if (ThrowOnExport)
             {
                 throw new InvalidOperationException(SeededSecret);
