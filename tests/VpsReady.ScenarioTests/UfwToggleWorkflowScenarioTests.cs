@@ -256,6 +256,40 @@ public sealed class UfwToggleWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task DisableCancelledAfterEffectReconnectsAndRestoresActiveFirewall()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.c305.disable-cancel-after-effect");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        using var cancellation = new CancellationTokenSource();
+        await using var transport = new PostEffectCancellationTransport(host, cancellation);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.DisableAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationVerification.Failed, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.Equal(ScenarioUfwStatus.Active, state.Ufw.Status);
+        Assert.True(state.Ssh.IsConnected);
+        Assert.Equal(1, transport.ReconnectAttempts);
+        Assert.Contains(RemoteCommandCatalog.UbuntuUfwEnable, transport.CommandIds);
+
+        var disableStarted = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationStarted && item.Action == "DisableFirewall");
+        var recoveryStarted = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationStarted && item.Action == "EnableFirewall");
+        Assert.NotEqual(disableStarted.Correlation.OperationId, recoveryStarted.Correlation.OperationId);
+        Assert.Equal(disableStarted.Correlation.SessionId, recoveryStarted.Correlation.SessionId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled
+            && item.Correlation.OperationId == disableStarted.Correlation.OperationId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && item.Correlation.OperationId == disableStarted.Correlation.OperationId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && item.Correlation.OperationId == recoveryStarted.Correlation.OperationId);
+    }
+
+    [Fact]
     public async Task PrivilegeFailureOnEnableCannotActivateFirewallOrReportSuccess()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c305.enable-privilege");
@@ -367,6 +401,49 @@ public sealed class UfwToggleWorkflowScenarioTests
 
         public Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
             trustedReconnect.ReadBootIdentityAsync(timeout, cancellationToken);
+
+        public async ValueTask DisposeAsync()
+        {
+            await trustedReconnect.DisposeAsync();
+            await phased.DisposeAsync();
+        }
+    }
+
+    private sealed class PostEffectCancellationTransport : ITrustedSessionReconnectTransport
+    {
+        private readonly PhasedScenarioTransport phased;
+        private readonly ScenarioSessionTransport trustedReconnect;
+        private readonly CancellationTokenSource cancellation;
+        private bool cancelledAfterDisable;
+
+        public PostEffectCancellationTransport(DeterministicScenarioHost host, CancellationTokenSource cancellation)
+        {
+            phased = new PhasedScenarioTransport(host);
+            trustedReconnect = new ScenarioSessionTransport(host, new ScenarioKnownHostTrustStore(host.State));
+            this.cancellation = cancellation;
+        }
+
+        public List<string> CommandIds { get; } = [];
+        public int ReconnectAttempts { get; private set; }
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            CommandIds.Add(command.Id.Value);
+            var result = await phased.ExecuteAsync(command, cancellationToken);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwDisable && !cancelledAfterDisable)
+            {
+                cancelledAfterDisable = true;
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
+        public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            ReconnectAttempts++;
+            return trustedReconnect.ReconnectAsync(timeout, cancellationToken);
+        }
 
         public async ValueTask DisposeAsync()
         {

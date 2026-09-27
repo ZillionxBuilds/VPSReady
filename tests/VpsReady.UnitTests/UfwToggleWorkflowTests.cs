@@ -325,6 +325,40 @@ public sealed class UfwToggleWorkflowTests
             && item.Correlation.OperationId == recoveryStarted.Correlation.OperationId);
     }
 
+    [Fact]
+    public async Task DisableCancelledAfterApplyReconnectsAndRestoresPriorActiveState()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new RecordingSanitizedSink();
+        var run = DiagnosticRunContext.StartSession();
+        var disableCorrelation = run.StartOperation("disable_firewall");
+        var disableDiagnostics = SessionOperationDiagnostics.ForFirewall(disableCorrelation, fallbackSink: null, "disable");
+        var transport = new PostEffectDropTransport(cancellation);
+
+        var result = await Workflow(diagnostics).DisableAsync(transport, confirmed: true, disableDiagnostics, cancellation.Token);
+        await disableDiagnostics.FinalizeAsync(result.Result);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationVerification.Failed, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.True(transport.FirewallActive);
+        Assert.Equal(1, transport.ReconnectAttempts);
+        Assert.Contains(transport.Commands, command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+
+        var disableStarted = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationStarted && item.Action == "DisableFirewall");
+        var recoveryStarted = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationStarted && item.Action == "EnableFirewall");
+        Assert.NotEqual(disableStarted.Correlation.OperationId, recoveryStarted.Correlation.OperationId);
+        Assert.Equal(disableStarted.Correlation.SessionId, recoveryStarted.Correlation.SessionId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationCancelled
+            && item.Correlation.OperationId == disableStarted.Correlation.OperationId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && item.Correlation.OperationId == disableStarted.Correlation.OperationId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded
+            && item.Correlation.OperationId == recoveryStarted.Correlation.OperationId);
+    }
+
     [Theory]
     [InlineData(22, true)]
     [InlineData(2222, true)]
@@ -394,10 +428,14 @@ public sealed class UfwToggleWorkflowTests
 
     private sealed class PostEffectDropTransport : IRebootReconnectTransport
     {
+        private readonly CancellationTokenSource? cancelAfterDisable;
         private bool connected = true;
         private bool allowedIpv4 = true;
         private bool allowedIpv6 = true;
         private bool droppedAfterDisable;
+
+        public PostEffectDropTransport(CancellationTokenSource? cancelAfterDisable = null) =>
+            this.cancelAfterDisable = cancelAfterDisable;
 
         public List<RemoteCommand> Commands { get; } = [];
         public bool FirewallActive { get; private set; } = true;
@@ -416,6 +454,12 @@ public sealed class UfwToggleWorkflowTests
             {
                 FirewallActive = false;
                 droppedAfterDisable = true;
+                if (cancelAfterDisable is not null)
+                {
+                    cancelAfterDisable.Cancel();
+                    return await ProductionOutput.CaptureAsync(command, Result(string.Empty), CancellationToken.None);
+                }
+
                 connected = false;
                 throw new RemoteTransportException(RemoteTransportFailureKind.Network);
             }
