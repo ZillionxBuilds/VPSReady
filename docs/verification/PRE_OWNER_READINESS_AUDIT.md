@@ -2337,3 +2337,35 @@ account receives HTTP 403 for that policy endpoint. These draft PRs remain
 unmerged; independent review, hosted/native platform validation, approved
 release integration and Owner Stage 0–6/E5 are NOT RUN/NOT VERIFIED.
 **REAL VPS: NOT TESTED.**
+
+### Reconcile current PR #17 head against the integrated review tree — 2026-09-27 UTC
+
+The earlier open-PR inventory treated PR #17's latest commit as missing from
+the review composite based on ancestry alone. A fresh inventory of the 47 open
+PRs targeting `release/0.1.0` shows only PR #17 and docs-only PR #28 are not
+head ancestors of #101 at `b83fcf6be9164af0da2e530c45c7b1b0f2a957ce`.
+PR #17 remains OPEN/DRAFT at `20cd4d4c459746b4c15233dccdfd41d15d78f261`,
+but its picker-failure source and tests are already present in #101 through
+ancestor commit `13f81150f6f23bddf282636005e2a220ce2d0b85`: the
+`LocalKeyPickerFlow.cs` blob matches exactly, both ViewModel picker-failure
+methods are present, and the fault/cancel/invalid-name/path-forwarding
+regressions are present. Exact-head E1 for `SshManagementViewModelTests`
+passed 48/48 in the current recheck.
+
+Do **not** cherry-pick #17's final commit as a unit. Its branch is based on
+older ViewModel/MainWindow/tests; applying it to #101 would remove newer
+`CompleteLocal` failure guidance and session-finalization/identity-invalidation
+logic and drop unrelated regression tests. The attempted no-commit merge was
+resolved by retaining files byte-for-byte identical to #101 HEAD; no source
+change or duplicate commit was produced.
+
+On exact #101 `b83fcf6`, this recheck also passed Release build with
+`-warnaserror` (0 warnings, 0 errors), `dotnet format --verify-no-changes`,
+`git diff --check`, full UnitTests **955 PASS/3 declared SKIP** and full
+ScenarioTests **227 PASS/3 declared SKIP**. Existing exact-head E4 publish and
+artifact-safety evidence remains applicable because source is unchanged.
+E3 was **NOT RUN**: the local Docker daemon is unavailable. Hosted checks remain
+absent, organization Actions-policy cause remains UNVERIFIED, and independent
+review/release integration/Owner E5 remain pending. PR #17 remains available
+for focused external review; its non-ancestor commit is not a missing source
+correction in #101. **REAL VPS: NOT TESTED.**
