@@ -66,7 +66,24 @@ public sealed class OperationResultTests
         Assert.False(result.Succeeded);
         Assert.Equal(OperationErrorCode.Cancelled, result.ErrorCode);
         Assert.Equal(OperationState.PartiallyApplied, result.State);
+        Assert.Equal(OperationRecovery.NotRequired, result.Recovery);
         Assert.Contains("cancelled", result.UserMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Some changes may have been applied", result.UserMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CancellationPreservesACompletedRecoveryResult()
+    {
+        var result = OperationResult.Cancellation(
+            "local.key.generate",
+            OperationState.Applied,
+            OperationVerification.Passed,
+            OperationRecovery.Succeeded);
+
+        Assert.Equal(OperationCompletion.Cancelled, result.Completion);
+        Assert.Equal(OperationState.Applied, result.State);
+        Assert.Equal(OperationVerification.Passed, result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Recovery);
+        Assert.False(result.Succeeded);
     }
 }

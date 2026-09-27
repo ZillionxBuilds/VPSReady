@@ -411,7 +411,7 @@ public sealed class Ed25519KeyGenerationScenarioTests
     {
         var transactionName = Path.GetFileName(transactionDirectory);
         var derivedTransactionId = transactionName[".vpsready-keytxn-".Length..];
-        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\"}}";
+        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\",\"OwnerProcessId\":2147483647,\"OwnerProcessStartTimeUtcTicks\":1}}";
     }
 }
 

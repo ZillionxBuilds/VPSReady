@@ -166,7 +166,8 @@ public sealed record OperationResult
     public static OperationResult Cancellation(
         string operationId,
         OperationState state = OperationState.Unknown,
-        OperationVerification verification = OperationVerification.NotRun)
+        OperationVerification verification = OperationVerification.NotRun,
+        OperationRecovery recovery = OperationRecovery.NotRequired)
     {
         var message = OperationErrorCatalog.Get(OperationErrorCode.Cancelled);
         return new OperationResult(
@@ -174,7 +175,7 @@ public sealed record OperationResult
             OperationCompletion.Cancelled,
             state,
             verification,
-            OperationRecovery.NotRequired,
+            recovery,
             OperationErrorCode.Cancelled,
             WithStateWarning(message.UserMessage, state),
             message.NextAction);
