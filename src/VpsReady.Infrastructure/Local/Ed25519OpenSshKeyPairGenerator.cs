@@ -36,6 +36,7 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
         StagedPublicFileName,
     };
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> TargetLocks = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> ParentTransactionLocks = new(StringComparer.OrdinalIgnoreCase);
     private readonly IDiagnosticSink diagnostics;
     private readonly IKeyPairTransactionFaultInjector faultInjector;
     private readonly IKeyPairTransactionCleanupObserver cleanupObserver;
@@ -97,13 +98,24 @@ public sealed class Ed25519OpenSshKeyPairGenerator : ILocalEd25519KeyGenerator
                 errorCode: null,
                 cancellationToken).ConfigureAwait(false);
 
-            await RecoverMatchingTransactionsAsync(paths, cancellationToken).ConfigureAwait(false);
-            ValidateNoCollision(paths);
-            cancellationToken.ThrowIfCancellationRequested();
+            var parentGate = ParentTransactionLocks.GetOrAdd(paths.ParentDirectory, _ => new SemaphoreSlim(1, 1));
+            await parentGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Recovery must not observe another in-process generation between
+                // transaction-directory creation and its durable ownership manifest.
+                await RecoverMatchingTransactionsAsync(paths, cancellationToken).ConfigureAwait(false);
+                ValidateNoCollision(paths);
+                cancellationToken.ThrowIfCancellationRequested();
 
-            transactionDirectory = CreateTransactionDirectory(paths);
-            faultInjector.ThrowIfInjected(KeyPairTransactionStage.StagingCreated);
-            WriteManifest(transactionDirectory, paths);
+                transactionDirectory = CreateTransactionDirectory(paths);
+                faultInjector.ThrowIfInjected(KeyPairTransactionStage.StagingCreated);
+                WriteManifest(transactionDirectory, paths);
+            }
+            finally
+            {
+                parentGate.Release();
+            }
 
             var pair = GenerateKeyPair();
             var privateKey = (Ed25519PrivateKeyParameters)pair.Private;
