@@ -2299,3 +2299,41 @@ tracks the separate E5 gate.
   this draft documentation PR targets `release/0.1.0` only and is not evidence
   that the two branches already carry identical documentation.
 - Preserve Owner-only E5 and explicit main/stable approval as separate gates.
+
+### F05 concurrent transaction initialization window — 2026-09-27 UTC
+
+An exact-source review of the existing key transaction correction found a
+second interleaving not covered by its original cross-name recovery test. On
+the release-based PR #46 branch, E1 deterministically paused key A immediately
+after creating its transaction directory and before writing `manifest.json`.
+While A was paused, generation of a different key B in the same directory
+failed with `LOCAL_KEY_RECOVERY_FAILED` (RED, 0/1). The existing regression
+covered a completed manifest for another name, not this initialization window.
+
+The focused correction in [PR #46](https://github.com/ZillionxBuilds/VPSReady/pull/46)
+serializes each in-process transaction-directory recovery scan and directory
+plus durable-manifest initialization by parent folder. The gate is released
+before key material generation. The deterministic interleaving now completes
+both pairs and leaves no transaction directories. Exact PR #46 head
+`47e7889c94f64fc1aa9c04b327c309ea1bd720d3` passed the generator/recovery suite
+8/8; full UnitTests 610 PASS/2 declared SKIP; ScenarioTests 177 PASS/3 declared
+SKIP; locked restore, Release analyzer build with `-warnaserror` (0 warnings,
+0 errors), format and diff checks passed. A native macOS ARM64 self-contained
+apphost publish embedded the exact SHA and passed artifact-safety inspection.
+No app was launched; E3 is not applicable to this local file transaction.
+
+The correction was merged into the existing review composite [PR #101](https://github.com/ZillionxBuilds/VPSReady/pull/101)
+after a conflict-free merge-tree comparison and pushed at exact head
+`b83fcf6be9164af0da2e530c45c7b1b0f2a957ce` (release base remains
+`9965c5bcdb445947d6bd593344fbade62d9c55a4`). On that exact combined tree, E0
+locked restore/build/analyzers/format/diff passed with 0 warnings and errors;
+E1 UnitTests 955 PASS/3 declared SKIP; E2 ScenarioTests 227 PASS/3 declared
+SKIP. Native macOS ARM64 apphost publish, exact SHA inspection and
+artifact-safety passed. E3 local-contained OpenSSH was NOT RUN on this head
+because the local Docker daemon was unavailable. E3 from `ff74d2d` is not
+transferred to `b83fcf6`. Hosted Actions still has zero workflow runs/check
+suites; organization event/actor policy remains UNVERIFIED because the current
+account receives HTTP 403 for that policy endpoint. These draft PRs remain
+unmerged; independent review, hosted/native platform validation, approved
+release integration and Owner Stage 0–6/E5 are NOT RUN/NOT VERIFIED.
+**REAL VPS: NOT TESTED.**
