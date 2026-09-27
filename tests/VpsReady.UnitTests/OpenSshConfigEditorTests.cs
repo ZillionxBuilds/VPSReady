@@ -343,6 +343,28 @@ public sealed class OpenSshConfigEditorTests
     }
 
     [Fact]
+    public async Task PostCommitCancellationDeletesOnlyTheNewConfigItCommitted()
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new CancelAfterFirstCommitStore(cancellation), diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            cancellation.Token);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.Cancelled, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.False(File.Exists(workspace.ConfigPath));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
     public async Task PostCommitVerificationMismatchRestoresExactOriginalAndNeverReportsSuccess()
     {
         await using var workspace = new ConfigWorkspace();
@@ -358,6 +380,61 @@ public sealed class OpenSshConfigEditorTests
         Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
         Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath));
         Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ConcurrentConfigChangeIsNotOverwrittenFromStaleSnapshot(bool configExistsAtSnapshot)
+    {
+        await using var workspace = new ConfigWorkspace();
+        if (configExistsAtSnapshot)
+        {
+            await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+        }
+
+        var externalEdit = Encoding.UTF8.GetBytes("# newer external edit\nHost external-target\n    User retained-user\n");
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new ChangeBeforeCommitStore(externalEdit), diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(result.Succeeded);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecoveryDoesNotRestoreOrDeleteOverAStillNewerExternalEdit(bool configExistsAtSnapshot)
+    {
+        await using var workspace = new ConfigWorkspace();
+        if (configExistsAtSnapshot)
+        {
+            await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+        }
+
+        var externalEdit = Encoding.UTF8.GetBytes("# newer edit during recovery\nHost external-target\n    User retained-user\n");
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CollectingDiagnosticSink();
+        var store = new ExternalEditAfterCommitStore(externalEdit, cancellation);
+        var editor = new OpenSshConfigEditor(workspace, store, diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            cancellation.Token);
+
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Unknown, result.Operation.State);
+        Assert.Equal(OperationRecovery.Failed, result.Operation.Recovery);
+        Assert.Equal(OperationErrorCode.Recovery, result.Operation.ErrorCode);
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
     }
 
@@ -386,6 +463,7 @@ public sealed class OpenSshConfigEditorTests
         }
         public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
         public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 
@@ -418,6 +496,58 @@ public sealed class OpenSshConfigEditorTests
             return actual;
         }
         public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class ChangeBeforeCommitStore(byte[] externalEdit) : IRecoverableLocalFileStore
+    {
+        private readonly AtomicFileStore inner = new();
+        private bool changed;
+
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) =>
+            inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            if (!changed)
+            {
+                changed = true;
+                await File.WriteAllBytesAsync(path, externalEdit, cancellationToken);
+            }
+
+            return await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+        }
+
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class ExternalEditAfterCommitStore(byte[] externalEdit, CancellationTokenSource cancellation) : IRecoverableLocalFileStore
+    {
+        private readonly AtomicFileStore inner = new();
+        private int writes;
+
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) =>
+            inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            var result = await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+            if (Interlocked.Increment(ref writes) == 1)
+            {
+                await File.WriteAllBytesAsync(path, externalEdit, CancellationToken.None);
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 }

@@ -35,6 +35,7 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
 
         AtomicWriteResult? committedWrite = null;
         LocalConfigSnapshot? originalSnapshot = null;
+        byte[]? replacementContents = null;
         string? configPath = null;
         try
         {
@@ -77,19 +78,23 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
             var preamble = document[..insertionOffset];
             var separator = preamble.Length > 0 && !preamble.EndsWith('\n') ? newline : string.Empty;
             var replacementDocument = preamble + separator + desired.Render(newline) + document[insertionOffset..];
-            var replacement = EncodeConfig(replacementDocument, hasUtf8Bom);
+            replacementContents = EncodeConfig(replacementDocument, hasUtf8Bom);
             cancellationToken.ThrowIfCancellationRequested();
             committedWrite = await fileStore.WriteAtomicallyAsync(
                 configPath,
-                replacement,
-                new AtomicWriteOptions(LocalFileCollisionPolicy.ReplaceWithBackup, RestrictPermissions: true, CreateBackup: true),
+                replacementContents,
+                new AtomicWriteOptions(
+                    LocalFileCollisionPolicy.ReplaceWithBackup,
+                    RestrictPermissions: true,
+                    CreateBackup: true,
+                    ExpectedTargetSnapshot: new LocalFileSnapshot(originalSnapshot.Exists, originalSnapshot.Contents)),
                 cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
             var verified = await fileStore.ReadAsync(configPath, cancellationToken).ConfigureAwait(false);
-            if (!verified.Span.SequenceEqual(replacement))
+            if (!verified.Span.SequenceEqual(replacementContents))
             {
-                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, OpenSshConfigEditErrorCatalog.LocalIo, OperationErrorCode.Verification).ConfigureAwait(false);
+                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, replacementContents, OpenSshConfigEditErrorCatalog.LocalIo, OperationErrorCode.Verification).ConfigureAwait(false);
             }
 
             var succeeded = OperationResult.Success(correlation.OperationId, OperationState.Applied);
@@ -98,29 +103,34 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
         }
         catch (OperationCanceledException)
         {
-            if (committedWrite is not null && originalSnapshot is not null && configPath is not null)
+            if (committedWrite is not null && originalSnapshot is not null && replacementContents is not null && configPath is not null)
             {
-                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, OpenSshConfigEditErrorCatalog.Cancelled, OperationErrorCode.Cancelled).ConfigureAwait(false);
+                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, replacementContents, OpenSshConfigEditErrorCatalog.Cancelled, OperationErrorCode.Cancelled).ConfigureAwait(false);
             }
 
             var operation = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged, OperationVerification.NotRun);
             await PublishAsync(DiagnosticEventCatalog.OpenSshConfigEditCancelled, correlation, DiagnosticPhase.Apply, DiagnosticStatus.Cancelled, OperationErrorCode.Cancelled.ToStableCode(), CancellationToken.None).ConfigureAwait(false);
             return OpenSshConfigEditResult.Failure(operation, OpenSshConfigEditErrorCatalog.Cancelled);
         }
+        catch (LocalFilePreconditionFailedException)
+        {
+            return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.ConcurrentModification, OperationErrorCode.ConcurrentModification,
+                DiagnosticPhase.Preflight, OperationState.Unchanged, OperationVerification.NotRun).ConfigureAwait(false);
+        }
         catch (UnauthorizedAccessException)
         {
-            if (committedWrite is not null && originalSnapshot is not null && configPath is not null)
+            if (committedWrite is not null && originalSnapshot is not null && replacementContents is not null && configPath is not null)
             {
-                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, OpenSshConfigEditErrorCatalog.Permission, OperationErrorCode.LocalIo).ConfigureAwait(false);
+                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, replacementContents, OpenSshConfigEditErrorCatalog.Permission, OperationErrorCode.LocalIo).ConfigureAwait(false);
             }
 
             return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.Permission, OperationErrorCode.LocalIo, DiagnosticPhase.Apply, OperationState.Unknown, OperationVerification.NotRun).ConfigureAwait(false);
         }
         catch (IOException)
         {
-            if (committedWrite is not null && originalSnapshot is not null && configPath is not null)
+            if (committedWrite is not null && originalSnapshot is not null && replacementContents is not null && configPath is not null)
             {
-                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, OpenSshConfigEditErrorCatalog.LocalIo, OperationErrorCode.LocalIo).ConfigureAwait(false);
+                return await RecoverAfterCommittedWriteAsync(correlation, configPath, originalSnapshot, committedWrite, replacementContents, OpenSshConfigEditErrorCatalog.LocalIo, OperationErrorCode.LocalIo).ConfigureAwait(false);
             }
 
             return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.LocalIo, OperationErrorCode.LocalIo, DiagnosticPhase.Apply, OperationState.Unknown, OperationVerification.NotRun).ConfigureAwait(false);
@@ -157,6 +167,7 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
         string configPath,
         LocalConfigSnapshot original,
         AtomicWriteResult committedWrite,
+        ReadOnlyMemory<byte> replacementContents,
         string errorCode,
         OperationErrorCode operationError)
     {
@@ -178,7 +189,11 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
                 await fileStore.WriteAtomicallyAsync(
                     configPath,
                     backup,
-                    new AtomicWriteOptions(LocalFileCollisionPolicy.ReplaceWithBackup, RestrictPermissions: true, CreateBackup: false),
+                    new AtomicWriteOptions(
+                        LocalFileCollisionPolicy.ReplaceWithBackup,
+                        RestrictPermissions: true,
+                        CreateBackup: false,
+                        ExpectedTargetSnapshot: new LocalFileSnapshot(true, replacementContents)),
                     CancellationToken.None).ConfigureAwait(false);
                 var restored = await fileStore.ReadAsync(configPath, CancellationToken.None).ConfigureAwait(false);
                 if (!restored.Span.SequenceEqual(original.Contents.Span))
@@ -188,7 +203,10 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
             }
             else if (fileStore is IRecoverableLocalFileStore recoverableStore)
             {
-                await recoverableStore.DeleteIfExistsAsync(configPath, CancellationToken.None).ConfigureAwait(false);
+                await recoverableStore.DeleteIfUnchangedAsync(
+                    configPath,
+                    new LocalFileSnapshot(true, replacementContents),
+                    CancellationToken.None).ConfigureAwait(false);
                 try
                 {
                     _ = await fileStore.ReadAsync(configPath, CancellationToken.None).ConfigureAwait(false);

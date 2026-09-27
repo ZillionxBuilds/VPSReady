@@ -103,6 +103,8 @@ public sealed class SecureLocalStorage(IPlatformPaths platformPaths, ILocalFileS
 
 public sealed class AtomicFileStore : IRecoverableLocalFileStore
 {
+    private static readonly SemaphoreSlim CommitGate = new(1, 1);
+
     public async Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken)
     {
         await WriteAtomicallyAsync(
@@ -144,33 +146,81 @@ public sealed class AtomicFileStore : IRecoverableLocalFileStore
                 ApplyFilePermissions(temporaryPath);
             }
 
-            var replacedExisting = File.Exists(path);
-            string? backupPath = null;
-            if (replacedExisting)
+            await CommitGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            FileStream? targetGuard = null;
+            try
             {
-                if (options.CollisionPolicy == LocalFileCollisionPolicy.Reject)
+                targetGuard = OpenExpectedTarget(path, options.ExpectedTargetSnapshot, cancellationToken);
+                await EnsureExpectedSnapshotAsync(path, options.ExpectedTargetSnapshot, targetGuard, cancellationToken).ConfigureAwait(false);
+                string? backupPath = null;
+                bool replacedExisting;
+                if (options.ExpectedTargetSnapshot is { Exists: false })
                 {
-                    throw new IOException("The target local file already exists and overwrite was not authorized.");
+                    // Do not reclassify an expected-missing target based on a
+                    // second existence check: another writer could create the
+                    // file after preflight and be overwritten by File.Replace.
+                    // File.Move is create-only and therefore fails closed if a
+                    // competing writer wins the race.
+                    try
+                    {
+                        File.Move(temporaryPath, path);
+                    }
+                    catch (IOException) when (File.Exists(path))
+                    {
+                        throw new LocalFilePreconditionFailedException();
+                    }
+
+                    replacedExisting = false;
+                }
+                else if (options.ExpectedTargetSnapshot is { Exists: true })
+                {
+                    if (!File.Exists(path))
+                    {
+                        throw new LocalFilePreconditionFailedException();
+                    }
+
+                    if (options.CollisionPolicy == LocalFileCollisionPolicy.Reject)
+                    {
+                        throw new IOException("The target local file already exists and overwrite was not authorized.");
+                    }
+
+                    backupPath = options.CreateBackup ? path + ".bak" : null;
+                    File.Replace(temporaryPath, path, backupPath, ignoreMetadataErrors: true);
+                    replacedExisting = true;
+                }
+                else if (File.Exists(path))
+                {
+                    if (options.CollisionPolicy == LocalFileCollisionPolicy.Reject)
+                    {
+                        throw new IOException("The target local file already exists and overwrite was not authorized.");
+                    }
+
+                    backupPath = options.CreateBackup ? path + ".bak" : null;
+                    File.Replace(temporaryPath, path, backupPath, ignoreMetadataErrors: true);
+                    replacedExisting = true;
+                }
+                else
+                {
+                    File.Move(temporaryPath, path);
+                    replacedExisting = false;
                 }
 
-                backupPath = options.CreateBackup ? path + ".bak" : null;
-                File.Replace(temporaryPath, path, backupPath, ignoreMetadataErrors: true);
-            }
-            else
-            {
-                File.Move(temporaryPath, path);
-            }
-
-            if (options.RestrictPermissions)
-            {
-                ApplyFilePermissions(path);
-                if (backupPath is not null)
+                if (options.RestrictPermissions)
                 {
-                    ApplyFilePermissions(backupPath);
+                    ApplyFilePermissions(path);
+                    if (backupPath is not null)
+                    {
+                        ApplyFilePermissions(backupPath);
+                    }
                 }
-            }
 
-            return new AtomicWriteResult(path, backupPath, replacedExisting);
+                return new AtomicWriteResult(path, backupPath, replacedExisting);
+            }
+            finally
+            {
+                targetGuard?.Dispose();
+                CommitGate.Release();
+            }
         }
         finally
         {
@@ -187,9 +237,86 @@ public sealed class AtomicFileStore : IRecoverableLocalFileStore
     public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return DeleteCoreAsync(path, null, cancellationToken);
+    }
+
+    public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(expectedSnapshot);
+        return DeleteCoreAsync(path, expectedSnapshot, cancellationToken);
+    }
+
+    private static async Task DeleteCoreAsync(string path, LocalFileSnapshot? expectedSnapshot, CancellationToken cancellationToken)
+    {
+        await CommitGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        FileStream? targetGuard = null;
+        try
+        {
+            targetGuard = OpenExpectedTarget(path, expectedSnapshot, cancellationToken);
+            await EnsureExpectedSnapshotAsync(path, expectedSnapshot, targetGuard, cancellationToken).ConfigureAwait(false);
+            File.Delete(path);
+        }
+        finally
+        {
+            targetGuard?.Dispose();
+            CommitGate.Release();
+        }
+    }
+
+    private static FileStream? OpenExpectedTarget(string path, LocalFileSnapshot? expectedSnapshot, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
-        File.Delete(path);
-        return Task.CompletedTask;
+        if (expectedSnapshot?.Exists != true)
+        {
+            return null;
+        }
+
+        var share = OperatingSystem.IsWindows() ? FileShare.Read | FileShare.Delete : FileShare.None;
+        try
+        {
+            return new FileStream(path, FileMode.Open, FileAccess.Read, share, bufferSize: 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+        catch (FileNotFoundException)
+        {
+            throw new LocalFilePreconditionFailedException();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            throw new LocalFilePreconditionFailedException();
+        }
+    }
+
+    private static async Task EnsureExpectedSnapshotAsync(string path, LocalFileSnapshot? expectedSnapshot, FileStream? targetGuard, CancellationToken cancellationToken)
+    {
+        if (expectedSnapshot is null)
+        {
+            return;
+        }
+
+        if (!expectedSnapshot.Exists)
+        {
+            if (File.Exists(path))
+            {
+                throw new LocalFilePreconditionFailedException();
+            }
+
+            return;
+        }
+
+        if (targetGuard is null)
+        {
+            throw new LocalFilePreconditionFailedException();
+        }
+
+        targetGuard.Position = 0;
+        using var current = new MemoryStream();
+        await targetGuard.CopyToAsync(current, cancellationToken).ConfigureAwait(false);
+
+        if (!expectedSnapshot.Contents.Span.SequenceEqual(current.GetBuffer().AsSpan(0, checked((int)current.Length))))
+        {
+            throw new LocalFilePreconditionFailedException();
+        }
     }
 
     public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken)
