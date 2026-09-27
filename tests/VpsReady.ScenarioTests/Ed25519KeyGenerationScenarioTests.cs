@@ -352,9 +352,14 @@ public sealed class Ed25519KeyGenerationScenarioTests
     }
 
     [Fact]
-    public async Task CaseOnlyTransactionNameIsAmbiguousAndFailsClosed()
+    public async Task CaseOnlyTransactionRecoveryFollowsFilesystemNameSemantics()
     {
         await using var workspace = new ScenarioKeyWorkspace();
+        var caseProbe = Path.Combine(workspace.Root, "CaseProbe");
+        await File.WriteAllTextAsync(caseProbe, "probe");
+        var caseInsensitive = File.Exists(Path.Combine(workspace.Root, "caseprobe"));
+        File.Delete(caseProbe);
+
         var transactionDirectory = CreateTransactionDirectory(workspace.Root);
         await WriteManifestAsync(transactionDirectory, privateFileName: "ID_ED25519", publicFileName: "ID_ED25519.pub");
         var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
@@ -364,10 +369,10 @@ public sealed class Ed25519KeyGenerationScenarioTests
             DiagnosticRunContext.StartSession().StartOperation("generate_key"),
             CancellationToken.None);
 
-        AssertRecoveryFailure(result);
-        Assert.True(Directory.Exists(transactionDirectory));
-        Assert.False(File.Exists(workspace.PrivateKeyPath));
-        Assert.False(File.Exists(workspace.PublicKeyPath));
+        Assert.True(result.Succeeded);
+        Assert.True(File.Exists(workspace.PrivateKeyPath));
+        Assert.True(File.Exists(workspace.PublicKeyPath));
+        Assert.Equal(!caseInsensitive, Directory.Exists(transactionDirectory));
     }
 
     [Fact]
@@ -458,7 +463,7 @@ public sealed class Ed25519KeyGenerationScenarioTests
     {
         var transactionName = Path.GetFileName(transactionDirectory);
         var derivedTransactionId = transactionName[".vpsready-keytxn-".Length..];
-        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\"}}";
+        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\",\"OwnerProcessId\":2147483647,\"OwnerProcessStartTimeUtcTicks\":1}}";
     }
 }
 
