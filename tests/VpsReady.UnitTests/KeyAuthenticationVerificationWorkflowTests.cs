@@ -54,6 +54,8 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
             DiagnosticEventCatalog.KeyAuthenticationVerificationFailed);
         Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled, terminal.EventId);
         Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, terminal.CommandId);
     }
 
     [Fact]
@@ -145,6 +147,52 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
         // Pre-cancelled work never creates or owns a candidate at all.
         Assert.False(cancelledTransport.Disposed);
         Assert.True(timeoutTransport.Disposed);
+    }
+
+    [Fact]
+    public async Task VerificationTransportTimeoutRetainsVerifyPhaseAndCommandIdentity()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            VerificationFailure = new RemoteTransportException(RemoteTransportFailureKind.Timeout),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Timeout, result.VerificationErrorCode);
+        Assert.Single(transport.Commands);
+        Assert.True(transport.Disposed);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task WorkflowTimeoutDuringMinimumCommandRetainsVerifyPhaseAndCommandIdentity()
+    {
+        var transport = new RecordingKeyAuthenticationTransport { BlockVerification = true };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        var verification = workflow.VerifyAsync(CreateRequest(TimeSpan.FromSeconds(1)));
+
+        await transport.VerificationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await verification.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Timeout, result.VerificationErrorCode);
+        Assert.Equal(OperationVerification.NotRun, result.Result.Verification);
+        Assert.Single(transport.Commands);
+        Assert.True(transport.Disposed);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, terminal.CommandId);
     }
 
     [Fact]
@@ -324,6 +372,8 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
 
         public Exception? ConnectFailure { get; init; }
 
+        public Exception? VerificationFailure { get; init; }
+
         public Exception? DisposeFailure { get; init; }
 
         public Action? OnDispose { get; init; }
@@ -351,6 +401,11 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
         public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
             Commands.Add(command);
+            if (VerificationFailure is not null)
+            {
+                throw VerificationFailure;
+            }
+
             if (BlockVerification)
             {
                 VerificationEntered.TrySetResult();
