@@ -65,6 +65,33 @@ public sealed class OpenSshConfigEditorScenarioTests
     }
 
     [Fact]
+    public async Task NewAliasWithWildcardIdentityFailsWithoutMutatingLocalConfig()
+    {
+        using var services = ScenarioComposition.Create("ssh.config.edit.new-alias-wildcard-identity");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var paths = services.GetRequiredService<IPlatformPaths>();
+        var request = Request(paths);
+        var configPath = paths.ResolvePath(LocalStorageArea.Ssh, "config");
+        var extraIdentity = paths.ResolvePath(LocalStorageArea.Ssh, "another_id");
+        var original = Encoding.UTF8.GetBytes($"# preserved local config\nHost *\n    IdentityFile \"{extraIdentity}\"\n");
+        state.LocalFiles.Files[configPath] = original.ToArray();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var editor = new OpenSshConfigEditor(paths, services.GetRequiredService<ILocalFileStore>(), services.GetRequiredService<IDiagnosticSink>());
+
+        var result = await editor.AddAliasAsync(request, DiagnosticRunContext.StartSession().StartOperation("config_alias"), CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InheritedIdentityConflict, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(original, state.LocalFiles.Files[configPath]);
+        Assert.False(state.LocalFiles.Files.ContainsKey(configPath + ".bak"));
+        Assert.Equal(0, state.LocalFiles.AtomicWriteCount);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.Contains(recorder.Events, item => item.ErrorCode == OpenSshConfigEditErrorCatalog.InheritedIdentityConflict);
+        Assert.All(recorder.Events, item => Assert.DoesNotContain(extraIdentity, item.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task InterruptedAtomicWriteRetainsOriginalAndNeverEmitsSuccess()
     {
         using var services = ScenarioComposition.Create("ssh.config.edit.interrupted");

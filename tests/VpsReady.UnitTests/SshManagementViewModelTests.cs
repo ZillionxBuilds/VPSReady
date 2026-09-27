@@ -37,6 +37,34 @@ public sealed class SshManagementViewModelTests
     }
 
     [Fact]
+    public async Task InheritedIdentityConflictShowsSafeManualReviewGuidance()
+    {
+        await using var session = new ApplicationSession();
+        var config = new RecordingConfigEditor
+        {
+            Result = OpenSshConfigEditResult.Failure(
+                OperationResult.Failure("config-conflict-opaque", OperationErrorCode.Validation, OperationState.Unchanged),
+                OpenSshConfigEditErrorCatalog.InheritedIdentityConflict),
+        };
+        using var vm = CreateViewModel(session, config: config);
+        await vm.SelectAsync("fixture-key");
+        vm.Alias = "fixture";
+        vm.HostName = "fixture.invalid";
+        vm.UserName = "fixture";
+        vm.Port = "22";
+        vm.IsConfigConfirmed = true;
+
+        await vm.SaveConfigAsync();
+
+        Assert.Equal(SshManagementScreenState.Failed, vm.State);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InheritedIdentityConflict, vm.ErrorCode);
+        Assert.Contains("No config change was made", vm.Status, StringComparison.Ordinal);
+        Assert.Contains("review the local wildcard settings manually", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture.invalid", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-key", vm.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GenerateSelectDeployVerifyAndConfigJourneyUsesOnlySafePresentationState()
     {
         var root = CreateTemporaryDirectory();
@@ -284,11 +312,12 @@ public sealed class SshManagementViewModelTests
     {
         public int Calls { get; private set; }
         public OpenSshConfigEditRequest? LastRequest { get; private set; }
+        public OpenSshConfigEditResult Result { get; set; } = OpenSshConfigEditResult.Success(OperationResult.Success("config-opaque", OperationState.Unchanged), OpenSshConfigEditDisposition.Created);
         public Task<OpenSshConfigEditResult> AddAliasAsync(OpenSshConfigEditRequest request, CorrelationIds correlation, CancellationToken cancellationToken)
         {
             Calls++;
             LastRequest = request;
-            return Task.FromResult(OpenSshConfigEditResult.Success(OperationResult.Success("config-opaque", OperationState.Unchanged), OpenSshConfigEditDisposition.Created));
+            return Task.FromResult(Result);
         }
     }
 
