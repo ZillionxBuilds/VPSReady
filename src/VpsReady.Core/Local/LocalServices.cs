@@ -13,7 +13,7 @@ public enum LocalFileCollisionPolicy
     ReplaceWithBackup
 }
 
-/// <summary>Expected target state for a compare-before-replace local write.</summary>
+/// <summary>Expected target state required before a conditional atomic local write.</summary>
 public sealed class LocalFileSnapshot
 {
     public LocalFileSnapshot(bool exists, ReadOnlyMemory<byte> contents)
@@ -33,10 +33,18 @@ public sealed class LocalFileSnapshot
     public override string ToString() => $"LocalFileSnapshot [exists={Exists}, contents=redacted]";
 }
 
-/// <summary>Raised when a local target no longer matches its expected snapshot.</summary>
+/// <summary>Raised when a local target no longer matches its expected snapshot or a raced replacement was safely recovered.</summary>
 public sealed class LocalFilePreconditionFailedException : IOException
 {
-    public LocalFilePreconditionFailedException() : base("The local file changed since it was read.") { }
+    public LocalFilePreconditionFailedException(bool recoverySucceeded = false) : base("The local file changed since it was read.") => RecoverySucceeded = recoverySucceeded;
+
+    public bool RecoverySucceeded { get; }
+}
+
+/// <summary>Raised when a concurrent local-file change prevents the attempted write from being safely recovered.</summary>
+public sealed class LocalFileRecoveryFailedException : IOException
+{
+    public LocalFileRecoveryFailedException() : base("A concurrent local-file change prevented safe recovery.") { }
 }
 
 public sealed record AtomicWriteOptions(

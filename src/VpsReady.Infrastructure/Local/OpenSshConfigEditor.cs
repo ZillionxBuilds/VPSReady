@@ -112,10 +112,18 @@ public sealed class OpenSshConfigEditor : IOpenSshConfigEditor
             await PublishAsync(DiagnosticEventCatalog.OpenSshConfigEditCancelled, correlation, DiagnosticPhase.Apply, DiagnosticStatus.Cancelled, OperationErrorCode.Cancelled.ToStableCode(), CancellationToken.None).ConfigureAwait(false);
             return OpenSshConfigEditResult.Failure(operation, OpenSshConfigEditErrorCatalog.Cancelled);
         }
-        catch (LocalFilePreconditionFailedException)
+        catch (LocalFileRecoveryFailedException)
+        {
+            return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.LocalIo, OperationErrorCode.Recovery,
+                DiagnosticPhase.Recovery, OperationState.Unknown, OperationVerification.Unknown, OperationRecovery.Failed).ConfigureAwait(false);
+        }
+        catch (LocalFilePreconditionFailedException exception)
         {
             return await FailAsync(correlation, OpenSshConfigEditErrorCatalog.ConcurrentModification, OperationErrorCode.ConcurrentModification,
-                DiagnosticPhase.Preflight, OperationState.Unchanged, OperationVerification.NotRun).ConfigureAwait(false);
+                exception.RecoverySucceeded ? DiagnosticPhase.Recovery : DiagnosticPhase.Preflight,
+                OperationState.Unchanged,
+                OperationVerification.NotRun,
+                exception.RecoverySucceeded ? OperationRecovery.Succeeded : OperationRecovery.NotRequired).ConfigureAwait(false);
         }
         catch (UnauthorizedAccessException)
         {
