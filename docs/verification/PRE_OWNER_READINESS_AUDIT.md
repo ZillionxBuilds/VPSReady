@@ -2369,3 +2369,24 @@ absent, organization Actions-policy cause remains UNVERIFIED, and independent
 review/release integration/Owner E5 remain pending. PR #17 remains available
 for focused external review; its non-ancestor commit is not a missing source
 correction in #101. **REAL VPS: NOT TESTED.**
+
+### Exact-head E3 local-contained protocol update — 2026-09-27 UTC
+
+This supersedes the preceding `b83fcf6` E3 `NOT RUN` note. After starting the
+installed local Docker Desktop engine, `git archive HEAD` was piped into a
+disposable `linux/arm64` container using
+`mcr.microsoft.com/dotnet/sdk:10.0.400-noble`; no checkout was mounted or
+modified. `eng/run-local-contained-e3.sh` exited 0 on exact source
+`b83fcf6be9164af0da2e530c45c7b1b0f2a957ce`.
+
+SSH.NET E3 tests passed **3/3**. The runner also passed unknown-host
+fail-closed, known-host match, generated named-key authentication, wrong-key
+and wrong-password rejection, command stdout/stderr/exit-code, and timeout
+checks. The disposable sshd listened only on `127.0.0.1` inside the container;
+`docker run --rm` removed the container. No public endpoint, Owner host or
+credential was used, and no result artifact was retained on the checkout.
+This is E3 local-contained protocol evidence only; it does not prove real-VPS,
+UFW, provider-network or Owner E5 behavior. The exact source tree and prior
+E0/E1/E2/E4 evidence are unchanged. Hosted checks, independent review,
+approved release integration and Owner E5 remain pending. **REAL VPS: NOT
+TESTED.**
