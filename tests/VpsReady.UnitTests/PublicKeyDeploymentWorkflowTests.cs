@@ -94,8 +94,10 @@ public sealed class PublicKeyDeploymentWorkflowTests
         var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(transport, key, cancellation.Token);
 
         Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded);
-        Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+        var cancelled = Assert.Single(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+        Assert.Equal(OperationVerification.Passed, cancelled.Verification);
     }
 
     [Fact]

@@ -184,9 +184,11 @@ public sealed class PublicKeyDeploymentWorkflowScenarioTests
         var result = await new PublicKeyDeploymentWorkflow(diagnostics).DeployAsync(host, key, cancellation.Token);
 
         Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
         Assert.NotEmpty(host.State.Ssh.AuthorizedKeyFingerprints);
         Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentSucceeded);
-        Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+        var cancelledEvent = Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PublicKeyDeploymentCancelled && item.Phase == DiagnosticPhase.Verify);
+        Assert.Equal(OperationVerification.Passed, cancelledEvent.Verification);
     }
 
     [Fact]
