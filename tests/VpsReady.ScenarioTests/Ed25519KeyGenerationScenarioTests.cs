@@ -352,6 +352,28 @@ public sealed class Ed25519KeyGenerationScenarioTests
     }
 
     [Fact]
+    public async Task MatchingPrivateNameWithMismatchedPublicManifestFailsClosed()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(
+            transactionDirectory,
+            privateFileName: Path.GetFileName(workspace.PrivateKeyPath),
+            publicFileName: "another_ed25519.pub");
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
     public async Task CaseOnlyTransactionRecoveryFollowsFilesystemNameSemantics()
     {
         await using var workspace = new ScenarioKeyWorkspace();
