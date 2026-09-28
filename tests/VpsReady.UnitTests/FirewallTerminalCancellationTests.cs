@@ -42,13 +42,15 @@ public sealed class FirewallTerminalCancellationTests
         using var cancellation = new CancellationTokenSource();
         var sink = new CancellingSink(cancellation, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.Phase == DiagnosticPhase.Verify);
         var selected = UbuntuServerFactParser.ParseUfwRuleList(Result(ActiveWithTarget)).Snapshot.Rules[^1];
-        var transport = new RecordingTransport(Result("22"), Result(ActiveWithTarget), Result(string.Empty), Result(ActiveWithoutTarget));
+        var transport = new RecordingTransport(Result("22"), Result(ActiveWithTarget), Result(string.Empty), Result(ActiveWithoutTarget), Result(ActiveWithoutTarget));
         var workflow = new UfwSelectedRuleRemovalWorkflow(Wrap(sink));
 
         var result = await workflow.RemoveAsync(transport, new UfwRuleRemovalIntent(selected.Identity, Confirmed: true), cancellation.Token);
 
-        AssertCancelledOnly(result.Result, sink.Events, OperationState.PartiallyApplied);
-        Assert.Equal(4, transport.Commands.Count);
+        AssertCancelledOnly(result.Result, sink.Events, OperationState.Applied);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.Equal(5, transport.Commands.Count);
     }
 
     [Fact]
