@@ -89,6 +89,46 @@ public sealed class UfwToggleWorkflowScenarioTests
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
+    [Theory]
+    [InlineData("network", OperationErrorCode.Network)]
+    [InlineData("timeout", OperationErrorCode.Timeout)]
+    [InlineData("timeout-exception", OperationErrorCode.Timeout)]
+    public async Task EnableTransportFailureAfterEffectVerifiesStateWithoutFurtherMutation(
+        string failureKind,
+        OperationErrorCode expectedError)
+    {
+        var state = ScenarioHostState.CreateDefault($"scenario.c305.enable-{failureKind}-after-effect");
+        state.Ufw.Rules.Clear();
+        state.Ssh.IsConnected = true;
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var transport = new PostEffectEnableTransport(host, failureKind);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var outcome = await workflow.EnableAsync(transport, confirmed: true);
+
+        Assert.False(outcome.Result.Succeeded);
+        Assert.Equal(expectedError, outcome.Result.ErrorCode);
+        Assert.Equal(OperationState.Applied, outcome.Result.State);
+        Assert.Equal(OperationVerification.Passed, outcome.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, outcome.Result.Recovery);
+        Assert.True(outcome.SnapshotIsCurrent);
+        Assert.Contains("continuity were verified", outcome.Result.UserMessage, StringComparison.Ordinal);
+        Assert.Contains("UFW is already active", outcome.Result.NextAction, StringComparison.Ordinal);
+        Assert.Equal(ScenarioUfwStatus.Active, state.Ufw.Status);
+        Assert.True(state.Ssh.IsConnected);
+
+        var enableIndex = transport.CommandIds.IndexOf(RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.True(enableIndex >= 0);
+        Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest],
+            transport.CommandIds.Skip(enableIndex + 1));
+        Assert.DoesNotContain(transport.CommandIds.Skip(enableIndex + 1), commandId => commandId is
+            RemoteCommandCatalog.UbuntuUfwEnable or RemoteCommandCatalog.UbuntuUfwDisable or RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationFailed
+            && item.ErrorCode == expectedError.ToStableCode());
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
     [Fact]
     public async Task MalformedSessionPortEvidenceBlocksFirewallEnableBeforeMutation()
     {
@@ -508,5 +548,34 @@ public sealed class UfwToggleWorkflowScenarioTests
         }
 
         public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
+    private sealed class PostEffectEnableTransport(DeterministicScenarioHost host, string failureKind) : IRemoteTransport
+    {
+        private readonly PhasedScenarioTransport phased = new(host);
+        private bool failedAfterEnable;
+
+        public List<string> CommandIds { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            CommandIds.Add(command.Id.Value);
+            var result = await phased.ExecuteAsync(command, cancellationToken);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable && !failedAfterEnable)
+            {
+                failedAfterEnable = true;
+                throw failureKind switch
+                {
+                    "network" => new RemoteTransportException(RemoteTransportFailureKind.Network),
+                    "timeout" => new RemoteTransportException(RemoteTransportFailureKind.Timeout),
+                    "timeout-exception" => new TimeoutException("test-owned timeout after firewall effect"),
+                    _ => new InvalidOperationException("Unknown test transport failure kind."),
+                };
+            }
+
+            return result;
+        }
+
+        public ValueTask DisposeAsync() => phased.DisposeAsync();
     }
 }
