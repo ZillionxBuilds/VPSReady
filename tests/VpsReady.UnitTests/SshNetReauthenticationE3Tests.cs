@@ -140,6 +140,72 @@ public sealed class SshNetReauthenticationE3Tests
         await Assert.ThrowsAsync<InvalidOperationException>(() => clearedTransport.ConnectAsync(endpoint, cleared, TimeSpan.FromSeconds(10), CancellationToken.None));
     }
 
+    [ContainedSshFact]
+    public async Task ProductionTransportRejectsAnUnknownContainedHostKeyBeforeUsingTheSession()
+    {
+        var fixtureValue = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PASSWORD");
+        var user = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_USER");
+        var portText = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PORT");
+        Assert.False(string.IsNullOrEmpty(fixtureValue), "The contained fixture must supply a credential.");
+        Assert.False(string.IsNullOrEmpty(user), "The contained fixture must supply a user.");
+        Assert.True(int.TryParse(portText, out var port), "The contained fixture must supply a port.");
+
+        var endpoint = new RemoteEndpoint("127.0.0.1", port, user);
+        await using var transport = new SshNetRemoteTransport(new UnknownTrustStore());
+        var failure = await Assert.ThrowsAsync<RemoteTransportException>(() => transport.ConnectAsync(
+            endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None));
+
+        Assert.Equal(RemoteTransportFailureKind.HostTrust, failure.Kind);
+        Assert.Equal(KnownHostTrustState.Unknown, transport.LastHostTrustAssessment?.State);
+    }
+
+    [ContainedSshFact]
+    public async Task ProductionTransportCapturesContainedStreamsAndHonorsTimeoutAndCancellation()
+    {
+        var fixtureValue = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PASSWORD");
+        var user = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_USER");
+        var portText = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PORT");
+        var marker = Environment.GetEnvironmentVariable("VPSREADY_E3_STUB_SLEEP_MARKER");
+        Assert.False(string.IsNullOrEmpty(fixtureValue), "The contained fixture must supply a credential.");
+        Assert.False(string.IsNullOrEmpty(user), "The contained fixture must supply a user.");
+        Assert.True(int.TryParse(portText, out var port), "The contained fixture must supply a port.");
+        Assert.False(string.IsNullOrEmpty(marker) || !Path.IsPathFullyQualified(marker), "The contained fixture must supply an absolute command-stub marker.");
+
+        var endpoint = new RemoteEndpoint("127.0.0.1", port, user);
+        var commandId = RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuTimezoneCurrentRead);
+        RemoteCommand CreateCommand(TimeSpan timeout) => new(
+            commandId, "action=current-read", timeout, OutputCapturePolicy.SanitizedTruncated, 256);
+
+        try
+        {
+            await using (var transport = new SshNetRemoteTransport(new MatchingTrustStore()))
+            {
+                await transport.ConnectAsync(endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None);
+                var captured = await transport.ExecuteAsync(CreateCommand(TimeSpan.FromSeconds(5)), CancellationToken.None);
+                Assert.Equal(23, captured.ExitCode);
+                Assert.Equal("E3-STANDARD-OUTPUT\n", captured.StandardOutput);
+                Assert.Equal("E3-STANDARD-ERROR\n", captured.StandardError);
+
+                await File.WriteAllTextAsync(marker, "slow");
+                using var cancelled = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transport.ExecuteAsync(
+                    CreateCommand(TimeSpan.FromSeconds(5)), cancelled.Token));
+            }
+
+            await using (var transport = new SshNetRemoteTransport(new MatchingTrustStore()))
+            {
+                await transport.ConnectAsync(endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None);
+                var timeout = await Assert.ThrowsAsync<RemoteTransportException>(() => transport.ExecuteAsync(
+                    CreateCommand(TimeSpan.FromMilliseconds(750)), CancellationToken.None));
+                Assert.Equal(RemoteTransportFailureKind.Timeout, timeout.Kind);
+            }
+        }
+        finally
+        {
+            File.Delete(marker);
+        }
+    }
+
     private sealed class Credential(char[] value) : IPasswordCredential
     {
         private char[]? characters = value;
@@ -157,6 +223,17 @@ public sealed class SshNetReauthenticationE3Tests
         {
             Assessments++;
             return Task.FromResult(new KnownHostTrustAssessment(KnownHostTrustState.Matching, null, false));
+        }
+        public Task<KnownHostTrustAssessment> AcceptUnknownAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<KnownHostTrustAssessment> ReplaceChangedAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class UnknownTrustStore : IKnownHostTrustStore
+    {
+        public Task<KnownHostTrustAssessment> AssessAsync(KnownHostIdentity identity, HostKeyFingerprint observedFingerprint, CancellationToken cancellationToken)
+        {
+            var challenge = new KnownHostTrustChallenge(identity, observedFingerprint, KnownHostTrustState.Unknown);
+            return Task.FromResult(new KnownHostTrustAssessment(KnownHostTrustState.Unknown, challenge, false));
         }
         public Task<KnownHostTrustAssessment> AcceptUnknownAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<KnownHostTrustAssessment> ReplaceChangedAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
