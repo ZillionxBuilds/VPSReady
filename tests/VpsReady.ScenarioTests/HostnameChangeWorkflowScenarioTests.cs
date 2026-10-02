@@ -10,6 +10,34 @@ namespace VpsReady.ScenarioTests;
 public sealed class HostnameChangeWorkflowScenarioTests
 {
     [Fact]
+    public async Task ExternallyChangedHostnameInvalidatesOldPlanBeforeApply()
+    {
+        await using var services = ScenarioComposition.Create("f08-hostname-stale-plan", state => state.Hostname = "planned-from.example");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var workflow = new HostnameChangeWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics);
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var plan = await workflow.PlanAsync(host, "requested.example");
+        Assert.True(plan.IsReady);
+
+        state.Hostname = "external-change.example";
+        var result = await workflow.ChangeAsync(host, plan, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(HostnameChangeErrorCatalog.StalePlan, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal("external-change.example", state.Hostname);
+        Assert.Contains(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId
+            && item.EventId == DiagnosticEventCatalog.HostnameChangeFailed
+            && item.Phase == DiagnosticPhase.Preflight
+            && item.CommandId == RemoteCommandCatalog.UbuntuHostnameChangeRead);
+        Assert.DoesNotContain(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId
+            && item.CommandId == RemoteCommandCatalog.UbuntuHostnameChangeApply);
+        Assert.DoesNotContain(recorder.Events, item => item.Correlation.OperationId == result.Result.OperationId && item.EventId == DiagnosticEventCatalog.HostnameChangeSucceeded);
+    }
+
+    [Fact]
     public async Task ConfirmedPlanMutatesScenarioHostThenFreshlyVerifiesWithCorrelatedSafeDiagnostics()
     {
         const string current = "scenario-old.example";

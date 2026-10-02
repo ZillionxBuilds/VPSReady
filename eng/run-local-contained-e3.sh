@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# E3 only: creates a disposable OpenSSH daemon bound to loopback on a hosted
-# CI runner. It does not contact a public endpoint, a VPS, or an Owner host.
+# E3 only: creates a disposable OpenSSH daemon bound to loopback in an
+# Ubuntu-family test environment. It never contacts a VPS or public SSH host.
 set -euo pipefail
 
 if [[ "$(uname -s)" != 'Linux' ]] || ! command -v apt-get >/dev/null; then
@@ -9,33 +9,71 @@ if [[ "$(uname -s)" != 'Linux' ]] || ! command -v apt-get >/dev/null; then
 fi
 
 runtime_root="$(mktemp -d)"
+# The disposable sshd reads only this test-owned public-key file through an
+# unprivileged command. Other fixture material retains its restrictive mode.
+chmod 711 "$runtime_root"
+sleep_marker="$runtime_root/e3-command-sleep"
+authorized_dir="$runtime_root/authorized"
+mkdir -m 755 "$authorized_dir"
+authorized_file="$authorized_dir/vpsready-e3-current.pub"
 service_user="vpsreadye3$RANDOM$RANDOM"
 service_group="$service_user"
 daemon_pid=''
+fixture_bin=''
+
+as_root() {
+  if [[ "$(id -u)" == '0' ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
 
 cleanup() {
   local status=$?
-  if [[ -n "$daemon_pid" ]] && kill -0 "$daemon_pid" 2>/dev/null; then
-    kill "$daemon_pid" 2>/dev/null || true
-    wait "$daemon_pid" 2>/dev/null || true
+  if [[ -n "$daemon_pid" ]] && as_root kill -0 "$daemon_pid" 2>/dev/null; then
+    as_root kill "$daemon_pid" 2>/dev/null || true
+    for _ in $(seq 1 40); do
+      as_root kill -0 "$daemon_pid" 2>/dev/null || break
+      sleep 0.1
+    done
   fi
-  sudo userdel --remove "$service_user" 2>/dev/null || true
-  rm -rf "$runtime_root"
+  as_root userdel --remove "$service_user" 2>/dev/null || true
+  as_root groupdel "$service_group" 2>/dev/null || true
+  if [[ -n "$fixture_bin" ]]; then
+    as_root rm -rf -- "$fixture_bin"
+  fi
+  rm -rf -- "$runtime_root"
   exit "$status"
 }
 trap cleanup EXIT
 
-sudo apt-get update -qq
-sudo apt-get install -y --no-install-recommends openssh-client openssh-server >/dev/null
+as_root apt-get update -qq
+as_root apt-get install -y --no-install-recommends openssh-client openssh-server >/dev/null
 
 login_value="$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')"
 wrong_value="$(od -An -N18 -tx1 /dev/urandom | tr -d ' \n')"
 port="$(shuf -i 42000-52000 -n 1)"
 
-sudo groupadd "$service_group"
-sudo useradd --create-home --gid "$service_group" --shell /bin/sh "$service_user"
-printf '%s:%s\n' "$service_user" "$login_value" | sudo chpasswd
-sudo mkdir -p /run/sshd
+as_root groupadd "$service_group"
+as_root useradd --create-home --gid "$service_group" --shell /bin/sh "$service_user"
+printf '%s:%s\n' "$service_user" "$login_value" | as_root chpasswd
+as_root mkdir -p /run/sshd
+fixture_bin="$(as_root mktemp -d /run/vpsready-e3-bin.XXXXXX)"
+as_root chmod 755 "$fixture_bin"
+as_root tee "$fixture_bin/timedatectl" >/dev/null <<'TIMEZONE'
+#!/bin/sh
+if [ "$1" = 'show' ] && [ "$2" = '--property=Timezone' ] && [ "$3" = '--value' ]; then
+  if [ -f "$VPSREADY_E3_STUB_SLEEP_MARKER" ]; then
+    sleep 30
+  fi
+  printf 'E3-STANDARD-OUTPUT\n'
+  printf 'E3-STANDARD-ERROR\n' >&2
+  exit 23
+fi
+exec /usr/bin/timedatectl "$@"
+TIMEZONE
+as_root chmod 755 "$fixture_bin/timedatectl"
 
 ssh-keygen -q -t ed25519 -N '' -f "$runtime_root/host_ed25519" >/dev/null
 cat > "$runtime_root/sshd_config" <<CONFIG
@@ -44,6 +82,9 @@ ListenAddress 127.0.0.1
 HostKey $runtime_root/host_ed25519
 PidFile $runtime_root/sshd.pid
 AuthorizedKeysFile none
+AuthorizedKeysCommand /usr/bin/cat $authorized_file
+AuthorizedKeysCommandUser nobody
+PubkeyAuthentication yes
 PasswordAuthentication yes
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
@@ -52,10 +93,11 @@ PermitRootLogin no
 AllowUsers $service_user
 PrintMotd no
 LogLevel ERROR
+SetEnv PATH=$fixture_bin:/usr/bin:/bin VPSREADY_E3_STUB_SLEEP_MARKER=$sleep_marker
 CONFIG
 
-sudo /usr/sbin/sshd -D -f "$runtime_root/sshd_config" -E "$runtime_root/sshd.log" &
-daemon_pid=$!
+as_root /usr/sbin/sshd -f "$runtime_root/sshd_config" -E "$runtime_root/sshd.log"
+daemon_pid="$(as_root cat "$runtime_root/sshd.pid")"
 for _ in $(seq 1 40); do
   if ssh-keyscan -T 1 -p "$port" 127.0.0.1 >/dev/null 2>&1; then
     break
@@ -104,6 +146,8 @@ chmod 600 "$runtime_root/known_hosts"
 # disposable loopback daemon. The fixture values remain process environment
 # only and are never written to test output or artifacts.
 VPSREADY_E3_DOTNET_PASSWORD="$login_value" VPSREADY_E3_DOTNET_USER="$service_user" VPSREADY_E3_DOTNET_PORT="$port" \
+  VPSREADY_E3_STUB_SLEEP_MARKER="$sleep_marker" \
+  VPSREADY_E3_AUTHORIZED_KEY_FILE="$authorized_file" \
   dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --filter "Category=E3" --logger "trx;LogFileName=e3-production-sshnet.trx" --results-directory TestResults
 
 set +e
@@ -142,14 +186,22 @@ test "$timeout_status" -eq 124
 mkdir -p TestResults/e3
 cat > TestResults/e3/local-contained-protocol.txt <<'RESULT'
 evidence_class=E3 local-contained protocol
-environment=disposable loopback OpenSSH on the CI runner
-password_auth=PASS
-host_key_unknown_fail_closed=PASS
-host_key_known_match=PASS
-minimum_command_stdout_stderr_exit=PASS
-wrong_password_rejected=PASS
-timeout=PASS
-cleanup=scheduled by exit trap
+environment=disposable Ubuntu-family loopback OpenSSH; no port published
+production_sshnet_password_auth_and_reconnect=PASS
+production_sshnet_generated_named_key_auth=PASS
+production_sshnet_wrong_key_rejected=PASS
+production_sshnet_unknown_host_fail_closed=PASS
+production_sshnet_explicit_persisted_known_host_match=PASS
+production_sshnet_changed_host_fail_closed=PASS
+production_sshnet_wrong_password_rejected=PASS
+production_sshnet_bounded_stdout_stderr_exit=PASS
+production_sshnet_command_timeout_and_cancellation=PASS
+openssh_cli_unknown_host_fail_closed=PASS
+openssh_cli_known_host_match=PASS
+openssh_cli_wrong_password_rejected=PASS
+openssh_cli_stdout_stderr_exit=PASS
+openssh_cli_timeout=PASS
+cleanup=exit trap removes daemon,user,group,fixture and temporary files
 REAL VPS: NOT TESTED
 RESULT
 

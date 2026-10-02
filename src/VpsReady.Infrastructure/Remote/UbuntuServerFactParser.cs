@@ -17,12 +17,13 @@ public static partial class UbuntuServerFactParser
     private static readonly Regex SafeAtom = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$", RegexOptions.CultureInvariant);
     private static readonly Regex KeyValue = new("^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$", RegexOptions.CultureInvariant);
     private static readonly Regex MemInfo = new("^(?<key>MemTotal|MemAvailable):\\s*(?<value>[0-9]+)\\s*kB$", RegexOptions.CultureInvariant);
-    private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*[0-9]+$", RegexOptions.CultureInvariant);
-    private static readonly Regex CpuModel = new("^(?:model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*(?<index>[0-9]+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex CpuModel = new("^(?<key>model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UptimeDecimal = new("\\A[0-9]+(?:\\.[0-9]+)?\\z", RegexOptions.CultureInvariant);
     private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
-    private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})(?::(?<endPort>[1-9][0-9]{0,4}))?/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
     private static readonly Regex UfwPartialRule = new("^\\[\\s*[0-9]+(?:\\]|$)", RegexOptions.CultureInvariant);
     private const int MaximumUfwRuleRows = 512;
 
@@ -41,7 +42,7 @@ public static partial class UbuntuServerFactParser
             return UfwSnapshot.StateOnly(UfwFirewallState.Absent);
         }
 
-        return lines.FirstOrDefault() switch
+        return ReadUnambiguousUfwStatusHeader(lines) switch
         {
             "Status: inactive" => UfwSnapshot.StateOnly(UfwFirewallState.Inactive),
             "Status: active" => UfwSnapshot.StateOnly(UfwFirewallState.Active),
@@ -144,13 +145,23 @@ public static partial class UbuntuServerFactParser
     {
         var parts = SplitSingleLine(output);
         if (parts is null || parts.Length != 2
+            || !UptimeDecimal.IsMatch(parts[0]) || !UptimeDecimal.IsMatch(parts[1])
             || !double.TryParse(parts[0], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds)
-            || !double.IsFinite(seconds) || seconds < 0 || seconds > TimeSpan.MaxValue.TotalSeconds)
+            || !double.TryParse(parts[1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var idleSeconds)
+            || !double.IsFinite(seconds) || !double.IsFinite(idleSeconds)
+            || seconds >= TimeSpan.MaxValue.TotalSeconds)
         {
             return ServerFact.Unknown<TimeSpan>();
         }
 
-        return ServerFact.Known(TimeSpan.FromSeconds(seconds));
+        try
+        {
+            return ServerFact.Known(TimeSpan.FromSeconds(seconds));
+        }
+        catch (OverflowException)
+        {
+            return ServerFact.Unknown<TimeSpan>();
+        }
     }
 
     public static ServerFact<PrivilegeCapability> ParsePrivilege(string output)
@@ -177,14 +188,42 @@ public static partial class UbuntuServerFactParser
     public static ServerFact<CpuFacts> ParseCpu(string output)
     {
         var lines = Lines(output);
-        var count = lines.Count(line => CpuProcessor.IsMatch(line));
-        var model = lines.Select(line => CpuModel.Match(line)).FirstOrDefault(match => match.Success)?.Groups["value"].Value.Trim();
-        if (count <= 0 || !string.IsNullOrEmpty(model) && !IsSafeDisplayValue(model))
+        var processorIndices = new HashSet<int>();
+        foreach (var line in lines.Where(line => line.StartsWith("processor", StringComparison.Ordinal)
+            && (line.Length == "processor".Length || line["processor".Length] is ':' or ' ' or '\t')))
+        {
+            var match = CpuProcessor.Match(line);
+            if (!match.Success
+                || !int.TryParse(match.Groups["index"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+                || !processorIndices.Add(index))
+            {
+                return ServerFact.Unknown<CpuFacts>();
+            }
+        }
+
+        var modelNames = new HashSet<string>(StringComparer.Ordinal);
+        var hardwareNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in lines.Where(line => line.StartsWith("model name", StringComparison.Ordinal)
+            || line.StartsWith("Hardware", StringComparison.Ordinal)))
+        {
+            var match = CpuModel.Match(line);
+            var value = match.Groups["value"].Value.Trim();
+            if (!match.Success || !IsSafeDisplayValue(value))
+            {
+                return ServerFact.Unknown<CpuFacts>();
+            }
+
+            var names = match.Groups["key"].Value == "model name" ? modelNames : hardwareNames;
+            names.Add(value);
+        }
+
+        if (processorIndices.Count == 0)
         {
             return ServerFact.Unknown<CpuFacts>();
         }
 
-        return ServerFact.Known(new CpuFacts(count, string.IsNullOrWhiteSpace(model) ? null : model));
+        var candidates = modelNames.Count > 0 ? modelNames : hardwareNames;
+        return ServerFact.Known(new CpuFacts(processorIndices.Count, candidates.Count == 1 ? candidates.Single() : null));
     }
 
     public static ServerFact<MemoryFacts> ParseMemory(string output)
@@ -192,14 +231,19 @@ public static partial class UbuntuServerFactParser
         var values = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach (var line in Lines(output))
         {
-            var match = MemInfo.Match(line);
-            if (!match.Success || !long.TryParse(match.Groups["value"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes)
-                || kibibytes > long.MaxValue / BytesPerKiB)
+            if (!line.StartsWith("MemTotal:", StringComparison.Ordinal)
+                && !line.StartsWith("MemAvailable:", StringComparison.Ordinal))
             {
                 continue;
             }
 
-            values[match.Groups["key"].Value] = kibibytes * BytesPerKiB;
+            var match = MemInfo.Match(line);
+            if (!match.Success || !long.TryParse(match.Groups["value"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes)
+                || kibibytes > long.MaxValue / BytesPerKiB
+                || !values.TryAdd(match.Groups["key"].Value, kibibytes * BytesPerKiB))
+            {
+                return ServerFact.Unknown<MemoryFacts>();
+            }
         }
 
         return values.TryGetValue("MemTotal", out var total) && values.TryGetValue("MemAvailable", out var available)
@@ -222,7 +266,8 @@ public static partial class UbuntuServerFactParser
             || !TryParseBytes(match.Groups["used"].Value, out var used)
             || !TryParseBytes(match.Groups["available"].Value, out var available)
             || !int.TryParse(match.Groups["percent"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var percent)
-            || size <= 0 || used < 0 || available < 0 || used > size || available > size || percent is < 0 or > 100)
+            || size <= 0 || used < 0 || available < 0 || used > size || available > size
+            || used > size - available || percent is < 0 or > 100)
         {
             return ServerFact.Unknown<RootDiskFacts>();
         }
@@ -240,13 +285,33 @@ public static partial class UbuntuServerFactParser
 
     public static ServerFact<UfwStatus> ParseUfwStatus(string output)
     {
-        var status = Lines(output).FirstOrDefault(line => line.StartsWith("Status:", StringComparison.Ordinal));
+        var status = ReadUnambiguousUfwStatusHeader(Lines(output));
         return status switch
         {
             "Status: active" => ServerFact.Known(UfwStatus.Active),
             "Status: inactive" => ServerFact.Known(UfwStatus.Inactive),
             _ => ServerFact.Unknown<UfwStatus>(),
         };
+    }
+
+    private static string? ReadUnambiguousUfwStatusHeader(string[] lines)
+    {
+        if (lines.Length == 0 || lines[0] is not ("Status: active" or "Status: inactive"))
+        {
+            return null;
+        }
+
+        // UFW may print a multi-line rule listing after the first line, but a
+        // second status line makes the state contradictory rather than known.
+        for (var index = 1; index < lines.Length; index++)
+        {
+            if (lines[index].StartsWith("Status:", StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return lines[0];
     }
 
     private static ServerFact<string> ParseSafeSingleAtom(string output)
@@ -319,11 +384,22 @@ public static partial class UbuntuServerFactParser
             return (null, UfwPartialRule.IsMatch(line) ? UfwRuleListReadStatus.Partial : UfwRuleListReadStatus.Malformed);
         }
 
+        var hasEndPort = match.Groups["endPort"].Success;
         if (!int.TryParse(match.Groups["number"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
             || !int.TryParse(match.Groups["port"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
             || port is < 1 or > 65535)
         {
             return (null, UfwRuleListReadStatus.Unsupported);
+        }
+        int? endPort = null;
+        if (hasEndPort)
+        {
+            if (!int.TryParse(match.Groups["endPort"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
+                || end <= port || end > 65535)
+            {
+                return (null, UfwRuleListReadStatus.Unsupported);
+            }
+            endPort = end;
         }
 
         var protocol = match.Groups["protocol"].Value switch
@@ -364,8 +440,8 @@ public static partial class UbuntuServerFactParser
             return (null, UfwRuleListReadStatus.Unsupported);
         }
 
-        var identity = UfwRuleIdentity.Create(number, protocol.Value, port, normalizedSource, action.Value, family);
-        return (new UfwRule(identity, number, protocol.Value, port, normalizedSource, action.Value, family), UfwRuleListReadStatus.Complete);
+        var identity = UfwRuleIdentity.Create(number, protocol.Value, port, normalizedSource, action.Value, family, endPort);
+        return (new UfwRule(identity, number, protocol.Value, port, normalizedSource, action.Value, family, endPort), UfwRuleListReadStatus.Complete);
     }
 
     private static bool TryParseUfwSource(string source, UfwIpFamily family, out string normalizedSource)
@@ -387,8 +463,11 @@ public static partial class UbuntuServerFactParser
             return false;
         }
 
+        // Numeric parsers may accept a trailing NUL; a rule from untrusted UFW
+        // output must contain only the ASCII digits UFW actually prints.
         if (prefixText is not null
-            && (!int.TryParse(prefixText, NumberStyles.None, CultureInfo.InvariantCulture, out var prefix)
+            && (!prefixText.All(char.IsAsciiDigit)
+                || !int.TryParse(prefixText, NumberStyles.None, CultureInfo.InvariantCulture, out var prefix)
                 || prefix < 0
                 || prefix > (family == UfwIpFamily.Ipv4 ? 32 : 128)))
         {

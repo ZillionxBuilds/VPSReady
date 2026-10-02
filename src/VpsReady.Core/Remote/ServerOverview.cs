@@ -13,4 +13,7 @@ public interface IServerOverviewReader
 {
     Task<ServerOverviewRead> ReadAsync(IRemoteTransport transport, RemoteEndpoint endpoint,
         CorrelationIds correlation, CancellationToken cancellationToken = default);
+
+    Task<ServerOverviewRead> ReadAsync(IRemoteTransport transport, RemoteEndpoint endpoint,
+        SessionOperationDiagnostics sessionDiagnostics, CancellationToken cancellationToken = default);
 }

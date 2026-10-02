@@ -13,10 +13,45 @@ public enum LocalFileCollisionPolicy
     ReplaceWithBackup
 }
 
+/// <summary>Expected target state required before a conditional atomic local write.</summary>
+public sealed class LocalFileSnapshot
+{
+    public LocalFileSnapshot(bool exists, ReadOnlyMemory<byte> contents)
+    {
+        if (!exists && !contents.IsEmpty)
+        {
+            throw new ArgumentException("A missing target cannot have expected contents.", nameof(contents));
+        }
+
+        Exists = exists;
+        Contents = exists ? new ReadOnlyMemory<byte>(contents.ToArray()) : ReadOnlyMemory<byte>.Empty;
+    }
+
+    public bool Exists { get; }
+    public ReadOnlyMemory<byte> Contents { get; }
+
+    public override string ToString() => $"LocalFileSnapshot [exists={Exists}, contents=redacted]";
+}
+
+/// <summary>Raised when a local target no longer matches its expected snapshot or a raced replacement was safely recovered.</summary>
+public sealed class LocalFilePreconditionFailedException : IOException
+{
+    public LocalFilePreconditionFailedException(bool recoverySucceeded = false) : base("The local file changed since it was read.") => RecoverySucceeded = recoverySucceeded;
+
+    public bool RecoverySucceeded { get; }
+}
+
+/// <summary>Raised when a concurrent local-file change prevents the attempted write from being safely recovered.</summary>
+public sealed class LocalFileRecoveryFailedException : IOException
+{
+    public LocalFileRecoveryFailedException() : base("A concurrent local-file change prevented safe recovery.") { }
+}
+
 public sealed record AtomicWriteOptions(
     LocalFileCollisionPolicy CollisionPolicy = LocalFileCollisionPolicy.Reject,
     bool RestrictPermissions = true,
-    bool CreateBackup = true);
+    bool CreateBackup = true,
+    LocalFileSnapshot? ExpectedTargetSnapshot = null);
 
 public sealed record AtomicWriteResult(string TargetPath, string? BackupPath, bool ReplacedExisting);
 
@@ -135,6 +170,7 @@ public interface ILocalFileStore
 public interface IRecoverableLocalFileStore : ILocalFileStore
 {
     Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken);
+    Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken);
 }
 
 public interface ISecureLocalStorage

@@ -8,14 +8,16 @@ public static class OpenSshConfigEditErrorCatalog
 {
     public const string InvalidInput = "OPENSSH_CONFIG_INPUT_INVALID";
     public const string AliasExists = "OPENSSH_CONFIG_ALIAS_EXISTS";
+    public const string InheritedIdentityConflict = "OPENSSH_CONFIG_INHERITED_IDENTITY_CONFLICT";
     public const string DuplicateAlias = "OPENSSH_CONFIG_ALIAS_DUPLICATE";
     public const string InvalidConfig = "OPENSSH_CONFIG_INVALID";
     public const string Permission = "OPENSSH_CONFIG_PERMISSION_FAILED";
     public const string LocalIo = "OPENSSH_CONFIG_IO_FAILED";
+    public const string ConcurrentModification = "OPENSSH_CONFIG_CHANGED";
     public const string Cancelled = "OPENSSH_CONFIG_EDIT_CANCELLED";
 
     public static IReadOnlyCollection<string> All { get; } =
-    [InvalidInput, AliasExists, DuplicateAlias, InvalidConfig, Permission, LocalIo, Cancelled];
+    [InvalidInput, AliasExists, InheritedIdentityConflict, DuplicateAlias, InvalidConfig, Permission, LocalIo, ConcurrentModification, Cancelled];
 }
 
 /// <summary>

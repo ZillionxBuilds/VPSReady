@@ -93,7 +93,10 @@ public sealed class SystemActionsViewModelTests
         Assert.False(viewModel.HasUpgradePlan);
         Assert.False(viewModel.IsUpgradeConfirmed);
         Assert.False(viewModel.CanUpgrade);
-        Assert.Contains(diagnostics.Events, entry => entry.EventId == DiagnosticEventCatalog.PackageUpgradeSucceeded && entry.Phase == DiagnosticPhase.Verify);
+        Assert.Contains(diagnostics.Events, entry => entry.EventId == DiagnosticEventCatalog.PackageUpgradeCancelled
+            && entry.Phase == DiagnosticPhase.Apply && entry.CommandId == RemoteCommandCatalog.UbuntuAptUpgradeApply);
+        Assert.DoesNotContain(diagnostics.Events, entry => entry.EventId == DiagnosticEventCatalog.PackageUpgradeSucceeded);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuAptUpgradeVerify, transport.Commands);
         Assert.DoesNotContain("test-host", viewModel.Status, StringComparison.Ordinal);
     }
 
@@ -102,11 +105,13 @@ public sealed class SystemActionsViewModelTests
     private sealed class DelayedUpgradeTransport : IRemoteTransport
     {
         public int PlanCount { get; set; } = 1;
+        public List<string> Commands { get; } = [];
         public TaskCompletionSource ApplyEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource AllowLateCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
         {
+            Commands.Add(command.Id.Value);
             switch (command.Id.Value)
             {
                 case RemoteCommandCatalog.UbuntuAptUpgradePlan:

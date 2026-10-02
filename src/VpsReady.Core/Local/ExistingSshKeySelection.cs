@@ -117,7 +117,33 @@ public interface IExistingSshKeySelector
         CancellationToken cancellationToken);
 }
 
-public sealed record SelectedPublicKeyReadResult(OperationResult Operation, PublicKeyDeploymentMaterial? Material)
+public sealed class SelectedPublicKeyReadResult
 {
+    public SelectedPublicKeyReadResult(
+        OperationResult operation,
+        PublicKeyDeploymentMaterial? material,
+        string? selectionErrorCode = null)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (selectionErrorCode is not null && !ExistingSshKeySelectionErrorCatalog.All.Contains(selectionErrorCode, StringComparer.Ordinal))
+        {
+            throw new ArgumentException("An approved existing-key error code is required.", nameof(selectionErrorCode));
+        }
+        if (operation.Succeeded && selectionErrorCode is not null)
+        {
+            throw new ArgumentException("A successful public-key read cannot carry a failure code.", nameof(selectionErrorCode));
+        }
+
+        Operation = operation;
+        Material = material;
+        SelectionErrorCode = selectionErrorCode;
+    }
+
+    public OperationResult Operation { get; }
+
+    public PublicKeyDeploymentMaterial? Material { get; }
+
+    public string? SelectionErrorCode { get; }
+
     public override string ToString() => "SelectedPublicKeyReadResult [material redacted]";
 }

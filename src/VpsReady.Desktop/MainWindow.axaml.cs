@@ -38,7 +38,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void ExportSanitizedSupportBundleAsync(string? runId)
+    private async void ExportSanitizedSupportBundleAsync(string? runId, string? operationId)
     {
         try
         {
@@ -51,7 +51,7 @@ public partial class MainWindow : Window
             var path = folder?.Path.LocalPath;
             if (!string.IsNullOrWhiteSpace(path) && viewModel?.ActivityDiagnostics is not null)
             {
-                await viewModel.ActivityDiagnostics.ExportSanitizedSupportBundleAsync(path, runId);
+                await viewModel.ActivityDiagnostics.ExportSanitizedSupportBundleAsync(path, runId, operationId);
             }
         }
         catch
@@ -82,6 +82,14 @@ public partial class MainWindow : Window
         finally
         {
             connection.SecretInput.Clear();
+        }
+    }
+
+    private async void ConnectionIdentityTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection)
+        {
+            await connection.InvalidateForIdentityEditAsync();
         }
     }
 
@@ -239,16 +247,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var selected = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        await LocalKeyPickerFlow.GenerateAsync(ssh, ssh.NewKeyName, async () =>
         {
-            Title = "Choose a local private-key destination",
-            SuggestedFileName = "id_ed25519",
+            var selected = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Choose a local folder for the named SSH key pair",
+                AllowMultiple = false,
+            });
+            return selected.Count == 1 ? selected[0].Path.LocalPath : null;
         });
-        var path = selected?.Path.LocalPath;
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            await ssh.GenerateAsync(path);
-        }
     }
 
     private async void SelectSshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -258,16 +265,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var selected = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        await LocalKeyPickerFlow.SelectAsync(ssh, async () =>
         {
-            Title = "Select a local private key",
-            AllowMultiple = false,
+            var selected = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Select a local private key",
+                AllowMultiple = false,
+            });
+            return selected.Count == 1 ? selected[0].Path.LocalPath : null;
         });
-        var path = selected.Count == 1 ? selected[0].Path.LocalPath : null;
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            await ssh.SelectAsync(path);
-        }
     }
 
     private async void DeploySshKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

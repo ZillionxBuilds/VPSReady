@@ -1,4 +1,5 @@
 using VpsReady.Application;
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
@@ -182,5 +183,10 @@ public sealed class FirewallSessionFreshnessTests
         public Task<FirewallOperationResult> RemoveAsync(IRemoteTransport transport, UfwRuleRemovalIntent intent, CancellationToken cancellationToken = default) { RemoveCalls++; Removal = intent; return Task.FromResult(new FirewallOperationResult(OperationResult.Success("fixture-remove"), Snapshot) { SnapshotIsCurrent = true, SessionSshPort = ServerPort }); }
         public Task<FirewallOperationResult> EnableAsync(IRemoteTransport transport, bool confirmed, CancellationToken cancellationToken = default) => throw new InvalidOperationException();
         public Task<FirewallOperationResult> DisableAsync(IRemoteTransport transport, bool confirmed, CancellationToken cancellationToken = default) => throw new InvalidOperationException();
+        public Task<FirewallRefreshOperationResult> RefreshAsync(IRemoteTransport transport, UfwSnapshot previous, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => RefreshAsync(transport, previous, cancellationToken);
+        public Task<FirewallOperationResult> AddAsync(IRemoteTransport transport, UfwAllowRuleInput input, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => AddAsync(transport, input, cancellationToken);
+        public Task<FirewallOperationResult> RemoveAsync(IRemoteTransport transport, UfwRuleRemovalIntent intent, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => RemoveAsync(transport, intent, cancellationToken);
+        public Task<FirewallOperationResult> EnableAsync(IRemoteTransport transport, bool confirmed, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => EnableAsync(transport, confirmed, cancellationToken);
+        public Task<FirewallOperationResult> DisableAsync(IRemoteTransport transport, bool confirmed, SessionOperationDiagnostics diagnostics, CancellationToken cancellationToken = default) => DisableAsync(transport, confirmed, cancellationToken);
     }
 }

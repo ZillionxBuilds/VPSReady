@@ -24,9 +24,10 @@ public partial class App : Avalonia.Application
             catch (Exception startupException)
             {
                 // Do not surface exception text here: startup exceptions can contain local paths
-                // or configuration values. Later diagnostics work owns persistence and export.
-                MinimalSafeStartupJournal.TryRecord();
-                desktop.MainWindow = new MainWindow(AppViewModel.CreateSafeStartupFailure(startupException));
+                // or configuration values. The minimal record contains only fixed safe fields.
+                var startupRecord = MinimalSafeStartupJournal.TryRecord();
+                desktop.MainWindow = new MainWindow(AppViewModel.CreateSafeStartupFailure(
+                    startupException, startupRecord.ErrorId, startupRecord.JournalPath));
             }
         }
 

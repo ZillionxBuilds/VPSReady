@@ -323,6 +323,80 @@ public sealed class Ed25519KeyGenerationScenarioTests
         Assert.False(File.Exists(workspace.PublicKeyPath));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MalformedOrTamperedUnrelatedTransactionStillFailsClosed(bool unexpectedEntry)
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(
+            transactionDirectory,
+            privateFileName: "another_ed25519",
+            publicFileName: unexpectedEntry ? "another_ed25519.pub" : "wrong.pub");
+        if (unexpectedEntry)
+        {
+            await File.WriteAllTextAsync(Path.Combine(transactionDirectory, "unexpected-entry"), "test-only sentinel");
+        }
+
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
+    public async Task MatchingPrivateNameWithMismatchedPublicManifestFailsClosed()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(
+            transactionDirectory,
+            privateFileName: Path.GetFileName(workspace.PrivateKeyPath),
+            publicFileName: "another_ed25519.pub");
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        AssertRecoveryFailure(result);
+        Assert.True(Directory.Exists(transactionDirectory));
+        Assert.False(File.Exists(workspace.PrivateKeyPath));
+        Assert.False(File.Exists(workspace.PublicKeyPath));
+    }
+
+    [Fact]
+    public async Task CaseOnlyTransactionRecoveryFollowsFilesystemNameSemantics()
+    {
+        await using var workspace = new ScenarioKeyWorkspace();
+        var caseProbe = Path.Combine(workspace.Root, "CaseProbe");
+        await File.WriteAllTextAsync(caseProbe, "probe");
+        var caseInsensitive = File.Exists(Path.Combine(workspace.Root, "caseprobe"));
+        File.Delete(caseProbe);
+
+        var transactionDirectory = CreateTransactionDirectory(workspace.Root);
+        await WriteManifestAsync(transactionDirectory, privateFileName: "ID_ED25519", publicFileName: "ID_ED25519.pub");
+        var generator = new Ed25519OpenSshKeyPairGenerator(new ScenarioKeyDiagnosticSink());
+
+        var result = await generator.GenerateAsync(
+            new LocalEd25519KeyGenerationRequest(workspace.PrivateKeyPath),
+            DiagnosticRunContext.StartSession().StartOperation("generate_key"),
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.True(File.Exists(workspace.PrivateKeyPath));
+        Assert.True(File.Exists(workspace.PublicKeyPath));
+        Assert.Equal(!caseInsensitive, Directory.Exists(transactionDirectory));
+    }
+
     [Fact]
     public async Task RestartRecoveryFailsClosedAndPreservesUnexpectedUserFinals()
     {
@@ -411,7 +485,7 @@ public sealed class Ed25519KeyGenerationScenarioTests
     {
         var transactionName = Path.GetFileName(transactionDirectory);
         var derivedTransactionId = transactionName[".vpsready-keytxn-".Length..];
-        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\"}}";
+        return $"{{\"Version\":1,\"TransactionId\":\"{transactionId ?? derivedTransactionId}\",\"PrivateFileName\":\"{privateFileName}\",\"PublicFileName\":\"{publicFileName}\",\"OwnerProcessId\":2147483647,\"OwnerProcessStartTimeUtcTicks\":1}}";
     }
 }
 

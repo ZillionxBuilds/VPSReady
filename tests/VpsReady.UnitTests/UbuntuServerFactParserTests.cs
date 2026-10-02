@@ -6,6 +6,79 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class UbuntuServerFactParserTests
 {
+    [Theory]
+    [InlineData("processor : 0\nmodel name : Test CPU\nprocessor : 1\nprocessor : 1")]
+    [InlineData("processor : 0\nmodel name : Test CPU\nprocessor : 1\nprocessor : 01")]
+    [InlineData("processor : 0\nmodel name : Test CPU\nprocessor : 999999999999999999999999")]
+    public void DuplicateOrOverflowProcessorIndicesDoNotInflateCpuCount(string output)
+    {
+        var valid = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Test CPU\nprocessor : 1\nmodel name : Test CPU\nprocessors : 2");
+        var duplicate = UbuntuServerFactParser.ParseCpu(output);
+
+        Assert.True(valid.IsKnown);
+        Assert.Equal(2, valid.Value!.LogicalProcessorCount);
+        Assert.False(duplicate.IsKnown);
+    }
+
+    [Theory]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemTotal: 2048 kB")]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemAvailable: 256 kB")]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemTotal: invalid kB")]
+    [InlineData("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemAvailable: 999999999999999999999999 kB")]
+    public void DuplicateMemoryFieldsDoNotBecomeKnown(string output)
+    {
+        var valid = UbuntuServerFactParser.ParseMemory("MemTotal: 1024 kB\nMemAvailable: 512 kB\nMemFree: 256 kB");
+        var duplicate = UbuntuServerFactParser.ParseMemory(output);
+
+        Assert.True(valid.IsKnown);
+        Assert.False(duplicate.IsKnown);
+    }
+
+    [Fact]
+    public void MixedCpuModelsKeepLogicalCountWithoutClaimingFirstModelForAllProcessors()
+    {
+        var homogeneous = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : Model A");
+        var mixed = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : Model B");
+
+        Assert.True(homogeneous.IsKnown);
+        Assert.Equal("Model A", homogeneous.Value!.Model);
+        Assert.True(mixed.IsKnown);
+        Assert.Equal(2, mixed.Value!.LogicalProcessorCount);
+        Assert.Null(mixed.Value.Model);
+    }
+
+    [Fact]
+    public void UnsafeLaterCpuModelCannotBeHiddenByAnEarlierSafeOne()
+    {
+        var cpu = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name : bad\u001bmodel");
+
+        Assert.False(cpu.IsKnown);
+    }
+
+    [Fact]
+    public void CpuModelFallbackDistinguishesModelNameFromHardwareAndModelLessOutput()
+    {
+        var modelLess = UbuntuServerFactParser.ParseCpu("processor : 0\nprocessor : 1");
+        var hardwareOnly = UbuntuServerFactParser.ParseCpu("processor : 0\nHardware : Board A");
+        var modelAndHardware = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nHardware : Board A");
+        var mixedHardware = UbuntuServerFactParser.ParseCpu("processor : 0\nHardware : Board A\nHardware : Board B");
+
+        Assert.True(modelLess.IsKnown);
+        Assert.Null(modelLess.Value!.Model);
+        Assert.Equal("Board A", hardwareOnly.Value!.Model);
+        Assert.Equal("Model A", modelAndHardware.Value!.Model);
+        Assert.True(mixedHardware.IsKnown);
+        Assert.Null(mixedHardware.Value!.Model);
+    }
+
+    [Fact]
+    public void MalformedLaterCpuModelCannotBeHiddenByAnEarlierSafeOne()
+    {
+        var cpu = UbuntuServerFactParser.ParseCpu("processor : 0\nmodel name : Model A\nprocessor : 1\nmodel name :");
+
+        Assert.False(cpu.IsKnown);
+    }
+
     [Fact]
     public void ParsersUseCanonicalUbuntuUnitsAndOnlyAcceptSafePrivilegeStates()
     {
@@ -26,6 +99,27 @@ public sealed class UbuntuServerFactParserTests
         Assert.False(privilege.Value!.IsRoot);
         Assert.Equal(SudoCapability.Available, privilege.Value.Sudo);
         Assert.False(UbuntuServerFactParser.ParsePrivilege("root=true\nsudo=available").IsKnown);
+    }
+
+    [Theory]
+    [InlineData("3600.00 not-a-number")]
+    [InlineData("3600.00 -1.00")]
+    [InlineData("3600.00 1.00\0")]
+    [InlineData("3600.00\0 1.00")]
+    [InlineData("922337203685.4775 1.00")]
+    [InlineData("1.00 1e309")]
+    public void MalformedUptimeEvidenceCannotProduceKnownFact(string output)
+    {
+        Assert.False(UbuntuServerFactParser.ParseUptime(output).IsKnown);
+    }
+
+    [Fact]
+    public void MulticoreIdleTimeCanExceedUptime()
+    {
+        var uptime = UbuntuServerFactParser.ParseUptime("3600.25 7200.50");
+
+        Assert.True(uptime.IsKnown);
+        Assert.Equal(TimeSpan.FromSeconds(3600.25), uptime.Value);
     }
 
     [Fact]
@@ -66,6 +160,28 @@ public sealed class UbuntuServerFactParserTests
 
         Assert.False(snapshot.Hostname.IsKnown);
         Assert.False(snapshot.SessionSshPort.IsKnown);
+    }
+
+    [Theory]
+    [InlineData("Status: active\nStatus: inactive")]
+    [InlineData("Status: inactive\nStatus: active")]
+    [InlineData("warning\nStatus: active")]
+    public void AmbiguousUfwStatusDoesNotBecomeAKnownOverviewOrDetectionState(string output)
+    {
+        Assert.False(UbuntuServerFactParser.ParseUfwStatus(output).IsKnown);
+        var detection = UbuntuServerFactParser.ParseUfwDetection(new RemoteCommandResult(0, output, string.Empty, TimeSpan.Zero));
+        Assert.Equal(UfwFirewallState.Unknown, detection.State);
+    }
+
+    [Theory]
+    [InlineData("Status: active", UfwStatus.Active, UfwFirewallState.Active)]
+    [InlineData("Status: inactive", UfwStatus.Inactive, UfwFirewallState.Inactive)]
+    [InlineData("Status: active\n\nTo Action From\n-- ------ ----", UfwStatus.Active, UfwFirewallState.Active)]
+    public void ValidUfwStatusStillPreservesItsKnownState(string output, UfwStatus expected, UfwFirewallState expectedDetection)
+    {
+        Assert.Equal(expected, UbuntuServerFactParser.ParseUfwStatus(output).Value);
+        var detection = UbuntuServerFactParser.ParseUfwDetection(new RemoteCommandResult(0, output, string.Empty, TimeSpan.Zero));
+        Assert.Equal(expectedDetection, detection.State);
     }
 
     private static Dictionary<string, RemoteCommandResult> Results(params (string Id, string Output)[] values) =>

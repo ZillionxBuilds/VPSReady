@@ -18,7 +18,7 @@ public sealed class OperationResultTests
                 "VALIDATION_FAILED", "NETWORK_UNAVAILABLE", "CONNECTION_REFUSED", "OPERATION_TIMEOUT",
                 "OPERATION_CANCELLED", "HOST_TRUST_REQUIRED", "SSH_AUTHENTICATION_FAILED", "PRIVILEGE_DENIED",
                 "UNSUPPORTED_ENVIRONMENT", "REMOTE_COMMAND_FAILED", "REMOTE_OUTPUT_PARSE_FAILED", "VERIFICATION_FAILED",
-                "RECOVERY_FAILED", "LOCAL_IO_FAILED", "APT_OPERATION_FAILED", "RECONNECT_FAILED", "UNEXPECTED_FAILURE",
+                "RECOVERY_FAILED", "LOCAL_IO_FAILED", "APT_OPERATION_FAILED", "RECONNECT_FAILED", "LOCAL_FILE_CHANGED", "UNEXPECTED_FAILURE",
             ],
             codes);
 
@@ -66,7 +66,28 @@ public sealed class OperationResultTests
         Assert.False(result.Succeeded);
         Assert.Equal(OperationErrorCode.Cancelled, result.ErrorCode);
         Assert.Equal(OperationState.PartiallyApplied, result.State);
+        Assert.Equal(OperationRecovery.NotRequired, result.Recovery);
         Assert.Contains("cancelled", result.UserMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Some changes may have been applied", result.UserMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CancellationPreservesACompletedRecoveryResult()
+    {
+        var result = OperationResult.Cancellation(
+            "firewall.enable",
+            OperationState.Applied,
+            OperationVerification.Passed,
+            OperationRecovery.Succeeded,
+            "The firewall and SSH continuity were verified after cancellation.",
+            "Refresh the firewall page before another change.");
+
+        Assert.Equal(OperationCompletion.Cancelled, result.Completion);
+        Assert.Equal(OperationState.Applied, result.State);
+        Assert.Equal(OperationVerification.Passed, result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Recovery);
+        Assert.Equal("The firewall and SSH continuity were verified after cancellation.", result.UserMessage);
+        Assert.Equal("Refresh the firewall page before another change.", result.NextAction);
+        Assert.False(result.Succeeded);
     }
 }

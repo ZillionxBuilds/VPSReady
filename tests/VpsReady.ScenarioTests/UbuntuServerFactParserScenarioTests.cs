@@ -64,6 +64,23 @@ public sealed class UbuntuServerFactParserScenarioTests
         Assert.False(afterFailure.Uptime.IsKnown);
         Assert.True(afterFailure.Hostname.IsKnown);
         Assert.Equal(before, state.Counter);
+
+        faults.Inject(
+            DiagnosticPhase.Preflight,
+            ScenarioFaultKind.PartialOutput,
+            "c206-disk-overcommit",
+            RemoteCommandCatalog.UbuntuRootDiskRead,
+            standardOutput: "/dev/fixture 10 6 5 60% /");
+        results[RemoteCommandCatalog.UbuntuRootDiskRead] = await host.ExecuteAsync(
+            UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.UbuntuRootDiskRead),
+            CancellationToken.None);
+        var afterContradictoryDisk = UbuntuServerFactAggregator.Aggregate(
+            results, new RemoteEndpoint("scenario.example", state.Ssh.ActiveSshPort, state.Ssh.UserName));
+
+        Assert.False(afterContradictoryDisk.RootDisk.IsKnown);
+        Assert.True(afterContradictoryDisk.Hostname.IsKnown);
+        Assert.True(afterContradictoryDisk.Memory.IsKnown);
+        Assert.Equal(before, state.Counter);
     }
 
     private static Dictionary<string, RemoteCommandResult> LoadFixture(string relativePath)

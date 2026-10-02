@@ -9,13 +9,14 @@ public static class RebootErrorCatalog
     public const string RequiredState = "REBOOT_REQUIRED_STATE_UNAVAILABLE";
     public const string Privilege = "REBOOT_PRIVILEGE_FAILED";
     public const string Command = "REBOOT_COMMAND_FAILED";
+    public const string PreRecovery = "REBOOT_PRE_RECOVERY_FAILED";
     public const string Reconnect = "REBOOT_RECONNECT_FAILED";
     public const string Timeout = "REBOOT_RECONNECT_TIMEOUT";
     public const string Cancelled = "REBOOT_CANCELLED";
     public const string HostTrust = "REBOOT_RECONNECT_HOST_TRUST_FAILED";
     public const string Verification = "REBOOT_RECONNECT_VERIFICATION_FAILED";
     public const string Unexpected = "REBOOT_UNEXPECTED_FAILED";
-    public static IReadOnlyCollection<string> All { get; } = [Confirmation, RequiredState, Privilege, Command, Reconnect, Timeout, Cancelled, HostTrust, Verification, Unexpected];
+    public static IReadOnlyCollection<string> All { get; } = [Confirmation, RequiredState, Privilege, Command, PreRecovery, Reconnect, Timeout, Cancelled, HostTrust, Verification, Unexpected];
 }
 
 public sealed record RebootRequiredState(OperationResult Result, bool? Required, string? ErrorCode);
@@ -101,14 +102,18 @@ public enum RebootReconnectOutcome { NotStarted, Reconnected, TimedOut, Cancelle
 public sealed record RebootOperationResult(OperationResult Result, string? ErrorCode, int ReconnectAttempts, RebootReconnectOutcome ReconnectOutcome);
 
 /// <summary>
-/// A session transport able to reconnect using the already established session
+/// A session transport able to reconnect using its already established
 /// identity. Implementations must repeat trusted-host assessment on every
-/// reconnect and must not retain credentials in this workflow contract.
+/// reconnect and must not expose or persist credentials through this contract.
 /// </summary>
-public interface IRebootReconnectTransport : IRemoteTransport
+public interface ITrustedSessionReconnectTransport : IRemoteTransport
 {
     Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken);
+}
 
+/// <summary>A trusted session transport that can also inspect boot identity.</summary>
+public interface IRebootReconnectTransport : ITrustedSessionReconnectTransport
+{
     Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken);
 }
 

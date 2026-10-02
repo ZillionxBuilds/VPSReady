@@ -20,7 +20,14 @@ done
 [[ "$(grep -Fc "BundleKind = 'archive'" "$profiles")" == 6 ]] || { printf '%s\n' 'Every candidate profile must declare an archive bundle.' >&2; exit 1; }
 grep -Fq "Status = 'UNSIGNED'" "$profiles"
 grep -Fq 'UNSIGNED CANDIDATE:' "$profiles"
-grep -Fq "StartupEvidence = 'NOT RUN" "$profiles"
+grep -Fq "StartupEvidence = 'NOT RUN (post-package startup smoke is reported separately)'" "$profiles" || {
+  printf '%s\n' 'Package startup evidence must defer to the separate post-package smoke report.' >&2
+  exit 1
+}
+! grep -Fq 'startup-smoke suite is not implemented' "$profiles" || {
+  printf '%s\n' 'Package profile must not claim the C606 startup-smoke suite is unimplemented.' >&2
+  exit 1
+}
 grep -Fq 'Import-PowerShellDataFile' "$packager"
 grep -Fq 'VpsReadyBuildSha=$CommitSha' "$packager"
 grep -Fq 'DebugSymbols=false' "$packager"

@@ -316,21 +316,23 @@ public sealed class SystemOperationCompletionRegressionTests
         async Task<HostnameChangePlan> IHostnameChanger.PlanAsync(IRemoteTransport transport, string? input, CancellationToken cancellationToken)
         {
             if (PlanBarrier is not null) { await PlanBarrier.PauseAsync(); }
-            return new(OperationResult.Success("fixture-plan"), "fixture-old", input, null);
+            return new(OperationResult.Success("fixture-plan"), "fixture-old", input, null, transport);
         }
         async Task<TimezoneChangePlan> ITimezoneChanger.PlanAsync(IRemoteTransport transport, string input, CancellationToken cancellationToken)
         {
             if (PlanBarrier is not null) { await PlanBarrier.PauseAsync(); }
-            return new(OperationResult.Success("fixture-plan"), "Europe/Paris", input);
+            return new(OperationResult.Success("fixture-plan"), "Europe/Paris", input, transport);
         }
         async Task<HostnameChangeResult> IHostnameChanger.ChangeAsync(IRemoteTransport transport, HostnameChangePlan? plan, bool confirmed, CancellationToken cancellationToken)
         {
             Assert.True(confirmed);
+            Assert.True(plan?.IsForTransport(transport));
             return new(await ApplyAsync(plan!.ProposedHostname), null);
         }
         async Task<TimezoneChangeResult> ITimezoneChanger.ChangeAsync(IRemoteTransport transport, TimezoneChangePlan? plan, bool confirmed, CancellationToken cancellationToken)
         {
             Assert.True(confirmed);
+            Assert.True(plan?.IsForTransport(transport));
             return new(await ApplyAsync(plan!.SelectedTimezone), null);
         }
         private async Task<OperationResult> ApplyAsync(string? value)

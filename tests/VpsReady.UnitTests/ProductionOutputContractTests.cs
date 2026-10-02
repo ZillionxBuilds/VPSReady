@@ -81,6 +81,24 @@ public sealed class ProductionOutputContractTests
     }
 
     [Theory]
+    [InlineData(RemoteCommandCatalog.SshSessionPortRead, "22\0\n")]
+    [InlineData(RemoteCommandCatalog.SshSessionPortRead, "22\0extra\n")]
+    [InlineData(RemoteCommandCatalog.SshSessionPortRead, "٢٢\n")]
+    [InlineData(RemoteCommandCatalog.UbuntuAptUpgradePlan, "upgrade_plan_packages=2\0:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")]
+    [InlineData(RemoteCommandCatalog.UbuntuAptUpgradePlan, "upgrade_plan_packages=2\0extra:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")]
+    public async Task NonAsciiDecimalNumericMetadataCannotProduceTypedEvidence(string id, string wire)
+    {
+        Assert.Null(CommandParserEvidence.Parse(id, wire));
+
+        var command = new RemoteCommand(RemoteCommandCatalog.RequireKnown(id), "parser-fixture", TimeSpan.FromSeconds(1));
+        using var stdout = new MemoryStream(Encoding.UTF8.GetBytes(wire));
+        using var stderr = new MemoryStream();
+        var captured = await SshNetBoundedOutputCapture.ReadResultAsync(command, 0, stdout, stderr, TimeSpan.Zero, CancellationToken.None);
+        Assert.Null(captured.ParserEvidence);
+        Assert.Empty(captured.StandardOutput);
+    }
+
+    [Theory]
     [InlineData("Could not get lock /var/lib/dpkg/lock", true)]
     [InlineData("Unable to acquire the dpkg frontend lock", true)]
     [InlineData("Failed to fetch repository", false)]

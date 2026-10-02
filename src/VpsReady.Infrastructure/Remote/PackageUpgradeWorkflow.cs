@@ -22,17 +22,17 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, planned, command.Id.Value).ConfigureAwait(false);
             if (!planned.Succeeded)
             {
-                return await PlanFailureAsync(correlation, OperationErrorCode.Apt, planned.AptLockContended ? PackageUpgradeErrorCatalog.Locked : PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+                return await PlanFailureAsync(correlation, OperationErrorCode.Apt, planned.AptLockContended ? PackageUpgradeErrorCatalog.Locked : PackageUpgradeErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
             }
 
             if (planned.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuAptUpgradePlan, Number: { } count, Fingerprint: { } fingerprint })
             {
-                return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+                return await PlanFailureAsync(correlation, OperationErrorCode.Parse, PackageUpgradeErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
             }
 
             var result = OperationResult.Success(correlation.OperationId, OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradePlanned, DiagnosticPhase.Plan, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradePlanned, DiagnosticPhase.Plan, DiagnosticStatus.Succeeded, command.Id.Value, null).ConfigureAwait(false);
             return new PackageUpgradePlan(result, count, fingerprint, transport);
         }
         catch (OperationCanceledException)
@@ -41,15 +41,15 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         }
         catch (TimeoutException)
         {
-            return await PlanFailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout).ConfigureAwait(false);
+            return await PlanFailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout, command.Id.Value).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await PlanFailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command).ConfigureAwait(false);
+            return await PlanFailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command, command.Id.Value).ConfigureAwait(false);
         }
         catch
         {
-            return await PlanFailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected).ConfigureAwait(false);
+            return await PlanFailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected, command.Id.Value).ConfigureAwait(false);
         }
     }
 
@@ -59,6 +59,8 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         var correlation = CorrelationIds.Create("apt_upgrade");
         var apply = UbuntuPackageCommandCatalog.CreateUpgradeApplyRequest();
         var applyAttempted = false;
+        var activePhase = DiagnosticPhase.Preflight;
+        string? activeCommandId = null;
         try
         {
             await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, null, null).ConfigureAwait(false);
@@ -77,6 +79,9 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             // Re-run the same privileged, sanitized-environment preview just
             // before mutation. Equal counts do not prove equal package versions.
             var revalidate = UbuntuPackageCommandCatalog.CreateUpgradePlanRequest();
+            cancellationToken.ThrowIfCancellationRequested();
+            activePhase = DiagnosticPhase.Plan;
+            activeCommandId = revalidate.Id.Value;
             var current = await transport.ExecuteAsync(revalidate, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Plan, current, revalidate.Id.Value).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
@@ -91,8 +96,11 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, apply.Id.Value, null).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             applyAttempted = true;
+            activePhase = DiagnosticPhase.Apply;
+            activeCommandId = apply.Id.Value;
             var applied = await transport.ExecuteAsync(apply, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, apply.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!applied.Succeeded)
             {
                 var (error, code) = applied.AptLockContended ? (OperationErrorCode.Apt, PackageUpgradeErrorCatalog.Locked) : applied.ExitCode switch
@@ -106,16 +114,24 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
 
             var verify = UbuntuPackageCommandCatalog.CreateUpgradeVerifyRequest();
             await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, verify.Id.Value, null).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            activePhase = DiagnosticPhase.Verify;
+            activeCommandId = verify.Id.Value;
             var verified = await transport.ExecuteAsync(verify, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, verified, verify.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!verified.Succeeded || verified.ParserEvidence?.CommandId != verify.Id.Value)
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, verify.Id.Value, OperationState.Applied).ConfigureAwait(false);
             }
 
             var reboot = UbuntuPackageCommandCatalog.CreateRebootRequiredRequest();
+            cancellationToken.ThrowIfCancellationRequested();
+            activePhase = DiagnosticPhase.Verify;
+            activeCommandId = reboot.Id.Value;
             var rebootState = await transport.ExecuteAsync(reboot, cancellationToken).ConfigureAwait(false);
             await ReportCommandAsync(correlation, DiagnosticPhase.Verify, rebootState, reboot.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!rebootState.Succeeded || rebootState.ParserEvidence is not { CommandId: RemoteCommandCatalog.UbuntuRebootRequiredRead, Flag: { } rebootRequired })
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, PackageUpgradeErrorCatalog.Verification, DiagnosticPhase.Verify, reboot.Id.Value, OperationState.Applied).ConfigureAwait(false);
@@ -128,20 +144,20 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         catch (OperationCanceledException)
         {
             var cancelled = OperationResult.Cancellation(correlation.OperationId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged);
-            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, applyAttempted ? apply.Id.Value : null, OperationErrorCode.Cancelled).ConfigureAwait(false);
+            await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeCancelled, activePhase, DiagnosticStatus.Cancelled, activeCommandId, OperationErrorCode.Cancelled).ConfigureAwait(false);
             return new PackageUpgradeResult(cancelled, PackageUpgradeErrorCatalog.Cancelled, null);
         }
         catch (TimeoutException)
         {
-            return await FailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+            return await FailureAsync(correlation, OperationErrorCode.Timeout, PackageUpgradeErrorCatalog.Timeout, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch (RemoteTransportException exception)
         {
-            return await FailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+            return await FailureAsync(correlation, exception.Kind == RemoteTransportFailureKind.Timeout ? OperationErrorCode.Timeout : OperationErrorCode.Network, exception.Kind == RemoteTransportFailureKind.Timeout ? PackageUpgradeErrorCatalog.Timeout : PackageUpgradeErrorCatalog.Command, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
         catch
         {
-            return await FailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected, applyAttempted ? DiagnosticPhase.Apply : DiagnosticPhase.Preflight, applyAttempted ? apply.Id.Value : null, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
+            return await FailureAsync(correlation, OperationErrorCode.Unexpected, PackageUpgradeErrorCatalog.Unexpected, activePhase, activeCommandId, applyAttempted ? OperationState.Unknown : OperationState.Unchanged).ConfigureAwait(false);
         }
     }
 
@@ -168,10 +184,10 @@ public sealed class PackageUpgradeWorkflow(IPrivilegePreflight preflight, IDiagn
         return new PackageUpgradePlan(result, 0);
     }
 
-    private async Task<PackageUpgradePlan> PlanFailureAsync(CorrelationIds correlation, OperationErrorCode error, string code)
+    private async Task<PackageUpgradePlan> PlanFailureAsync(CorrelationIds correlation, OperationErrorCode error, string code, string commandId)
     {
         var result = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
-        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, null, error).ConfigureAwait(false);
+        await ReportAsync(correlation, DiagnosticEventCatalog.PackageUpgradeFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, commandId, error).ConfigureAwait(false);
         return new PackageUpgradePlan(result, 0);
     }
 

@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <Compile Include="../Shared/ProductionOutput.cs" Link="ProductionOutput.cs" />
+    <EmbeddedResource Include="../../src/VpsReady.Desktop/App.axaml" LogicalName="VpsReady.UnitTests.App.axaml" />
+    <EmbeddedResource Include="../../src/VpsReady.Desktop/MainWindow.axaml" LogicalName="VpsReady.UnitTests.MainWindow.axaml" />
   </ItemGroup>
   <PropertyGroup>
     <IsPackable>false</IsPackable>

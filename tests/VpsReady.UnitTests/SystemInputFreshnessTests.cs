@@ -91,6 +91,30 @@ public sealed class SystemInputFreshnessTests
         Assert.Single(workflow.Mutations);
     }
 
+    [Theory]
+    [InlineData(false, HostnameChangeErrorCatalog.StalePlan)]
+    [InlineData(true, TimezoneChangeErrorCatalog.StalePlan)]
+    public async Task StaleRemoteStateGivesSafeNewPlanGuidance(bool timezone, string code)
+    {
+        await using var session = new SessionAuthorityHarness();
+        await session.StartAsync(new RemoteEndpoint("fixture.invalid", 22, "fixture"), new NoCommandTransport());
+        var workflow = new SettingsWorkflow { FailApply = true, ApplyErrorCode = code };
+        workflow.PlanBarrier.Release.TrySetResult();
+        using var vm = Create(session, workflow);
+        SetInput(vm, timezone, "A");
+        await (timezone ? vm.PlanTimezoneAsync() : vm.PlanHostnameAsync());
+        Confirm(vm, timezone);
+
+        await (timezone ? vm.ApplyTimezoneAsync() : vm.ApplyHostnameAsync());
+
+        Assert.Equal(SystemActionsScreenState.Failed, vm.State);
+        Assert.Equal(code, vm.ErrorCode);
+        Assert.Contains("Read a new plan", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-a", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("Etc/UTC", vm.Status, StringComparison.Ordinal);
+        Assert.False(timezone ? vm.HasTimezonePlan : vm.HasHostnamePlan);
+    }
+
     private static Task Replace(SessionAuthorityHarness session) => session.StartAsync(new RemoteEndpoint("replacement.invalid", 2222, "fixture"), new NoCommandTransport());
 
     [Theory]
@@ -180,11 +204,12 @@ public sealed class SystemInputFreshnessTests
         public AuthorityBarrier? ApplyBarrier { get; init; }
         public bool FailPlan { get; init; }
         public bool FailApply { get; init; }
+        public string? ApplyErrorCode { get; init; }
         public List<string?> Mutations { get; } = [];
         public int RebootMutations { get; private set; }
         private OperationResult PlanResult => FailPlan ? OperationResult.Failure("fixture-plan", OperationErrorCode.Parse) : OperationResult.Success("fixture-plan");
-        async Task<HostnameChangePlan> IHostnameChanger.PlanAsync(IRemoteTransport transport, string? input, CancellationToken cancellationToken) { await PlanBarrier.PauseAsync(); return new(PlanResult, "fixture-old", input, null); }
-        async Task<TimezoneChangePlan> ITimezoneChanger.PlanAsync(IRemoteTransport transport, string input, CancellationToken cancellationToken) { await PlanBarrier.PauseAsync(); return new(PlanResult, "Europe/London", input); }
+        async Task<HostnameChangePlan> IHostnameChanger.PlanAsync(IRemoteTransport transport, string? input, CancellationToken cancellationToken) { await PlanBarrier.PauseAsync(); return new(PlanResult, "fixture-old", input, null, transport); }
+        async Task<TimezoneChangePlan> ITimezoneChanger.PlanAsync(IRemoteTransport transport, string input, CancellationToken cancellationToken) { await PlanBarrier.PauseAsync(); return new(PlanResult, "Europe/London", input, transport); }
         private async Task<OperationResult> Apply()
         {
             if (ApplyBarrier is not null) { await ApplyBarrier.PauseAsync(); }
@@ -195,14 +220,14 @@ public sealed class SystemInputFreshnessTests
         async Task<HostnameChangeResult> IHostnameChanger.ChangeAsync(IRemoteTransport transport, HostnameChangePlan? plan, bool confirmed, CancellationToken cancellationToken)
         {
             Mutations.Add(plan?.ProposedHostname);
-            if (plan?.IsReady != true || !confirmed) { throw new InvalidOperationException("Unexpected unapproved hostname dispatch."); }
-            return new(await Apply(), null);
+            if (plan?.IsReady != true || !plan.IsForTransport(transport) || !confirmed) { throw new InvalidOperationException("Unexpected unapproved hostname dispatch."); }
+            return new(await Apply(), ApplyErrorCode);
         }
         async Task<TimezoneChangeResult> ITimezoneChanger.ChangeAsync(IRemoteTransport transport, TimezoneChangePlan? plan, bool confirmed, CancellationToken cancellationToken)
         {
             Mutations.Add(plan?.SelectedTimezone);
-            if (plan?.IsReady != true || !confirmed) { throw new InvalidOperationException("Unexpected unapproved timezone dispatch."); }
-            return new(await Apply(), null);
+            if (plan?.IsReady != true || !plan.IsForTransport(transport) || !confirmed) { throw new InvalidOperationException("Unexpected unapproved timezone dispatch."); }
+            return new(await Apply(), ApplyErrorCode);
         }
         public Task<PackageIndexUpdateResult> UpdateAsync(IRemoteTransport transport, CancellationToken cancellationToken = default) => throw new InvalidOperationException();
         public Task<PackageUpgradePlan> PlanAsync(IRemoteTransport transport, CancellationToken cancellationToken = default) => throw new InvalidOperationException();

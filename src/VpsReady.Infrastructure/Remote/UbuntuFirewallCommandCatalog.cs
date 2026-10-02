@@ -39,7 +39,7 @@ public static class UbuntuFirewallCommandCatalog
             [
                 new("action", request.Action.ToString().ToLowerInvariant()),
                 new("family", request.Family.ToString().ToLowerInvariant()),
-                new("port", request.Port.ToString(CultureInfo.InvariantCulture)),
+                new("port", request.ToCommandPort()),
                 new("protocol", request.Protocol.ToString().ToLowerInvariant()),
                 new("source", request.ToCommandSource()),
             ],
@@ -124,7 +124,7 @@ public static class UbuntuFirewallCommandCatalog
         var selectedRule = request!;
         var action = RemoteCommandArguments.QuotePosixArgument(selectedRule.Action.ToString().ToLowerInvariant());
         var source = RemoteCommandArguments.QuotePosixArgument(selectedRule.ToCommandSource());
-        var port = RemoteCommandArguments.QuotePosixArgument(selectedRule.Port.ToString(CultureInfo.InvariantCulture));
+        var port = RemoteCommandArguments.QuotePosixArgument(selectedRule.ToCommandPort());
         var protocol = RemoteCommandArguments.QuotePosixArgument(selectedRule.Protocol.ToString().ToLowerInvariant());
         return PredictableLocalePrefix
             + "if ! command -v ufw >/dev/null 2>&1; then exit 127; "
@@ -211,7 +211,7 @@ public static class UbuntuFirewallCommandCatalog
             || !Enum.TryParse<UfwRuleAction>(actionText, true, out var action)
             || !Enum.TryParse<UfwIpFamily>(familyText, true, out var family)
             || !Enum.TryParse<UfwRuleProtocol>(protocolText, true, out var protocol)
-            || !int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || !TryParsePortInterval(portText, out var port, out var endPort)
             || !UfwAllowRuleRequest.TryCreate(new UfwAllowRuleInput(protocol, port, source, family), out var semantic, out _)
             || semantic is null)
         {
@@ -221,14 +221,37 @@ public static class UbuntuFirewallCommandCatalog
         // This request is reconstructed only from validated semantic fields;
         // its original opaque identity remains strictly a local selection key.
         var synthetic = new UfwRule(
-            UfwRuleIdentity.Create(1, protocol, port, semantic.Source, action, family),
+            UfwRuleIdentity.Create(1, protocol, port, semantic.Source, action, family, endPort),
             1,
             protocol,
             port,
             semantic.Source,
             action,
-            family);
+            family,
+            endPort);
         return UfwRuleRemovalRequest.TryCreate(synthetic, out request);
+    }
+
+    private static bool TryParsePortInterval(string text, out int port, out int? endPort)
+    {
+        port = 0;
+        endPort = null;
+        var separator = text.IndexOf(':');
+        if (separator < 0)
+        {
+            return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out port) && port is >= 1 and <= 65535;
+        }
+
+        if (text.LastIndexOf(':') != separator
+            || !int.TryParse(text.AsSpan(0, separator), NumberStyles.None, CultureInfo.InvariantCulture, out port)
+            || !int.TryParse(text.AsSpan(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out var end)
+            || port is < 1 or > 65535 || end <= port || end > 65535)
+        {
+            return false;
+        }
+
+        endPort = end;
+        return true;
     }
 
     private static bool TryParseActiveSshAllow(string safeSummary, out int port, out UfwIpFamily family)
