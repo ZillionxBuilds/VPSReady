@@ -1,5 +1,6 @@
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
+using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Local;
 using VpsReady.Infrastructure.Remote;
@@ -141,7 +142,7 @@ public sealed class SshNetReauthenticationE3Tests
     }
 
     [ContainedSshFact]
-    public async Task ProductionTransportRejectsAnUnknownContainedHostKeyBeforeUsingTheSession()
+    public async Task ProductionTransportRequiresExplicitPersistedTrustAndRejectsChangedContainedHost()
     {
         var fixtureValue = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_PASSWORD");
         var user = Environment.GetEnvironmentVariable("VPSREADY_E3_DOTNET_USER");
@@ -151,12 +152,51 @@ public sealed class SshNetReauthenticationE3Tests
         Assert.True(int.TryParse(portText, out var port), "The contained fixture must supply a port.");
 
         var endpoint = new RemoteEndpoint("127.0.0.1", port, user);
-        await using var transport = new SshNetRemoteTransport(new UnknownTrustStore());
-        var failure = await Assert.ThrowsAsync<RemoteTransportException>(() => transport.ConnectAsync(
-            endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None));
+        await using var workspace = new KeyWorkspace();
+        var storage = new SecureLocalStorage(new FixedPlatformPaths(workspace.Root), new AtomicFileStore());
+        KnownHostTrustChallenge challenge;
+        using (var trust = new KnownHostTrustStore(storage))
+        {
+            await using var unknown = new SshNetRemoteTransport(trust);
+            var failure = await Assert.ThrowsAsync<RemoteTransportException>(() => unknown.ConnectAsync(
+                endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None));
 
-        Assert.Equal(RemoteTransportFailureKind.HostTrust, failure.Kind);
-        Assert.Equal(KnownHostTrustState.Unknown, transport.LastHostTrustAssessment?.State);
+            Assert.Equal(RemoteTransportFailureKind.HostTrust, failure.Kind);
+            Assert.Equal(KnownHostTrustState.Unknown, unknown.LastHostTrustAssessment?.State);
+            challenge = Assert.IsType<KnownHostTrustChallenge>(unknown.LastHostTrustAssessment?.Challenge);
+            Assert.False(File.Exists(storage.ResolvePath(LocalStorageArea.Configuration, "trust/known-hosts.json")));
+            var accepted = await trust.AcceptUnknownAsync(challenge, CancellationToken.None);
+            Assert.True(accepted.IsTrusted);
+        }
+
+        // A new store must load the explicitly accepted actual sshd fingerprint,
+        // rather than an injected trust result supplied by the test.
+        using var reopenedTrust = new KnownHostTrustStore(storage);
+        await using (var matching = new SshNetRemoteTransport(reopenedTrust))
+        {
+            await matching.ConnectAsync(endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None);
+            Assert.Equal(KnownHostTrustState.Matching, matching.LastHostTrustAssessment?.State);
+            Assert.True((await matching.ExecuteAsync(UbuntuPackageCommandCatalog.CreateReconnectVerifyRequest(), CancellationToken.None)).Succeeded);
+        }
+
+        await using (var wrongPassword = new SshNetRemoteTransport(reopenedTrust))
+        {
+            var failure = await Assert.ThrowsAsync<RemoteTransportException>(() => wrongPassword.ConnectAsync(
+                endpoint, new Credential(['x']), TimeSpan.FromSeconds(10), CancellationToken.None));
+            Assert.Equal(RemoteTransportFailureKind.Authentication, failure.Kind);
+            Assert.Equal(KnownHostTrustState.Matching, wrongPassword.LastHostTrustAssessment?.State);
+        }
+
+        // Change only the disposable test-owned trust record. The actual sshd
+        // key remains fixed, so the production comparison must deny it.
+        var differing = await reopenedTrust.AssessAsync(challenge.Identity,
+            new HostKeyFingerprint("SHA256:fixture-different-key"), CancellationToken.None);
+        await reopenedTrust.ReplaceChangedAsync(differing.Challenge!, CancellationToken.None);
+        await using var changed = new SshNetRemoteTransport(reopenedTrust);
+        var changedFailure = await Assert.ThrowsAsync<RemoteTransportException>(() => changed.ConnectAsync(
+            endpoint, new Credential(fixtureValue.ToCharArray()), TimeSpan.FromSeconds(10), CancellationToken.None));
+        Assert.Equal(RemoteTransportFailureKind.HostTrust, changedFailure.Kind);
+        Assert.Equal(KnownHostTrustState.Changed, changed.LastHostTrustAssessment?.State);
     }
 
     [ContainedSshFact]
@@ -228,15 +268,11 @@ public sealed class SshNetReauthenticationE3Tests
         public Task<KnownHostTrustAssessment> ReplaceChangedAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class UnknownTrustStore : IKnownHostTrustStore
+    private sealed class FixedPlatformPaths(string root) : IPlatformPaths
     {
-        public Task<KnownHostTrustAssessment> AssessAsync(KnownHostIdentity identity, HostKeyFingerprint observedFingerprint, CancellationToken cancellationToken)
-        {
-            var challenge = new KnownHostTrustChallenge(identity, observedFingerprint, KnownHostTrustState.Unknown);
-            return Task.FromResult(new KnownHostTrustAssessment(KnownHostTrustState.Unknown, challenge, false));
-        }
-        public Task<KnownHostTrustAssessment> AcceptUnknownAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<KnownHostTrustAssessment> ReplaceChangedAsync(KnownHostTrustChallenge challenge, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public string GetStateDirectory() => GetDirectory(LocalStorageArea.State);
+        public string GetDirectory(LocalStorageArea area) => Path.Combine(root, area.ToString().ToLowerInvariant());
+        public string ResolvePath(LocalStorageArea area, string relativePath) => LocalPathPolicy.ResolveUnder(GetDirectory(area), relativePath);
     }
 }
 
