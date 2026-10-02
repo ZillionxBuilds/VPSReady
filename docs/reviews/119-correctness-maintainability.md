@@ -68,7 +68,51 @@ controlled race RED: 1 failure. Initial combined targeted GREEN: 51/0/0, before
 the final malformed-file regression. First wider E1 pass: 971/2/1; two existing
 indentation-dependent assertions failed and were replaced by structural field
 checks (including a shared JSONL test reader). Full unit pass before clipboard
-change: 1032/0/5. Clipboard RED: 0/1/0. Final E0/full E1/E2/affected E3/E4 pending.
+change: 1032/0/5. Clipboard RED: 0/1/0. Final implementation/source SHA:
+`a7a554f76dda4c6d82ebdc395e6cf1de13d105bc` (subsequent evidence docs do not
+change product/test/eng/locks).
+
+- E0 PASS: locked restore; Release solution build/analyzers/warnings-as-errors
+  (0 warnings/errors); format verification; diff, tracked-secret, gitignore,
+  packaging/startup/RC/CI-SHA/troubleshooting guards; notice self-test and
+  28-package exact locked runtime inventory. NuGet vulnerability query over all
+  six projects reports none from the configured source; this is not a guarantee
+  of absence of unknown vulnerabilities. No lock/dependency/workflow change.
+- Full host UnitTests: **1036 PASS / 0 FAIL / 5 SKIP**. Skips: four contained-sshd
+  opt-in cases (run separately below), one Ubuntu package fixture unavailable on
+  this macOS host. E2 ScenarioTests: **241 / 0 / 3**; skips are E0/E3/E4 sentinels
+  intentionally not executable in the simulation project. Exact TRX files
+  `review-unit-final.trx`, `review-e2.trx`; RED logs remain preserved.
+- E3: **5 / 0 / 0** in disposable Noble arm64 image
+  `mcr.microsoft.com/dotnet/sdk:10.0.400-noble@sha256:4beef5b8919dcaa2dc924233bd069257e883cc7a061e09088a97d152d6a48510`.
+  Read-only exact-source snapshot, no published port, loopback sshd only;
+  production password/reconnect, generated-key, unknown/explicit persisted/changed
+  trust, wrong auth, stdout/stderr/exit, timeout/cancellation checks and CLI
+  interoperability. Container removed; reports under `e3/`.
+- E4: new review-only self-contained osx-arm64 ZIP, **48,452,219 bytes**, SHA256
+  `dafdc2a10a6f827225fef0ab4212e09ae139b6b101a8a072ae3c071e0c215157`,
+  filename `VPSReady-0.1.0-dev-osx-arm64-a7a554f76dda4c6d82ebdc395e6cf1de13d105bc.zip`
+  under `artifacts/packages/`. Actual macOS arm64 direct no-dotnet startup with
+  8-second liveness / 12-second shutdown PASS. Accessibility wrapper outside ZIP
+  contains identical payload; all 229 manifest lengths/hashes verified. All six
+  pages loaded with truthful disconnected state. Native clipboard acknowledgment
+  and explicit local empty-session support export PASS. Support ZIP: 2,161 bytes,
+  SHA256 `868551fe973a1255ae5967d9fc2eb2e7890e925dbd01bff4c634dce8cce1b52f`;
+  six entries, five hashes, exact v0.1.0.0/source/RID and no raw user path verified.
+  Report `e4-offline-ui-report.json`, startup report under
+  `artifacts/startup-smoke/osx-arm64/`. No remote connection or diagnostics clear
+  was performed. Application quit and matching process absence checked.
+- Retained artifact scan PASS. Other five RIDs/signing/notarization/hosted required
+  check binding NOT_RUN or pending: this pass claims only actual local evidence.
+  Native clipboard failure is E1-injected, not an actual OS-failure reproduction.
+
+Review-only DRAFT PR: https://github.com/ZillionxBuilds/VPSReady/pull/120,
+targeting `release/0.1.0`; not accepted or self-merged.
+
+Release tracker #2 and Owner #5 now hold E5 entry pending separate review/
+integration and new exact-SHA qualification of these safety corrections. Their
+previous ready-package evidence remains historical and its checksum unchanged.
+No replacement Project or automation was created; existing watchdog stays paused.
 
 Same-agent tests are not independent acceptance. No main/release self-merge,
 stable tag/publication, new runtime dependency, agent spawn or VPS access.
