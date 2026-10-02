@@ -118,6 +118,40 @@ public sealed class AppViewModelTests
         }
     }
 
+    [Fact]
+    public void IssueReportCopyDoesNotClaimSuccessBeforeClipboardAcknowledges()
+    {
+        string? requestedReport = null;
+        var viewModel = new ActivityDiagnosticsViewModel(new ActivityWorkspace([]), report => requestedReport = report);
+        viewModel.CopySafeIssueReportCommand.Execute(null);
+        Assert.Equal("safe report", requestedReport);
+        Assert.DoesNotContain("was copied", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("Copying", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void IssueReportCopyAcknowledgmentIsNotOverwrittenByPreparation(bool succeeded)
+    {
+        ActivityDiagnosticsViewModel? viewModel = null;
+        viewModel = new ActivityDiagnosticsViewModel(new ActivityWorkspace([]), _ => viewModel!.ReportSafeIssueReportCopy(succeeded));
+        viewModel.CopySafeIssueReportCommand.Execute(null);
+        Assert.Equal(succeeded, viewModel.Status.Contains("was copied", StringComparison.Ordinal));
+        Assert.Equal(!succeeded, viewModel.Status.Contains("could not copy", StringComparison.Ordinal));
+        Assert.DoesNotContain("Copying", viewModel.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClipboardExceptionCannotExposePayloadOrClaimCopySuccess()
+    {
+        var viewModel = new ActivityDiagnosticsViewModel(new ActivityWorkspace([]), _ => throw new IOException("seeded-sensitive-content"));
+        viewModel.CopySafeIssueReportCommand.Execute(null);
+        Assert.DoesNotContain("seeded-sensitive-content", viewModel.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("was copied", viewModel.Status, StringComparison.Ordinal);
+        Assert.Contains("could not", viewModel.Status, StringComparison.Ordinal);
+    }
+
     private static ActivityEntry CreateActivityEvent(DiagnosticStatus status, string seededServer, string seededCredential, string seededPath) =>
         new StructuredDiagnosticEvent(
             DiagnosticEventCatalog.OperationFailed,

@@ -354,14 +354,19 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
     {
         try
         {
-            copySafeIssueReport(workspace.CreateSafeIssueReport(SelectedEntry?.RunId, SelectedEntry?.OperationId));
-            Status = "A sanitized issue report was copied. The repository is public; review any attachment before sharing.";
+            var report = workspace.CreateSafeIssueReport(SelectedEntry?.RunId, SelectedEntry?.OperationId);
+            Status = "Copying the sanitized issue report to the local clipboard.";
+            copySafeIssueReport(report);
         }
         catch
         {
             Status = "VPSReady could not prepare a safe issue report. No diagnostic was shared.";
         }
     }
+
+    public void ReportSafeIssueReportCopy(bool succeeded) => Status = succeeded
+        ? "A sanitized issue report was copied. The repository is public; review any attachment before sharing."
+        : "VPSReady could not copy the sanitized issue report to the clipboard. No diagnostic was shared; try again.";
 
     public async Task ExportSanitizedSupportBundleAsync(string destinationDirectory, string? runId = null, string? operationId = null)
     {
