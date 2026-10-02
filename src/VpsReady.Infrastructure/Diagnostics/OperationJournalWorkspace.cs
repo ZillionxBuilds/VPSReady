@@ -44,12 +44,27 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         DiagnosticEnvironment environment,
         IDiagnosticFolderOpener folderOpener)
     {
+        ArgumentNullException.ThrowIfNull(redactor);
+        ArgumentNullException.ThrowIfNull(environment);
         this.platformPaths = platformPaths;
         this.redactor = redactor;
         this.clock = clock;
-        this.environment = environment;
+        // Environment values reach the journal, report, bundle and manifest.
+        // Sanitize once before any of those surfaces can observe them; merely
+        // checking WasOmitted would miss replacement-only redactions.
+        this.environment = environment with
+        {
+            AppVersion = SanitizeEnvironmentValue(redactor, environment.AppVersion),
+            BuildSha = SanitizeEnvironmentValue(redactor, environment.BuildSha),
+            LocalOs = SanitizeEnvironmentValue(redactor, environment.LocalOs),
+            LocalArchitecture = SanitizeEnvironmentValue(redactor, environment.LocalArchitecture),
+            ArtifactRid = environment.ArtifactRid is null ? null : SanitizeEnvironmentValue(redactor, environment.ArtifactRid),
+        };
         this.folderOpener = folderOpener;
     }
+
+    private static string SanitizeEnvironmentValue(IRedactor redactor, string value) =>
+        Safe(redactor.Redact(value).SafeText);
 
     public async Task WriteSanitizedAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
     {
@@ -133,18 +148,20 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         return folderOpener.OpenAsync(path, cancellationToken);
     }
 
-    public string CreateSafeIssueReport(string? runId = null)
+    public string CreateSafeIssueReport(string? runId = null, string? operationId = null)
     {
         AssertSafeEnvironment();
-        var selected = GetEventsForRun(ValidateRequestedRunId(runId));
+        var requestedRunId = ValidateRequestedRunId(runId);
+        var requestedOperationId = ValidateRequestedOperationId(operationId);
+        var selected = GetEventsForRun(requestedRunId, requestedOperationId);
         foreach (var diagnosticEvent in selected)
         {
             AssertSafeEventForExport(diagnosticEvent);
         }
         var terminal = selected.Length == 0 ? null : selected[^1];
         var commandEvidence = selected.LastOrDefault(diagnosticEvent => diagnosticEvent.ExitCode is not null);
-        var run = terminal?.Correlation.RunId ?? "not-recorded";
-        var operation = terminal?.Correlation.OperationId ?? "not-recorded";
+        var run = terminal?.Correlation.RunId ?? requestedRunId ?? "not-recorded";
+        var operation = terminal?.Correlation.OperationId ?? requestedOperationId ?? "not-recorded";
         var action = terminal?.Action ?? terminal?.Category ?? "Diagnostics";
         var error = terminal?.ErrorCode ?? "not-recorded";
         var summary = terminal is null
@@ -172,11 +189,14 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
     public async Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(
         string? runId,
         string destinationDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? operationId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationDirectory);
         cancellationToken.ThrowIfCancellationRequested();
         AssertSafeEnvironment();
+        var requestedRunId = ValidateRequestedRunId(runId);
+        var requestedOperationId = ValidateRequestedOperationId(operationId);
         if (!Path.IsPathFullyQualified(destinationDirectory))
         {
             throw new ArgumentException("A support-bundle destination must be an absolute local path.", nameof(destinationDirectory));
@@ -185,11 +205,14 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         var destination = Path.GetFullPath(destinationDirectory);
         Directory.CreateDirectory(destination);
         ApplyDirectoryPermissions(destination);
-        var selected = GetEventsForRun(ValidateRequestedRunId(runId));
-        var resolvedRunId = selected.Length == 0 ? runId : selected[0].Correlation.RunId;
+        var selected = GetEventsForRun(requestedRunId, requestedOperationId);
+        var resolvedRunId = selected.Length == 0 ? requestedRunId : selected[0].Correlation.RunId;
         var safeRunPart = string.IsNullOrWhiteSpace(resolvedRunId) ? "no-run" : ValidateRequestedRunId(resolvedRunId)!;
         var timestamp = clock.UtcNow.ToString("yyyyMMddTHHmmssZ", System.Globalization.CultureInfo.InvariantCulture);
-        var bundleName = $"vpsready-support-{timestamp}-{safeRunPart[..Math.Min(safeRunPart.Length, 12)]}.zip";
+        var operationPart = requestedOperationId is null
+            ? string.Empty
+            : $"-{requestedOperationId[..Math.Min(requestedOperationId.Length, 12)]}";
+        var bundleName = $"vpsready-support-{timestamp}-{safeRunPart[..Math.Min(safeRunPart.Length, 12)]}{operationPart}.zip";
         var bundlePath = Path.Combine(destination, bundleName);
         if (File.Exists(bundlePath))
         {
@@ -197,7 +220,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         }
 
         var eventsJsonl = string.Concat(selected.Select(item => JsonSerializer.Serialize(JournalEvent.From(redactor.Redact(item), environment), JsonOptions) + Environment.NewLine));
-        var issueReport = CreateSafeIssueReport(resolvedRunId);
+        var issueReport = CreateSafeIssueReport(resolvedRunId, requestedOperationId);
         var runSummary = CreateRunSummary(selected, resolvedRunId);
         var environmentJson = JsonSerializer.Serialize(new
         {
@@ -228,6 +251,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             artifact_rid = environment.ArtifactRid is null ? null : Safe(environment.ArtifactRid),
             export_time_utc = clock.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
             run_id = resolvedRunId is null ? null : Safe(resolvedRunId),
+            operation_id = requestedOperationId is null ? null : Safe(requestedOperationId),
             files = checksums.Select(pair => new { path = pair.Key, sha256 = pair.Value }).OrderBy(item => item.path),
         }, JsonOptions);
 
@@ -318,12 +342,13 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     public void Dispose() => writeGate.Dispose();
 
-    private StructuredDiagnosticEvent[] GetEventsForRun(string? runId)
+    private StructuredDiagnosticEvent[] GetEventsForRun(string? runId, string? operationId = null)
     {
         lock (activity)
         {
             return events
-                .Where(item => runId is null || string.Equals(item.Correlation.RunId, runId, StringComparison.Ordinal))
+                .Where(item => (runId is null || string.Equals(item.Correlation.RunId, runId, StringComparison.Ordinal))
+                    && (operationId is null || string.Equals(item.Correlation.OperationId, operationId, StringComparison.Ordinal)))
                 .OrderBy(item => item.OccurredAtUtc)
                 .ToArray();
         }
@@ -532,19 +557,34 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         _ = DiagnosticCorrelationFactory.ValidateStepId(correlation.StepId);
     }
 
-    private static string? ValidateRequestedRunId(string? value)
+    private static string? ValidateRequestedRunId(string? runId)
     {
-        if (value is null)
+        if (runId is null)
         {
             return null;
         }
 
-        if (!IsFactoryOpaqueId(value, "run_"))
+        if (!IsFactoryOpaqueId(runId, "run_"))
         {
-            throw new ArgumentException("A requested diagnostic run ID must be an opaque factory-shaped identifier.", nameof(value));
+            throw new ArgumentException("A requested diagnostic run ID must be an opaque factory-shaped identifier.", nameof(runId));
         }
 
-        return value;
+        return runId;
+    }
+
+    private static string? ValidateRequestedOperationId(string? operationId)
+    {
+        if (operationId is null)
+        {
+            return null;
+        }
+
+        if (!IsFactoryOpaqueId(operationId, "op_"))
+        {
+            throw new ArgumentException("A requested diagnostic operation ID must be an opaque factory-shaped identifier.", nameof(operationId));
+        }
+
+        return operationId;
     }
 
     private static bool IsFactoryOpaqueId(string value, string prefix) =>
@@ -570,11 +610,61 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
 
     private static void AssertSafeBundleContents(IReadOnlyDictionary<string, string> files)
     {
-        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(pair.Value)).Key;
+        // Stable catalogued command IDs may describe an authorized-keys step.
+        // They are safe metadata, not raw authorized_keys contents or paths.
+        // Exempt only a JSON commandId field with a known catalog value; scan
+        // every other byte, including free-text fields, with the strict rule.
+        var unsafeFile = files.FirstOrDefault(pair => UnsafeBundleContentRegex().IsMatch(
+            pair.Key == "events.jsonl" ? MaskCataloguedCommandIdsForSafetyScan(pair.Value) : pair.Value)).Key;
         if (unsafeFile is not null)
         {
             throw new InvalidOperationException($"Support-bundle export omitted unsafe payload from {unsafeFile} by policy.");
         }
+    }
+
+    internal static string MaskCataloguedCommandIdsForSafetyScan(string jsonl)
+    {
+        // Parse the JSONL stream rather than matching text. A nested context
+        // key or escaped free-text lookalike must never receive this exemption.
+        var bytes = Encoding.UTF8.GetBytes(jsonl);
+        var reader = new Utf8JsonReader(bytes, new JsonReaderOptions { AllowMultipleValues = true });
+        var valueRanges = new List<(int Start, int End)>();
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1
+                || !reader.ValueTextEquals("commandId"))
+            {
+                continue;
+            }
+
+            if (!reader.Read())
+            {
+                throw new JsonException("A diagnostic command ID value was missing.");
+            }
+
+            var commandId = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+            if (commandId is not null && DiagnosticCommandCatalog.IsKnown(commandId))
+            {
+                valueRanges.Add((checked((int)reader.TokenStartIndex), checked((int)reader.BytesConsumed)));
+            }
+        }
+
+        if (valueRanges.Count == 0)
+        {
+            return jsonl;
+        }
+
+        var scanCopy = new StringBuilder(jsonl.Length);
+        var offset = 0;
+        foreach (var (start, end) in valueRanges)
+        {
+            scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset, start - offset)));
+            scanCopy.Append("\"[CATALOGUED_COMMAND_ID]\"");
+            offset = end;
+        }
+
+        scanCopy.Append(Encoding.UTF8.GetString(bytes.AsSpan(offset)));
+        return scanCopy.ToString();
     }
 
     private void AssertSafeEventForExport(StructuredDiagnosticEvent diagnosticEvent)
@@ -813,23 +903,38 @@ public sealed class SafeUnhandledExceptionReporter(IDiagnosticSink diagnosticSin
 }
 
 /// <summary>Last-resort startup record when dependency composition itself failed.</summary>
+public sealed record MinimalStartupRecord(string ErrorId, string? JournalPath);
+
 public static class MinimalSafeStartupJournal
 {
-    public static void TryRecord()
+    public static MinimalStartupRecord TryRecord(IPlatformPaths? platformPaths = null)
     {
+        var errorId = $"startup-{Guid.NewGuid():N}";
         try
         {
-            var paths = new SystemPlatformPaths();
+            var paths = platformPaths ?? new SystemPlatformPaths();
             var path = paths.ResolvePath(LocalStorageArea.State, "logs/startup-failures.jsonl");
             var directory = Path.GetDirectoryName(path) ?? throw new IOException("A startup journal path requires a directory.");
             Directory.CreateDirectory(directory);
             ApplyDirectoryPermissions(directory);
-            File.AppendAllText(path, "{\"schema_version\":1,\"event_id\":\"application.startup_failed\",\"message\":\"VPSReady started in a safe limited state.\"}" + Environment.NewLine, new UTF8Encoding(false));
+            var line = JsonSerializer.Serialize(new
+            {
+                schema_version = 1,
+                timestamp_utc = DateTimeOffset.UtcNow,
+                event_id = "application.startup_failed",
+                operation_id = errorId,
+                error_code = "STARTUP_FAILED",
+                status = "failed",
+                message = "VPSReady started in a safe limited state."
+            });
+            File.AppendAllText(path, line + Environment.NewLine, new UTF8Encoding(false));
             ApplyFilePermissions(path);
+            return new MinimalStartupRecord(errorId, path);
         }
         catch
         {
             // The caller still presents the safe limited-state window.
+            return new MinimalStartupRecord(errorId, null);
         }
     }
 

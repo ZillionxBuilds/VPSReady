@@ -36,6 +36,62 @@ public sealed class OpenSshConfigEditorTests
         Assert.Contains("port 2222", added.Output, StringComparison.Ordinal);
     }
 
+    [UnixFact]
+    public async Task NewAliasWithWildcardIdentityFileFailsClosedWithoutChangingEffectiveConfig()
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var shell = new ShellSandbox();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "default_id");
+        var original = $"Host *\n    IdentityFile \"{extraIdentity}\"\n";
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath);
+        var before = await shell.RunAsync(command + " new-alias");
+        Assert.Equal(0, before.ExitCode);
+        Assert.Contains($"identityfile {extraIdentity}", before.Output, StringComparison.Ordinal);
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics);
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("config");
+
+        var result = await editor.AddAliasAsync(workspace.Request("new-alias"), correlation, CancellationToken.None);
+        var after = await shell.RunAsync(command + " new-alias");
+
+        Assert.False(result.Succeeded, "Do not report a new alias as saved when a matching wildcard already selects another identity.");
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InheritedIdentityConflict, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.Equal(0, after.ExitCode);
+        Assert.Equal(before.Output, after.Output);
+        Assert.DoesNotContain($"identityfile {workspace.IdentityPath}", after.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.All(diagnostics.Events, item =>
+        {
+            Assert.Equal(correlation.OperationId, item.Correlation.OperationId);
+            Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(extraIdentity, item.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [UnixTheory]
+    [InlineData("Host unrelated-*")]
+    [InlineData("Host * !new-alias")]
+    public async Task NewAliasIsAllowedWhenIdentityWildcardDoesNotMatch(string hostPattern)
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var shell = new ShellSandbox();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "unrelated_id");
+        await File.WriteAllTextAsync(workspace.ConfigPath, $"{hostPattern}\n    IdentityFile \"{extraIdentity}\"\n");
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath);
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink())
+            .AddAliasAsync(workspace.Request("new-alias"), DiagnosticRunContext.StartSession().StartOperation("config"), CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        var effective = await shell.RunAsync(command + " new-alias");
+        Assert.Equal(0, effective.ExitCode);
+        Assert.Contains($"identityfile {workspace.IdentityPath}", effective.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain($"identityfile {extraIdentity}", effective.Output, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("ServerAliveInterval 60\n\nHost existing\n    HostName existing.example\n")]
     [InlineData("ServerAliveInterval 60\r\nHost existing\r\n    HostName existing.example")]
@@ -120,6 +176,39 @@ public sealed class OpenSshConfigEditorTests
         Assert.Equal(OpenSshConfigEditDisposition.Unchanged, result.Disposition);
         Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
         Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExtraEffectiveIdentityRefusesFalseNoChangeWithoutEditingConfig(bool extraInWildcard)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var extraIdentity = Path.Combine(workspace.Root, "keys", "other-key");
+        var original = extraInWildcard
+            ? workspace.RenderAlias("work-vps") + $"Host *\n    IdentityFile \"{extraIdentity}\"\n"
+            : workspace.RenderAlias("work-vps").Replace(
+                "    IdentitiesOnly yes\n",
+                $"    IdentityFile \"{extraIdentity}\"\n    IdentitiesOnly yes\n",
+                StringComparison.Ordinal);
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var diagnostics = new CollectingDiagnosticSink();
+        var correlation = DiagnosticRunContext.StartSession().StartOperation("config_alias");
+
+        var result = await new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics)
+            .AddAliasAsync(workspace.Request("work-vps"), correlation, CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.AliasExists, result.ErrorCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.All(diagnostics.Events, item =>
+        {
+            Assert.Equal(correlation.OperationId, item.Correlation.OperationId);
+            Assert.DoesNotContain(workspace.Root, item.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(extraIdentity, item.Message, StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -224,6 +313,71 @@ public sealed class OpenSshConfigEditorTests
         Assert.False(File.Exists(workspace.ConfigPath));
     }
 
+    [UnixFact]
+    public async Task PosixIdentityPathWithLiteralBackslashIsNotSilentlyRewritten()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var selectedPath = Path.Combine(workspace.Root, @"key\with-backslash");
+        await File.WriteAllTextAsync(selectedPath, "synthetic local path fixture");
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink());
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("work-vps", "safe.example", "safe-user", 22, selectedPath),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InvalidInput, result.ErrorCode);
+        Assert.False(File.Exists(workspace.ConfigPath));
+    }
+
+    [Theory]
+    [InlineData("key%h")]
+    [InlineData("key${HOME}")]
+    public async Task IdentityPathWithOpenSshExpansionSyntaxIsNotSavedAsAFalseLiteral(string fileName)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var selectedPath = Path.Combine(workspace.Root, fileName);
+        await File.WriteAllTextAsync(selectedPath, "synthetic local path fixture");
+        const string original = "# retained local configuration\nHost other\n    User existing\n";
+        await File.WriteAllTextAsync(workspace.ConfigPath, original);
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("work-vps", "safe.example", "safe-user", 22, selectedPath),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(OpenSshConfigEditErrorCatalog.InvalidInput, result.ErrorCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.All(diagnostics.Events, entry => Assert.DoesNotContain(selectedPath, entry.Message, StringComparison.Ordinal));
+    }
+
+    [UnixTheory]
+    [InlineData("key with spaces")]
+    [InlineData("key#comment-like")]
+    [InlineData("key\"quote")]
+    public async Task AcceptedLiteralIdentityPathRemainsEffectiveInOpenSsh(string fileName)
+    {
+        await using var workspace = new ConfigWorkspace();
+        var selectedPath = Path.Combine(workspace.Root, fileName);
+        await File.WriteAllTextAsync(selectedPath, "synthetic local path fixture");
+        var editor = new OpenSshConfigEditor(workspace, new AtomicFileStore(), new CollectingDiagnosticSink());
+
+        var result = await editor.AddAliasAsync(
+            new OpenSshConfigEditRequest("work-vps", "safe.example", "safe-user", 22, selectedPath),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        using var shell = new ShellSandbox();
+        var command = "ssh -G -F " + VpsReady.Core.Remote.RemoteCommandArguments.QuotePosixArgument(workspace.ConfigPath) + " work-vps";
+        var effective = await shell.RunAsync(command);
+        Assert.Equal(0, effective.ExitCode);
+        Assert.Contains("identityfile " + selectedPath, effective.Output.Split('\n'), StringComparer.Ordinal);
+    }
+
     [Fact]
     public async Task PostCommitCancellationRestoresExactOriginalAndReportsRecoveredState()
     {
@@ -245,6 +399,28 @@ public sealed class OpenSshConfigEditorTests
     }
 
     [Fact]
+    public async Task PostCommitCancellationDeletesOnlyTheNewConfigItCommitted()
+    {
+        await using var workspace = new ConfigWorkspace();
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new CancelAfterFirstCommitStore(cancellation), diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            cancellation.Token);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.Cancelled, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.False(File.Exists(workspace.ConfigPath));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
     public async Task PostCommitVerificationMismatchRestoresExactOriginalAndNeverReportsSuccess()
     {
         await using var workspace = new ConfigWorkspace();
@@ -260,6 +436,190 @@ public sealed class OpenSshConfigEditorTests
         Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
         Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath));
         Assert.Equal(original, await File.ReadAllBytesAsync(workspace.ConfigPath + ".bak"));
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ConcurrentConfigChangeIsNotOverwrittenFromStaleSnapshot(bool configExistsAtSnapshot)
+    {
+        await using var workspace = new ConfigWorkspace();
+        if (configExistsAtSnapshot)
+        {
+            await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+        }
+
+        var externalEdit = Encoding.UTF8.GetBytes("# newer external edit\nHost external-target\n    User retained-user\n");
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, new ChangeBeforeCommitStore(externalEdit), diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(result.Succeeded);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
+    public async Task AtomicReplaceRaceRestoresExternalEditAndDoesNotReportSuccess()
+    {
+        await using var workspace = new ConfigWorkspace();
+        await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+
+        var externalEdit = Encoding.UTF8.GetBytes("# newer external edit at replace boundary\nHost external-target\n    User retained-user\n");
+        var injected = 0;
+        var store = new AtomicFileStore(path =>
+        {
+            if (Interlocked.Exchange(ref injected, 1) != 0)
+            {
+                return;
+            }
+
+            var externalPath = path + ".external-edit";
+            File.WriteAllBytes(externalPath, externalEdit);
+            File.Move(externalPath, path, overwrite: true);
+        });
+        var diagnostics = new CollectingDiagnosticSink();
+        var editor = new OpenSshConfigEditor(workspace, store, diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.ConcurrentModification, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Operation.State);
+        Assert.Equal(OperationRecovery.Succeeded, result.Operation.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+    }
+
+    [Fact]
+    public async Task AtomicReplaceRaceThatCannotBeSafelyRecoveredReportsUnknownAndRetainsBothVersions()
+    {
+        await using var workspace = new ConfigWorkspace();
+        await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+
+        var firstExternalEdit = Encoding.UTF8.GetBytes("# concurrent version displaced by initial replace\nHost first-target\n");
+        var laterExternalEdit = Encoding.UTF8.GetBytes("# later concurrent version remains at target\nHost later-target\n");
+        var diagnostics = new CollectingDiagnosticSink();
+        var store = new AtomicFileStore(
+            path => ReplaceWithExternalEdit(path, ".first-edit", firstExternalEdit),
+            path => ReplaceWithExternalEdit(path, ".later-edit", laterExternalEdit));
+        var editor = new OpenSshConfigEditor(workspace, store, diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            CancellationToken.None);
+
+        var targetAfterFailure = await File.ReadAllBytesAsync(workspace.ConfigPath);
+        Assert.True(
+            laterExternalEdit.SequenceEqual(targetAfterFailure),
+            $"Error={result.ErrorCode}; operationError={result.Operation.ErrorCode}; recovery={result.Operation.Recovery}");
+        Assert.Equal(firstExternalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath + ".bak"));
+        Assert.False(result.Succeeded);
+        Assert.Equal(OpenSshConfigEditErrorCatalog.LocalIo, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.Recovery, result.Operation.ErrorCode);
+        Assert.Equal(OperationState.Unknown, result.Operation.State);
+        Assert.Equal(OperationRecovery.Failed, result.Operation.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("concurrent version", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AtomicReplaceRaceWithoutRequestedBackupCleansVerifiedRecoveryCapture()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var original = Encoding.UTF8.GetBytes("# original snapshot\nHost *\n");
+        await File.WriteAllBytesAsync(workspace.ConfigPath, original);
+        var externalEdit = Encoding.UTF8.GetBytes("# newer external edit\nHost external-target\n");
+        var injected = 0;
+        var store = new AtomicFileStore(path =>
+        {
+            if (Interlocked.Exchange(ref injected, 1) == 0)
+            {
+                ReplaceWithExternalEdit(path, ".external-edit", externalEdit);
+            }
+        });
+
+        var error = await Assert.ThrowsAsync<LocalFilePreconditionFailedException>(() => store.WriteAtomicallyAsync(
+            workspace.ConfigPath,
+            "# replacement\n"u8.ToArray(),
+            new AtomicWriteOptions(
+                LocalFileCollisionPolicy.ReplaceWithBackup,
+                CreateBackup: false,
+                ExpectedTargetSnapshot: new LocalFileSnapshot(true, original)),
+            CancellationToken.None));
+
+        Assert.True(error.RecoverySucceeded);
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(workspace.ConfigPath)!, "*.vpsready-recovery-*"));
+    }
+
+    [Fact]
+    public async Task ExpectedSnapshotWriteWithoutBackupSucceedsAndCleansVerifiedCapture()
+    {
+        await using var workspace = new ConfigWorkspace();
+        var original = Encoding.UTF8.GetBytes("# original snapshot\nHost *\n");
+        var replacement = Encoding.UTF8.GetBytes("# replacement\nHost work-vps\n");
+        await File.WriteAllBytesAsync(workspace.ConfigPath, original);
+
+        var result = await new AtomicFileStore().WriteAtomicallyAsync(
+            workspace.ConfigPath,
+            replacement,
+            new AtomicWriteOptions(
+                LocalFileCollisionPolicy.ReplaceWithBackup,
+                CreateBackup: false,
+                ExpectedTargetSnapshot: new LocalFileSnapshot(true, original)),
+            CancellationToken.None);
+
+        Assert.Equal(replacement, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(File.Exists(workspace.ConfigPath + ".bak"));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(workspace.ConfigPath)!, "*.vpsready-recovery-*"));
+        Assert.Null(result.BackupPath);
+    }
+
+    private static void ReplaceWithExternalEdit(string path, string suffix, byte[] contents)
+    {
+        var externalPath = path + suffix;
+        File.WriteAllBytes(externalPath, contents);
+        File.Move(externalPath, path, overwrite: true);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecoveryDoesNotRestoreOrDeleteOverAStillNewerExternalEdit(bool configExistsAtSnapshot)
+    {
+        await using var workspace = new ConfigWorkspace();
+        if (configExistsAtSnapshot)
+        {
+            await File.WriteAllTextAsync(workspace.ConfigPath, "# original snapshot\nHost *\n    ServerAliveInterval 30\n");
+        }
+
+        var externalEdit = Encoding.UTF8.GetBytes("# newer edit during recovery\nHost external-target\n    User retained-user\n");
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CollectingDiagnosticSink();
+        var store = new ExternalEditAfterCommitStore(externalEdit, cancellation);
+        var editor = new OpenSshConfigEditor(workspace, store, diagnostics);
+
+        var result = await editor.AddAliasAsync(
+            workspace.Request("work-vps"),
+            DiagnosticRunContext.StartSession().StartOperation("config_alias"),
+            cancellation.Token);
+
+        Assert.Equal(externalEdit, await File.ReadAllBytesAsync(workspace.ConfigPath));
+        Assert.False(result.Succeeded);
+        Assert.Equal(OperationState.Unknown, result.Operation.State);
+        Assert.Equal(OperationRecovery.Failed, result.Operation.Recovery);
+        Assert.Equal(OperationErrorCode.Recovery, result.Operation.ErrorCode);
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OpenSshConfigEditSucceeded);
     }
 
@@ -288,6 +648,7 @@ public sealed class OpenSshConfigEditorTests
         }
         public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
         public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 
@@ -320,6 +681,58 @@ public sealed class OpenSshConfigEditorTests
             return actual;
         }
         public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class ChangeBeforeCommitStore(byte[] externalEdit) : IRecoverableLocalFileStore
+    {
+        private readonly AtomicFileStore inner = new();
+        private bool changed;
+
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) =>
+            inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            if (!changed)
+            {
+                changed = true;
+                await File.WriteAllBytesAsync(path, externalEdit, cancellationToken);
+            }
+
+            return await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+        }
+
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
+        public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
+    }
+
+    private sealed class ExternalEditAfterCommitStore(byte[] externalEdit, CancellationTokenSource cancellation) : IRecoverableLocalFileStore
+    {
+        private readonly AtomicFileStore inner = new();
+        private int writes;
+
+        public Task WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken) =>
+            inner.WriteAtomicallyAsync(path, contents, cancellationToken);
+
+        public async Task<AtomicWriteResult> WriteAtomicallyAsync(string path, ReadOnlyMemory<byte> contents, AtomicWriteOptions options, CancellationToken cancellationToken)
+        {
+            var result = await inner.WriteAtomicallyAsync(path, contents, options, cancellationToken);
+            if (Interlocked.Increment(ref writes) == 1)
+            {
+                await File.WriteAllBytesAsync(path, externalEdit, CancellationToken.None);
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
+        public Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken) => inner.ReadAsync(path, cancellationToken);
+        public Task DeleteIfExistsAsync(string path, CancellationToken cancellationToken) => inner.DeleteIfExistsAsync(path, cancellationToken);
+        public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken) => inner.DeleteIfUnchangedAsync(path, expectedSnapshot, cancellationToken);
         public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken) => inner.CleanupAsync(directory, policy, cancellationToken);
     }
 }

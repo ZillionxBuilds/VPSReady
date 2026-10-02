@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Remote;
 
@@ -9,6 +10,52 @@ namespace VpsReady.ScenarioTests;
 [Trait("Category", "E2")]
 public sealed class FirewallViewModelScenarioTests
 {
+    [Fact]
+    public async Task LateEnableCancellationDisplaysFreshVerifiedSnapshotWithoutReportingSuccess()
+    {
+        await using var services = ScenarioComposition.Create("scenario.c307.firewall-ui-enable-cancel-after-effect", state =>
+        {
+            state.Ufw.Rules.Clear();
+            state.Ssh.IsConnected = true;
+        });
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var session = services.GetRequiredService<IApplicationSession>();
+        var diagnostics = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var transport = new LateEnableCancellationScenarioTransport(
+            new DeterministicScenarioHost(state, services.GetRequiredService<ScenarioFaultPlan>()));
+        await session.StartAsync(new RemoteEndpoint("scenario-private-host", 22, "scenario-user"), transport);
+        using var viewModel = new FirewallViewModel(
+            session,
+            new FirewallManagement(services.GetRequiredService<IDiagnosticSink>()),
+            services.GetRequiredService<IDiagnosticSink>())
+        {
+            IsEnableConfirmed = true,
+        };
+        transport.AfterEnableEffect = viewModel.Cancel;
+
+        await viewModel.EnableAsync();
+
+        Assert.Equal(FirewallScreenState.Cancelled, viewModel.State);
+        Assert.Equal("OPERATION_CANCELLED", viewModel.ErrorCode);
+        Assert.Equal(UfwFirewallState.Active, viewModel.FirewallState);
+        Assert.True(viewModel.HasCurrentListing);
+        Assert.Contains(viewModel.Rules, rule => rule.Port == state.Ssh.ActiveSshPort && rule.Family == UfwIpFamily.Ipv4);
+        Assert.Contains(viewModel.Rules, rule => rule.Port == state.Ssh.ActiveSshPort && rule.Family == UfwIpFamily.Ipv6);
+        Assert.Contains("current-session continuity were verified", viewModel.Status, StringComparison.Ordinal);
+        Assert.NotNull(viewModel.OperationId);
+        Assert.Contains(diagnostics.Events, item => item.Correlation.OperationId == viewModel.OperationId
+            && item.EventId == DiagnosticEventCatalog.OperationCancelled
+            && item.Phase == DiagnosticPhase.Recovery);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Correlation.OperationId == viewModel.OperationId
+            && item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+
+        var enableIndex = transport.CommandIds.IndexOf(RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.True(enableIndex >= 0);
+        Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest],
+            transport.CommandIds.Skip(enableIndex + 1));
+        Assert.DoesNotContain("scenario-private-host", diagnostics.ToJsonLines(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ProductionAdapterDistinguishesFailedRemovalFromFreshCompleteListing()
     {

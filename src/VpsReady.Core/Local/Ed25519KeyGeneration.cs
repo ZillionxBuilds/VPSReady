@@ -4,8 +4,8 @@ using VpsReady.Core.Operations;
 namespace VpsReady.Core.Local;
 
 /// <summary>
-/// Stable, public-safe diagnostics for local key generation. The values name
-/// the failure class only; they never contain a path, key, or user identity.
+/// Stable, public-safe outcome codes for local key generation. The values
+/// never contain a path, key, or user identity.
 /// </summary>
 public static class LocalEd25519KeyGenerationErrorCatalog
 {
@@ -17,6 +17,7 @@ public static class LocalEd25519KeyGenerationErrorCatalog
     public const string Recovery = "LOCAL_KEY_RECOVERY_FAILED";
     public const string LocalIo = "LOCAL_KEY_IO_FAILED";
     public const string Cancelled = "LOCAL_KEY_GENERATION_CANCELLED";
+    public const string DiagnosticUnconfirmed = "LOCAL_KEY_DIAGNOSTIC_UNCONFIRMED";
 
     public static IReadOnlyCollection<string> All { get; } =
     [
@@ -28,6 +29,7 @@ public static class LocalEd25519KeyGenerationErrorCatalog
         Recovery,
         LocalIo,
         Cancelled,
+        DiagnosticUnconfirmed,
     ];
 }
 
@@ -72,18 +74,22 @@ public sealed class LocalEd25519KeyPairLocation
 /// <summary>
 /// Application-facing local key-generation result. Successful results expose
 /// only locations; failed results retain a stable safe error code and typed
-/// operation outcome, never an exception or key bytes.
+/// operation outcome. A committed pair or a failed/cancelled attempt may
+/// carry a warning if Activity persistence cannot be confirmed. No result
+/// exposes an exception or key bytes.
 /// </summary>
 public sealed class LocalEd25519KeyGenerationResult
 {
     private LocalEd25519KeyGenerationResult(
         OperationResult operation,
         LocalEd25519KeyPairLocation? keyPair,
-        string? generationErrorCode)
+        string? generationErrorCode,
+        string? diagnosticWarningCode = null)
     {
         Operation = operation;
         KeyPair = keyPair;
         GenerationErrorCode = generationErrorCode;
+        DiagnosticWarningCode = diagnosticWarningCode;
     }
 
     public OperationResult Operation { get; }
@@ -91,6 +97,8 @@ public sealed class LocalEd25519KeyGenerationResult
     public LocalEd25519KeyPairLocation? KeyPair { get; }
 
     public string? GenerationErrorCode { get; }
+
+    public string? DiagnosticWarningCode { get; }
 
     public bool Succeeded => Operation.Succeeded && KeyPair is not null;
 
@@ -106,6 +114,24 @@ public sealed class LocalEd25519KeyGenerationResult
         return new LocalEd25519KeyGenerationResult(operation, keyPair, generationErrorCode: null);
     }
 
+    public static LocalEd25519KeyGenerationResult SuccessWithUnconfirmedDiagnostic(
+        OperationResult operation,
+        LocalEd25519KeyPairLocation keyPair)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(keyPair);
+        if (!operation.Succeeded)
+        {
+            throw new ArgumentException("A committed key pair requires a successful operation.", nameof(operation));
+        }
+
+        return new LocalEd25519KeyGenerationResult(
+            operation,
+            keyPair,
+            generationErrorCode: null,
+            diagnosticWarningCode: LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed);
+    }
+
     public static LocalEd25519KeyGenerationResult Failure(OperationResult operation, string generationErrorCode)
     {
         ArgumentNullException.ThrowIfNull(operation);
@@ -117,6 +143,9 @@ public sealed class LocalEd25519KeyGenerationResult
 
         return new LocalEd25519KeyGenerationResult(operation, keyPair: null, generationErrorCode);
     }
+
+    public LocalEd25519KeyGenerationResult WithUnconfirmedDiagnostic() =>
+        new(Operation, KeyPair, GenerationErrorCode, LocalEd25519KeyGenerationErrorCatalog.DiagnosticUnconfirmed);
 
     public override string ToString() => "LocalEd25519KeyGenerationResult [safe summary only]";
 }

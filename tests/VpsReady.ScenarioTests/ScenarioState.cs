@@ -253,6 +253,7 @@ public sealed class ScenarioFirewallState
         return Rules.Any(rule =>
             rule.Protocol == ScenarioRuleProtocol.Tcp
             && rule.Port == activePort
+            && rule.EndPort is null
             && string.Equals(rule.Action, "ALLOW", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -263,6 +264,7 @@ public sealed class ScenarioFirewallState
         return Rules.FirstOrDefault(rule =>
             rule.Protocol == protocol
             && rule.Port == port
+            && rule.EndPort is null
             && string.Equals(rule.Source, source, StringComparison.Ordinal)
             && rule.IpFamily == family);
     }
@@ -274,7 +276,15 @@ public sealed record ScenarioFirewallRule(
     int Port,
     string Source,
     ScenarioIpFamily IpFamily,
-    string Action = "ALLOW");
+    string Action = "ALLOW",
+    int? EndPort = null)
+{
+    public string PortDisplay => EndPort is { } end
+        ? $"{Port.ToString(CultureInfo.InvariantCulture)}:{end.ToString(CultureInfo.InvariantCulture)}"
+        : Port.ToString(CultureInfo.InvariantCulture);
+
+    public bool ContainsPort(int port) => port >= Port && port <= (EndPort ?? Port);
+}
 
 public sealed class ScenarioRemoteFileState
 {
@@ -406,7 +416,7 @@ internal static class ScenarioValueFormatting
             ' ',
             $"rule_id={rule.RuleId}",
             $"protocol={rule.Protocol.ToString().ToLowerInvariant()}",
-            $"port={FormatPort(rule.Port)}",
+            $"port={rule.PortDisplay}",
             $"source={rule.Source}",
             $"family={rule.IpFamily.ToString().ToLowerInvariant()}",
             $"action={rule.Action}");

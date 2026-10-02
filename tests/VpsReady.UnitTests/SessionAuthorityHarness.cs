@@ -11,7 +11,9 @@ internal sealed class SessionAuthorityHarness : IApplicationSession
     private readonly ApplicationSession inner = new();
     public bool ShortTimeout { get; set; }
     public Func<Task>? BeforeDispatch { get; set; }
+    public Func<Task>? AfterDispatch { get; set; }
     public Func<Task>? AfterReturn { get; set; }
+    public OperationResult? LastResult { get; private set; }
     public int UnboundCalls { get; private set; }
     public TaskCompletionSource TokenCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public ApplicationSessionSnapshot Snapshot => inner.Snapshot;
@@ -30,12 +32,15 @@ internal sealed class SessionAuthorityHarness : IApplicationSession
         async Task<OperationResult> Invoke(IRemoteTransport transport, CancellationToken token)
         {
             using var registration = token.Register(() => TokenCancelled.TrySetResult());
-            return await operation(transport, token);
+            var result = await operation(transport, token);
+            if (AfterDispatch is { } afterDispatch) { await afterDispatch(); }
+            return result;
         }
         var limit = ShortTimeout ? TimeSpan.FromMilliseconds(100) : timeout;
         var result = expected is null
             ? await inner.RunOperationAsync(id, limit, Invoke, cancellation)
             : await inner.RunOperationForSessionAsync(id, limit, Invoke, expected, cancellation);
+        LastResult = result;
         if (AfterReturn is { } after) { AfterReturn = null; await after(); }
         return result;
     }

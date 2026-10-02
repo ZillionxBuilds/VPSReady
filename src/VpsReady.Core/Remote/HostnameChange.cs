@@ -8,6 +8,7 @@ public static class HostnameChangeErrorCatalog
     public const string Validation = "HOSTNAME_CHANGE_VALIDATION_FAILED";
     public const string Inspection = "HOSTNAME_CHANGE_INSPECTION_FAILED";
     public const string Confirmation = "HOSTNAME_CHANGE_CONFIRMATION_REQUIRED";
+    public const string StalePlan = "HOSTNAME_CHANGE_PLAN_CHANGED";
     public const string Privilege = "HOSTNAME_CHANGE_PRIVILEGE_FAILED";
     public const string Command = "HOSTNAME_CHANGE_COMMAND_FAILED";
     public const string Verification = "HOSTNAME_CHANGE_VERIFICATION_FAILED";
@@ -16,7 +17,7 @@ public static class HostnameChangeErrorCatalog
     public const string Unexpected = "HOSTNAME_CHANGE_UNEXPECTED_FAILED";
 
     public static IReadOnlyCollection<string> All { get; } =
-    [Validation, Inspection, Confirmation, Privilege, Command, Verification, Timeout, Cancelled, Unexpected];
+    [Validation, Inspection, Confirmation, StalePlan, Privilege, Command, Verification, Timeout, Cancelled, Unexpected];
 }
 
 /// <summary>Strict Ubuntu static-hostname validation. The accepted value is shell-safe by construction.</summary>
@@ -53,9 +54,27 @@ public sealed record HostnameReadResult(string? Hostname, bool IsAvailable)
     public override string ToString() => "HostnameReadResult [hostname omitted]";
 }
 
-public sealed record HostnameChangePlan(OperationResult Result, string? CurrentHostname, string? ProposedHostname, string? ErrorCode)
+public sealed record HostnameChangePlan
 {
-    public bool IsReady => Result.Succeeded && CurrentHostname is not null && ProposedHostname is not null;
+    private readonly IRemoteTransport? boundTransport;
+
+    public HostnameChangePlan(OperationResult result, string? currentHostname, string? proposedHostname, string? errorCode)
+    {
+        Result = result;
+        CurrentHostname = currentHostname;
+        ProposedHostname = proposedHostname;
+        ErrorCode = errorCode;
+    }
+
+    internal HostnameChangePlan(OperationResult result, string? currentHostname, string? proposedHostname, string? errorCode, IRemoteTransport transport)
+        : this(result, currentHostname, proposedHostname, errorCode) => boundTransport = transport ?? throw new ArgumentNullException(nameof(transport));
+
+    public OperationResult Result { get; }
+    public string? CurrentHostname { get; }
+    public string? ProposedHostname { get; }
+    public string? ErrorCode { get; }
+    public bool IsReady => Result.Succeeded && CurrentHostname is not null && ProposedHostname is not null && boundTransport is not null;
+    public bool IsForTransport(IRemoteTransport transport) => ReferenceEquals(boundTransport, transport);
 
     public override string ToString() => "HostnameChangePlan [hostname omitted]";
 }

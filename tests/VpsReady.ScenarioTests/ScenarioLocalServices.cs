@@ -93,30 +93,34 @@ public sealed class ScenarioLocalFileStore(ScenarioHostState state) : IRecoverab
             throw new IOException("Scenario interrupted the atomic write before replacement.");
         }
 
-        var exists = state.LocalFiles.Files.ContainsKey(path);
-        if ((state.LocalFiles.FailOnExistingPath || options.CollisionPolicy == LocalFileCollisionPolicy.Reject) && exists)
+        lock (state.LocalFiles)
         {
-            throw new IOException("Scenario refused to overwrite an existing local file.");
-        }
+            EnsureExpectedSnapshot(path, options.ExpectedTargetSnapshot);
+            var exists = state.LocalFiles.Files.ContainsKey(path);
+            if ((state.LocalFiles.FailOnExistingPath || options.CollisionPolicy == LocalFileCollisionPolicy.Reject) && exists)
+            {
+                throw new IOException("Scenario refused to overwrite an existing local file.");
+            }
 
-        string? backupPath = null;
-        if (exists && options.CreateBackup)
-        {
-            backupPath = path + ".bak";
-            state.LocalFiles.Files[backupPath] = state.LocalFiles.Files[path].ToArray();
-            state.LocalFiles.Permissions[backupPath] = "0600";
-            state.LocalFiles.LastWriteUtc[backupPath] = state.LocalFiles.Now;
-        }
+            string? backupPath = null;
+            if (exists && options.CreateBackup)
+            {
+                backupPath = path + ".bak";
+                state.LocalFiles.Files[backupPath] = state.LocalFiles.Files[path].ToArray();
+                state.LocalFiles.Permissions[backupPath] = "0600";
+                state.LocalFiles.LastWriteUtc[backupPath] = state.LocalFiles.Now;
+            }
 
-        state.LocalFiles.Files[path] = contents.ToArray();
-        state.LocalFiles.AtomicWriteCount++;
-        if (options.RestrictPermissions)
-        {
-            state.LocalFiles.Permissions[path] = "0600";
-        }
+            state.LocalFiles.Files[path] = contents.ToArray();
+            state.LocalFiles.AtomicWriteCount++;
+            if (options.RestrictPermissions)
+            {
+                state.LocalFiles.Permissions[path] = "0600";
+            }
 
-        state.LocalFiles.LastWriteUtc[path] = state.LocalFiles.Now;
-        return new AtomicWriteResult(path, backupPath, exists);
+            state.LocalFiles.LastWriteUtc[path] = state.LocalFiles.Now;
+            return new AtomicWriteResult(path, backupPath, exists);
+        }
     }
 
     public async Task<ReadOnlyMemory<byte>> ReadAsync(string path, CancellationToken cancellationToken)
@@ -143,10 +147,45 @@ public sealed class ScenarioLocalFileStore(ScenarioHostState state) : IRecoverab
     {
         ArgumentNullException.ThrowIfNull(path);
         cancellationToken.ThrowIfCancellationRequested();
-        state.LocalFiles.Files.Remove(path);
-        state.LocalFiles.Permissions.Remove(path);
-        state.LocalFiles.LastWriteUtc.Remove(path);
+        lock (state.LocalFiles)
+        {
+            state.LocalFiles.Files.Remove(path);
+            state.LocalFiles.Permissions.Remove(path);
+            state.LocalFiles.LastWriteUtc.Remove(path);
+        }
+
         return Task.CompletedTask;
+    }
+
+    public Task DeleteIfUnchangedAsync(string path, LocalFileSnapshot expectedSnapshot, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(expectedSnapshot);
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (state.LocalFiles)
+        {
+            EnsureExpectedSnapshot(path, expectedSnapshot);
+            state.LocalFiles.Files.Remove(path);
+            state.LocalFiles.Permissions.Remove(path);
+            state.LocalFiles.LastWriteUtc.Remove(path);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void EnsureExpectedSnapshot(string path, LocalFileSnapshot? expectedSnapshot)
+    {
+        if (expectedSnapshot is null)
+        {
+            return;
+        }
+
+        var exists = state.LocalFiles.Files.TryGetValue(path, out var current);
+        if (exists != expectedSnapshot.Exists
+            || (exists && !expectedSnapshot.Contents.Span.SequenceEqual(current)))
+        {
+            throw new LocalFilePreconditionFailedException();
+        }
     }
 
     public Task<RetentionCleanupResult> CleanupAsync(string directory, RetentionPolicy policy, CancellationToken cancellationToken)

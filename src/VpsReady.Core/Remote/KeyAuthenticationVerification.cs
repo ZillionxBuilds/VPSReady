@@ -82,6 +82,11 @@ public interface IKeyAuthenticationVerifier
     Task<KeyAuthenticationVerificationResult> VerifyAsync(
         KeyAuthenticationVerificationRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<KeyAuthenticationVerificationResult> VerifyAsync(
+        KeyAuthenticationVerificationRequest request,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

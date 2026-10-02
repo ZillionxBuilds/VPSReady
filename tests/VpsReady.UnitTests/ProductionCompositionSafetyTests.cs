@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Application;
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Remote;
 using VpsReady.Desktop;
@@ -11,6 +12,38 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class ProductionCompositionSafetyTests
 {
+    [Fact]
+    public async Task ProductionConnectionValidationWritesToTheSameLocalActivityWorkspace()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "VpsReady.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var paths = new SystemPlatformPaths(new PlatformPathInputs(
+                LocalPlatform.MacOS,
+                root,
+                root,
+                root,
+                null,
+                null));
+            await using var services = DesktopComposition.CreateProductionServices(paths);
+            var app = services.GetRequiredService<AppViewModel>();
+            var workspace = services.GetRequiredService<IDiagnosticsWorkspace>();
+
+            await app.ConnectionOverview!.TestAsync("bad host", "70000", "bad user", null);
+
+            Assert.Equal("VALIDATION_FAILED", app.ConnectionOverview.ErrorCode);
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal(app.ConnectionOverview.OperationId, entry.OperationId);
+            Assert.DoesNotContain("bad host", entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("bad user", entry.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task ProductionCompositionUsesRealTransportFactoryAndHasNoScenarioSuccessRoute()
     {

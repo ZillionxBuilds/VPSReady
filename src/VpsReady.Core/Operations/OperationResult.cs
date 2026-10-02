@@ -22,6 +22,7 @@ public enum OperationErrorCode
     LocalIo,
     Apt,
     Reconnect,
+    ConcurrentModification,
     Unexpected,
 }
 
@@ -149,7 +150,9 @@ public sealed record OperationResult
         OperationErrorCode errorCode,
         OperationState state = OperationState.Unknown,
         OperationVerification verification = OperationVerification.NotRun,
-        OperationRecovery recovery = OperationRecovery.NotRequired)
+        OperationRecovery recovery = OperationRecovery.NotRequired,
+        string? userMessage = null,
+        string? nextAction = null)
     {
         var message = OperationErrorCatalog.Get(errorCode);
         return new OperationResult(
@@ -159,14 +162,17 @@ public sealed record OperationResult
             verification,
             recovery,
             errorCode,
-            WithStateWarning(message.UserMessage, state),
-            message.NextAction);
+            WithStateWarning(userMessage ?? message.UserMessage, state),
+            nextAction ?? message.NextAction);
     }
 
     public static OperationResult Cancellation(
         string operationId,
         OperationState state = OperationState.Unknown,
-        OperationVerification verification = OperationVerification.NotRun)
+        OperationVerification verification = OperationVerification.NotRun,
+        OperationRecovery recovery = OperationRecovery.NotRequired,
+        string? userMessage = null,
+        string? nextAction = null)
     {
         var message = OperationErrorCatalog.Get(OperationErrorCode.Cancelled);
         return new OperationResult(
@@ -174,10 +180,10 @@ public sealed record OperationResult
             OperationCompletion.Cancelled,
             state,
             verification,
-            OperationRecovery.NotRequired,
+            recovery,
             OperationErrorCode.Cancelled,
-            WithStateWarning(message.UserMessage, state),
-            message.NextAction);
+            userMessage ?? WithStateWarning(message.UserMessage, state),
+            nextAction ?? message.NextAction);
     }
 
     private static string WithStateWarning(string userMessage, OperationState state)
@@ -212,6 +218,7 @@ public static class OperationErrorCodeExtensions
         OperationErrorCode.LocalIo => "LOCAL_IO_FAILED",
         OperationErrorCode.Apt => "APT_OPERATION_FAILED",
         OperationErrorCode.Reconnect => "RECONNECT_FAILED",
+        OperationErrorCode.ConcurrentModification => "LOCAL_FILE_CHANGED",
         OperationErrorCode.Unexpected => "UNEXPECTED_FAILURE",
         _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unknown operation error code."),
     };
@@ -239,6 +246,7 @@ internal static class OperationErrorCatalog
         OperationErrorCode.LocalIo => new("A required local file operation could not be completed.", "Check local file access and available storage, then try again."),
         OperationErrorCode.Apt => new("The package operation did not complete.", "Refresh the server state and resolve any package-manager issue before trying again."),
         OperationErrorCode.Reconnect => new("The server did not reconnect in the expected time.", "Wait briefly, then refresh the connection state before trying again."),
+        OperationErrorCode.ConcurrentModification => new("The local SSH configuration changed while the alias was being prepared; no replacement was accepted.", "Review the current SSH configuration, preserve any edits, and retry."),
         OperationErrorCode.Unexpected => new("The operation could not be completed safely.", "Refresh the server state and include the operation ID in a safe issue report if it persists."),
         _ => throw new ArgumentOutOfRangeException(nameof(errorCode), errorCode, "Unknown operation error code."),
     };

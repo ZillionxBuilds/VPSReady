@@ -10,6 +10,34 @@ namespace VpsReady.ScenarioTests;
 public sealed class RebootWorkflowScenarioTests
 {
     [Fact]
+    public async Task RequiredInspectionCancellationAfterCommandEvidenceHasOneSafeTerminalOutcome()
+    {
+        await using var services = ScenarioComposition.Create("c504-required-late-cancel");
+        using var cancellation = new CancellationTokenSource();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = new CancelAfterRequiredCommandSink(services.GetRequiredService<IDiagnosticSink>(), cancellation);
+        await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
+
+        var inspection = await CreateWorkflow(diagnostics).InspectRequiredAsync(transport, cancellation.Token);
+
+        Assert.True(inspection.Result.Cancelled);
+        Assert.Null(inspection.Required);
+        Assert.Equal(RebootErrorCatalog.Cancelled, inspection.ErrorCode);
+        var events = recorder.Events.Where(entry => entry.Correlation.OperationId == inspection.Result.OperationId).ToArray();
+        Assert.Contains(events, entry => entry.EventId == DiagnosticEventCatalog.CommandCompleted
+            && entry.CommandId == RemoteCommandCatalog.UbuntuRebootRequiredRead);
+        var terminal = Assert.Single(events, entry => entry.EventId == DiagnosticEventCatalog.RebootCancelled
+            || entry.EventId == DiagnosticEventCatalog.RebootSucceeded
+            || entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticEventCatalog.RebootCancelled, terminal.EventId);
+        Assert.All(events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+        });
+    }
+
+    [Fact]
     public async Task ConfirmedRebootMutatesStateThenRevalidatesTheSessionWithCorrelatedRedactedDiagnostics()
     {
         await using var services = ScenarioComposition.Create("c504-reboot");
@@ -43,6 +71,68 @@ public sealed class RebootWorkflowScenarioTests
         });
         Assert.Contains(operationEvents, item => item.EventId == DiagnosticEventCatalog.PrivilegePreflightSucceeded && item.Phase == DiagnosticPhase.Preflight);
         Assert.Contains(operationEvents, item => item.EventId == DiagnosticEventCatalog.RebootSucceeded && item.Phase == DiagnosticPhase.Verify);
+    }
+
+    [Fact]
+    public async Task CancellationAfterBootIdentityNeverMutatesTheStatefulHost()
+    {
+        await using var services = ScenarioComposition.Create("c504-preapply-cancel");
+        using var cancellation = new CancellationTokenSource();
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        await using var inner = services.GetRequiredService<IRemoteTransportFactory>().Create();
+        var transport = new CancelAfterBootIdentityTransport((IRebootReconnectTransport)inner, cancellation);
+
+        var result = await CreateWorkflow(diagnostics).RebootAsync(transport, confirmed: true, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuRebootApply, transport.Commands);
+        Assert.Equal(0, state.Reboot.BootGeneration);
+        Assert.False(state.Reboot.IsRebooting);
+        var terminal = Assert.Single(recorder.Events, entry => entry.Correlation.OperationId == result.Result.OperationId
+            && entry.EventId is DiagnosticEventCatalog.RebootCancelled or DiagnosticEventCatalog.RebootSucceeded);
+        Assert.Equal(DiagnosticEventCatalog.RebootCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuBootIdentityRead, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task BootIdentityTimeoutBeforeRebootKeepsStateAndReconnectUntouched()
+    {
+        await using var services = ScenarioComposition.Create("c504-pre-recovery-boot-timeout");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        await using var transport = services.GetRequiredService<IRemoteTransportFactory>().Create();
+        var wasConnected = state.Ssh.IsConnected;
+        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.Timeout, "c504-boot-identity-timeout", RemoteCommandCatalog.UbuntuBootIdentityRead);
+
+        var result = await CreateWorkflow(diagnostics).RebootAsync(transport, confirmed: true);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(RebootErrorCatalog.PreRecovery, result.ErrorCode);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(OperationRecovery.NotRequired, result.Result.Recovery);
+        Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome);
+        Assert.Equal(0, state.Reboot.BootGeneration);
+        Assert.Equal(0, state.Reboot.ReconnectAttempts);
+        Assert.False(state.Reboot.IsRebooting);
+        Assert.Equal(wasConnected, state.Ssh.IsConnected);
+        var events = recorder.Events.Where(entry => entry.Correlation.OperationId == result.Result.OperationId).ToArray();
+        var terminal = Assert.Single(events, entry => entry.EventId == DiagnosticEventCatalog.RebootFailed);
+        Assert.Equal(DiagnosticPhase.Plan, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuBootIdentityRead, terminal.CommandId);
+        Assert.DoesNotContain(events, entry => entry.EventId is DiagnosticEventCatalog.RebootRecoveryRequired or DiagnosticEventCatalog.RebootSucceeded);
+        Assert.All(events, entry =>
+        {
+            Assert.Null(entry.StandardOutput);
+            Assert.Null(entry.StandardError);
+        });
     }
 
     [Fact]
@@ -134,6 +224,45 @@ public sealed class RebootWorkflowScenarioTests
         new(new PrivilegePreflightWorkflow(diagnostics), diagnostics, TestPolicy, new DeterministicRecoveryTime());
 
     private static RebootRecoveryPolicy TestPolicy { get; } = new(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 3);
+
+    private sealed class CancelAfterRequiredCommandSink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(entry, cancellationToken);
+            if (entry.EventId == DiagnosticEventCatalog.CommandCompleted
+                && entry.CommandId == RemoteCommandCatalog.UbuntuRebootRequiredRead)
+            {
+                cancellation.Cancel();
+            }
+        }
+    }
+
+    private sealed class CancelAfterBootIdentityTransport(IRebootReconnectTransport inner, CancellationTokenSource cancellation) : IRebootReconnectTransport
+    {
+        private int reads;
+        public List<string> Commands { get; } = [];
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            return inner.ExecuteAsync(command, CancellationToken.None);
+        }
+
+        public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+            inner.ReconnectAsync(timeout, CancellationToken.None);
+
+        public async Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            var result = await inner.ReadBootIdentityAsync(timeout, CancellationToken.None);
+            if (++reads == 1)
+            {
+                cancellation.Cancel();
+            }
+            return result;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class DeterministicRecoveryTime : IRebootRecoveryTime
     {

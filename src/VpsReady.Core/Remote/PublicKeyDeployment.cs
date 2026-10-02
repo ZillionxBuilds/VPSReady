@@ -100,4 +100,10 @@ public interface IPublicKeyDeployment
         IRemoteTransport transport,
         PublicKeyDeploymentMaterial material,
         CancellationToken cancellationToken = default);
+
+    Task<PublicKeyDeploymentOperationResult> DeployAsync(
+        IRemoteTransport transport,
+        PublicKeyDeploymentMaterial material,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default);
 }

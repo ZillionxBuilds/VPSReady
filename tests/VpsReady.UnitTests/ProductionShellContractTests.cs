@@ -106,11 +106,10 @@ public sealed class ProductionShellContractTests
     public async Task AuthorizedKeyFailureNeverReplacesPreviousOrConcurrentRecords(string fault)
     {
         using var sandbox = new ShellSandbox();
-        var directory = Path.Combine(sandbox.Root, "account-ssh");
-        Directory.CreateDirectory(directory);
+        var directory = CreateSecureSshDirectory(sandbox);
         var file = Path.Combine(directory, "authorized_keys");
         const string original = "# original without LF";
-        await File.WriteAllTextAsync(file, original);
+        await WriteSecureAuthorizedKeysAsync(file, original);
         if (fault == "lock") { Directory.CreateDirectory(Path.Combine(directory, ".vpsready-authorized-keys.lock")); }
         if (fault == "write-failure") { sandbox.Stub("mv", "exit 1"); }
         if (fault == "stale") { sandbox.Stub("cmp", "printf '# concurrent' >> authorized_keys; exit 1"); }
@@ -132,12 +131,11 @@ public sealed class ProductionShellContractTests
     public async Task ExistingRestrictedSelectedKeyIsRefusedWithoutAnUnrestrictedDuplicate(string options)
     {
         using var sandbox = new ShellSandbox();
-        var directory = Path.Combine(sandbox.Root, "account-ssh");
-        Directory.CreateDirectory(directory);
+        var directory = CreateSecureSshDirectory(sandbox);
         var file = Path.Combine(directory, "authorized_keys");
         var key = CreateKey();
         var original = options + " " + key.CanonicalText + " retained comment\n";
-        await File.WriteAllTextAsync(file, original);
+        await WriteSecureAuthorizedKeysAsync(file, original);
         var result = await sandbox.RunAsync(KeyScript(UbuntuAuthorizedKeysCommandCatalog.CreateInstallRequest(key), key, directory));
         Assert.NotEqual(0, result.ExitCode);
         Assert.True(original == await File.ReadAllTextAsync(file));
@@ -152,10 +150,9 @@ public sealed class ProductionShellContractTests
     public async Task AuthorizedKeysAppendPreservesEveryExistingByteAndRecord(string original)
     {
         using var sandbox = new ShellSandbox();
-        var directory = Path.Combine(sandbox.Root, "account-ssh");
-        Directory.CreateDirectory(directory);
+        var directory = CreateSecureSshDirectory(sandbox);
         var file = Path.Combine(directory, "authorized_keys");
-        await File.WriteAllTextAsync(file, original);
+        await WriteSecureAuthorizedKeysAsync(file, original);
         var key = CreateKey();
         var shell = KeyScript(UbuntuAuthorizedKeysCommandCatalog.CreateInstallRequest(key), key, directory);
         Assert.Equal(0, (await sandbox.RunAsync(shell)).ExitCode);
@@ -169,14 +166,40 @@ public sealed class ProductionShellContractTests
     [UnixTheory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task AuthorizedKeyInstallRejectsGroupWritableSshMaterial(bool unsafeDirectory)
+    {
+        if (OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("This POSIX probe must be skipped on Windows."); }
+        using var sandbox = new ShellSandbox();
+        var directory = CreateSecureSshDirectory(sandbox);
+        var file = Path.Combine(directory, "authorized_keys");
+        const string original = "# existing record\n";
+        await WriteSecureAuthorizedKeysAsync(file, original);
+        if (unsafeDirectory)
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute);
+        }
+        else
+        {
+            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupWrite);
+        }
+
+        var key = CreateKey();
+        var result = await sandbox.RunAsync(KeyScript(UbuntuAuthorizedKeysCommandCatalog.CreateInstallRequest(key), key, directory));
+        Assert.Equal(77, result.ExitCode);
+        Assert.Equal(original, await File.ReadAllTextAsync(file));
+    }
+
+    [UnixTheory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task CommentKeyTextIsNotAnActiveKey(bool wholeLineComment)
     {
         using var sandbox = new ShellSandbox();
-        var directory = Path.Combine(sandbox.Root, "account-ssh");
-        Directory.CreateDirectory(directory);
+        var directory = CreateSecureSshDirectory(sandbox);
         var key = CreateKey();
         var original = (wholeLineComment ? "# " : "ssh-rsa OTHER comment ") + key.CanonicalText + "\n";
-        await File.WriteAllTextAsync(Path.Combine(directory, "authorized_keys"), original);
+        await WriteSecureAuthorizedKeysAsync(Path.Combine(directory, "authorized_keys"), original);
         var result = await sandbox.RunAsync(KeyScript(UbuntuAuthorizedKeysCommandCatalog.CreateInspectRequest(key), key, directory));
         Assert.Equal(0, result.ExitCode);
         Assert.Equal("present=false", result.Output.Trim());
@@ -189,12 +212,11 @@ public sealed class ProductionShellContractTests
     {
         if (OperatingSystem.IsWindows()) { throw new PlatformNotSupportedException("This POSIX probe must be skipped on Windows."); }
         using var sandbox = new ShellSandbox();
-        var directory = Path.Combine(sandbox.Root, "account-ssh");
-        Directory.CreateDirectory(directory);
+        var directory = CreateSecureSshDirectory(sandbox);
         var file = Path.Combine(directory, "authorized_keys");
         var original = CreateKey(1).CanonicalText + " first" + newline
             + "command=\"echo retained\",no-pty " + CreateKey(2).CanonicalText + " second";
-        await File.WriteAllTextAsync(file, original);
+        await WriteSecureAuthorizedKeysAsync(file, original);
         var mode = File.GetUnixFileMode(file);
         var key = CreateKey();
         Assert.Equal(0, (await sandbox.RunAsync(KeyScript(UbuntuAuthorizedKeysCommandCatalog.CreateInstallRequest(key), key, directory))).ExitCode);
@@ -202,6 +224,26 @@ public sealed class ProductionShellContractTests
         Assert.Equal(mode, File.GetUnixFileMode(file));
         var backup = Assert.Single(Directory.GetFiles(directory, ".vpsready-authorized-keys.backup.*"));
         Assert.True(await File.ReadAllTextAsync(backup) == original);
+    }
+
+    private static string CreateSecureSshDirectory(ShellSandbox sandbox)
+    {
+        var directory = Path.Combine(sandbox.Root, "account-ssh");
+        Directory.CreateDirectory(directory);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        return directory;
+    }
+
+    private static async Task WriteSecureAuthorizedKeysAsync(string file, string contents)
+    {
+        await File.WriteAllTextAsync(file, contents);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     private static PreparedPublicKey CreateKey(byte seed = 0)

@@ -259,7 +259,16 @@ public sealed class ApplicationSession : IApplicationSession
         Func<IRemoteTransport, CancellationToken, Task<OperationResult>> operation,
         string expectedSessionId,
         CancellationToken cancellationToken = default)
-        => await RunOperationCoreAsync(operationId, timeout, operation, expectedSessionId, cancellationToken).ConfigureAwait(false);
+    {
+        // A missing identity must never turn an explicitly session-bound call
+        // into an unbound operation against a replacement connection.
+        if (string.IsNullOrWhiteSpace(expectedSessionId))
+        {
+            return OperationResult.Failure(operationId, OperationErrorCode.Reconnect, OperationState.Unknown);
+        }
+
+        return await RunOperationCoreAsync(operationId, timeout, operation, expectedSessionId, cancellationToken).ConfigureAwait(false);
+    }
 
     private async Task<OperationResult> RunOperationCoreAsync(
         string operationId,
@@ -335,7 +344,13 @@ public sealed class ApplicationSession : IApplicationSession
 
                 if (linkedCancellation.IsCancellationRequested)
                 {
-                    return OperationResult.Cancellation(operationId, OperationState.Unknown);
+                    // Preserve a workflow's explicit cancellation only when it
+                    // completed a recovery decision. Ordinary late results
+                    // still collapse to the session's generic cancellation,
+                    // and no late success or failure can override the caller.
+                    return result.Cancelled && result.Recovery != OperationRecovery.NotRequired
+                        ? result
+                        : OperationResult.Cancellation(operationId, OperationState.Unknown);
                 }
 
                 return result;

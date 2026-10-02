@@ -53,4 +53,10 @@ public sealed class RootDiskContractTests
         Assert.Equal(long.MaxValue, fact.Value!.SizeBytes);
         Assert.Equal(long.MaxValue - 1, fact.Value.AvailableBytes);
     }
+
+    [Theory]
+    [InlineData("/dev/fixture 10 6 5 60% /")]
+    [InlineData("/dev/fixture 9223372036854775807 9223372036854775807 1 100% /")]
+    public void ContradictoryUsedAndAvailableBytesAreNotTrusted(string wire) =>
+        Assert.False(UbuntuServerFactParser.ParseRootDisk(wire).IsKnown);
 }

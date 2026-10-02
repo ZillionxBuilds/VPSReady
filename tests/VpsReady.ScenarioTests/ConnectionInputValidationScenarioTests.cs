@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using VpsReady.Application;
+using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
 
@@ -68,5 +69,48 @@ public sealed class ConnectionInputValidationScenarioTests
         Assert.Contains(ConnectionInputValidationError.PortInvalid, validation.Errors);
         Assert.Equal(0, state.Ssh.ConnectionAttempts);
         Assert.Equal(0, state.Counter);
+    }
+
+    [Fact]
+    public async Task ConnectionFormValidationIsJournaledWithoutSshAndValidRetryStillVerifiesSession()
+    {
+        await using var services = ScenarioComposition.Create("scenario.r20.connection-form-validation");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var session = services.GetRequiredService<IApplicationSession>();
+        var sink = services.GetRequiredService<IDiagnosticSink>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        await using var lifecycle = new ConnectionSessionLifecycle(
+            session,
+            services.GetRequiredService<IRemoteTransportFactory>(),
+            sink);
+        var viewModel = new ConnectionOverviewViewModel(lifecycle, session, diagnostics: sink);
+        viewModel.AppendSecretText("private-marker".AsSpan());
+
+        await viewModel.TestAsync("scenario-host", "70000", "scenario-user", null);
+
+        Assert.Equal(ConnectionScreenState.Failed, viewModel.State);
+        Assert.Equal("VALIDATION_FAILED", viewModel.ErrorCode);
+        Assert.Equal(0, state.Ssh.ConnectionAttempts);
+        Assert.False(session.Snapshot.IsConnected);
+        var validationId = Assert.IsType<string>(viewModel.OperationId);
+        var failed = Assert.Single(recorder.Events);
+        Assert.Equal(DiagnosticEventCatalog.OperationFailed, failed.EventId);
+        Assert.Equal(DiagnosticPhase.Validate, failed.Phase);
+        Assert.Equal(validationId, failed.Correlation.OperationId);
+        Assert.DoesNotContain("scenario-host", recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain("scenario-user", recorder.ToJsonLines(), StringComparison.Ordinal);
+        Assert.DoesNotContain("private-marker", recorder.ToJsonLines(), StringComparison.Ordinal);
+
+        viewModel.AppendSecretText("safe-45".AsSpan());
+        await viewModel.TestAsync("scenario-host", "22", "scenario-user", null);
+
+        Assert.Equal(ConnectionScreenState.Connected, viewModel.State);
+        Assert.True(session.Snapshot.IsConnected);
+        Assert.Equal(1, state.Ssh.ConnectionAttempts);
+        Assert.Null(viewModel.ErrorCode);
+        Assert.NotEqual(validationId, viewModel.OperationId);
+        Assert.Contains(recorder.Events, item =>
+            item.Correlation.OperationId == viewModel.OperationId
+            && item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 }

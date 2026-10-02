@@ -60,6 +60,7 @@ public sealed class CommandParserEvidence
         {
             var separator = line.IndexOf(':', prefix.Length);
             if (separator > prefix.Length && line.Length - separator - 1 == 64
+                && IsAsciiDecimal(line.AsSpan(prefix.Length, separator - prefix.Length))
                 && int.TryParse(line.AsSpan(prefix.Length, separator - prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var count)
                 && line.AsSpan(separator + 1).IndexOfAnyExcept(HexCharacters) < 0)
             {
@@ -69,11 +70,23 @@ public sealed class CommandParserEvidence
         }
 
         if (commandId == RemoteCommandCatalog.SshSessionPortRead
-            && int.TryParse(line, NumberStyles.None, CultureInfo.InvariantCulture, out var port) && port is >= 1 and <= 65535)
+            && IsAsciiDecimal(line) && int.TryParse(line, NumberStyles.None, CultureInfo.InvariantCulture, out var port) && port is >= 1 and <= 65535)
         {
             return new(commandId, number: port);
         }
 
         return null;
+    }
+
+    // Numeric TryParse permits a terminal NUL even with NumberStyles.None.
+    // Typed command evidence must use the producer's exact ASCII-decimal grammar.
+    private static bool IsAsciiDecimal(ReadOnlySpan<char> text)
+    {
+        if (text.IsEmpty) { return false; }
+        foreach (var character in text)
+        {
+            if (!char.IsAsciiDigit(character)) { return false; }
+        }
+        return true;
     }
 }

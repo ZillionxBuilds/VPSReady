@@ -7,6 +7,34 @@ namespace VpsReady.UnitTests;
 public sealed class SecureLocalStorageTests
 {
     [Fact]
+    public async Task AtomicReplacementDoesNotTurnAnExpectedMissingTargetIntoAnOverwrite()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var targetPath = Path.Combine(root, "config");
+            var newerContents = "external config"u8.ToArray();
+            await File.WriteAllBytesAsync(targetPath, newerContents);
+
+            await Assert.ThrowsAsync<LocalFilePreconditionFailedException>(() => new AtomicFileStore().WriteAtomicallyAsync(
+                targetPath,
+                "stale generated config"u8.ToArray(),
+                new AtomicWriteOptions(
+                    LocalFileCollisionPolicy.ReplaceWithBackup,
+                    ExpectedTargetSnapshot: new LocalFileSnapshot(false, ReadOnlyMemory<byte>.Empty)),
+                CancellationToken.None));
+
+            Assert.Equal(newerContents, await File.ReadAllBytesAsync(targetPath));
+            Assert.False(File.Exists(targetPath + ".bak"));
+            Assert.Empty(Directory.EnumerateFiles(root, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ResolvePathRejectsTraversalAndAtomicReplacementPreservesBackup()
     {
         var root = CreateTemporaryDirectory();
