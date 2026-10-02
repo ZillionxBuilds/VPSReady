@@ -214,6 +214,54 @@ public sealed class UfwToggleWorkflowTests
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
+    [Theory]
+    [InlineData("network", false, "NETWORK_UNAVAILABLE")]
+    [InlineData("timeout", false, "OPERATION_TIMEOUT")]
+    [InlineData("timeout-exception", false, "OPERATION_TIMEOUT")]
+    [InlineData("network", true, "RECOVERY_FAILED")]
+    public async Task EnableTransportFailureAfterPossibleMutationPerformsReadOnlyVerification(
+        string failureKind,
+        bool failRecoveryRead,
+        string expectedErrorCode)
+    {
+        var transport = new LateEnableTransportFailureTransport(failureKind, failRecoveryRead);
+        var diagnostics = new RecordingSanitizedSink();
+
+        var outcome = await Workflow(diagnostics).EnableAsync(transport, confirmed: true);
+
+        Assert.False(outcome.Result.Succeeded);
+        Assert.Equal(expectedErrorCode, outcome.Result.ErrorCode?.ToStableCode());
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired);
+
+        var enableIndex = transport.Commands.FindIndex(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable);
+        Assert.True(enableIndex >= 0);
+        Assert.DoesNotContain(transport.Commands.Skip(enableIndex + 1), command => command.Id.Value is
+            RemoteCommandCatalog.UbuntuUfwEnable or RemoteCommandCatalog.UbuntuUfwDisable or RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure);
+
+        if (failRecoveryRead)
+        {
+            Assert.Equal(OperationState.Unknown, outcome.Result.State);
+            Assert.Equal(OperationVerification.Unknown, outcome.Result.Verification);
+            Assert.Equal(OperationRecovery.Failed, outcome.Result.Recovery);
+            Assert.False(outcome.SnapshotIsCurrent);
+            Assert.Contains("Stop further changes", outcome.Result.NextAction, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead], transport.Commands.Skip(enableIndex + 1).Select(command => command.Id.Value));
+        }
+        else
+        {
+            Assert.Equal(OperationState.Applied, outcome.Result.State);
+            Assert.Equal(OperationVerification.Passed, outcome.Result.Verification);
+            Assert.Equal(OperationRecovery.Succeeded, outcome.Result.Recovery);
+            Assert.True(outcome.SnapshotIsCurrent);
+            Assert.Equal(UfwFirewallState.Active, outcome.Snapshot?.State);
+            Assert.Contains("continuity were verified", outcome.Result.UserMessage, StringComparison.Ordinal);
+            Assert.Contains("UFW is already active", outcome.Result.NextAction, StringComparison.Ordinal);
+            Assert.Equal([RemoteCommandCatalog.UbuntuUfwRuleListRead, RemoteCommandCatalog.SshConnectionTest],
+                transport.Commands.Skip(enableIndex + 1).Select(command => command.Id.Value));
+        }
+    }
+
     [Fact]
     public async Task CancellationAfterDisablePreflightDoesNotDispatchDisable()
     {
@@ -696,6 +744,74 @@ public sealed class UfwToggleWorkflowTests
             cancellation.Cancel();
             cancellationToken.ThrowIfCancellationRequested();
             return (string.Empty, 0);
+        }
+    }
+
+    private sealed class LateEnableTransportFailureTransport(string failureKind, bool failRecoveryRead) : IRemoteTransport
+    {
+        private int listReads;
+        private int storedReads;
+        private bool active;
+        private bool allowedIpv4;
+        private bool allowedIpv6;
+
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Commands.Add(command);
+
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwEnable)
+            {
+                if (!allowedIpv4 || !allowedIpv6)
+                {
+                    throw new InvalidOperationException("The test attempted UFW enable before ensuring both SSH families.");
+                }
+
+                active = true;
+                throw failureKind switch
+                {
+                    "network" => new RemoteTransportException(RemoteTransportFailureKind.Network),
+                    "timeout" => new RemoteTransportException(RemoteTransportFailureKind.Timeout),
+                    "timeout-exception" => new TimeoutException("test-owned timeout after firewall effect"),
+                    _ => new InvalidOperationException("Unknown test transport failure kind."),
+                };
+            }
+
+            var result = command.Id.Value switch
+            {
+                RemoteCommandCatalog.SshSessionPortRead => Result("22"),
+                RemoteCommandCatalog.UbuntuUfwRuleListRead => listReads++ == 0
+                    ? Result("Status: inactive")
+                    : failRecoveryRead ? Result("", exitCode: 1) : Result(active ? ActiveWithSshAllows : "Status: inactive"),
+                RemoteCommandCatalog.UbuntuUfwStoredSshRead => Result(storedReads++ == 0 ? StoredEmpty : StoredSshAllows),
+                RemoteCommandCatalog.UbuntuUfwActiveSshAllowEnsure => EnsureSshAllow(command),
+                RemoteCommandCatalog.SshConnectionTest => Result(string.Empty),
+                _ => throw new InvalidOperationException($"Unexpected test command '{command.Id.Value}'."),
+            };
+
+            return await ProductionOutput.CaptureAsync(command, result, cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private RemoteCommandResult EnsureSshAllow(RemoteCommand command)
+        {
+            if (command.SafeArgumentSummary == "family=ipv4 port=22")
+            {
+                allowedIpv4 = true;
+            }
+            else if (command.SafeArgumentSummary == "family=ipv6 port=22")
+            {
+                allowedIpv6 = true;
+            }
+            else
+            {
+                throw new InvalidOperationException("Unexpected SSH allow request in the transport-failure regression.");
+            }
+
+            return Result(string.Empty);
         }
     }
 

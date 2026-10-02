@@ -184,6 +184,61 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
         Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
     }
 
+    [Theory]
+    [InlineData("network", false, OperationErrorCode.Network, false)]
+    [InlineData("timeout", false, OperationErrorCode.Timeout, false)]
+    [InlineData("timeout-exception", false, OperationErrorCode.Timeout, false)]
+    [InlineData("unexpected", false, OperationErrorCode.Unexpected, false)]
+    [InlineData("cancel", false, OperationErrorCode.Cancelled, true)]
+    [InlineData("network", true, OperationErrorCode.Recovery, false)]
+    public async Task IndeterminateRemovalAfterEffectReadsFreshStateWithoutAnotherMutation(
+        string failureKind,
+        bool failRecoveryRead,
+        OperationErrorCode expectedError,
+        bool expectCancellation)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var selected = Target(ActiveWithTarget);
+        var transport = new PostEffectRemovalFailureTransport(failureKind, failRecoveryRead, cancellation);
+        var diagnostics = new RecordingSanitizedSink();
+
+        var result = await Workflow(diagnostics).RemoveAsync(
+            transport,
+            new UfwRuleRemovalIntent(selected.Identity, Confirmed: true),
+            cancellation.Token);
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(expectCancellation, result.Result.Cancelled);
+        Assert.Equal(expectedError, result.Result.ErrorCode);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired);
+
+        var removeIndex = transport.Commands.FindIndex(command => command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
+        Assert.True(removeIndex >= 0);
+        Assert.Equal(
+            [RemoteCommandCatalog.UbuntuUfwRuleListRead],
+            transport.Commands.Skip(removeIndex + 1).Select(command => command.Id.Value));
+        Assert.DoesNotContain(transport.Commands.Skip(removeIndex + 1), command =>
+            command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove);
+
+        if (failRecoveryRead)
+        {
+            Assert.Equal(OperationState.Unknown, result.Result.State);
+            Assert.Equal(OperationVerification.Unknown, result.Result.Verification);
+            Assert.Equal(OperationRecovery.Failed, result.Result.Recovery);
+            Assert.Null(result.Snapshot);
+            Assert.Contains("stop", result.Result.NextAction, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Equal(OperationState.Applied, result.Result.State);
+            Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+            Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+            Assert.NotNull(result.Snapshot);
+            Assert.DoesNotContain(result.Snapshot.Rules, rule => rule.Port == selected.Port);
+        }
+    }
+
     [Fact]
     public async Task ConfirmedNonSshRangeRemovalRequiresFreshAbsenceProof()
     {
@@ -355,6 +410,61 @@ public sealed class UfwSelectedRuleRemovalWorkflowTests
             return VpsReady.Tests.ProductionOutput.CaptureAsync(command,
                 queuedResults.Count == 0 ? throw new InvalidOperationException("Unexpected command.") : queuedResults.Dequeue(),
                 CancellationToken.None);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class PostEffectRemovalFailureTransport(
+        string failureKind,
+        bool failRecoveryRead,
+        CancellationTokenSource cancellation) : IRemoteTransport
+    {
+        private int ruleListReads;
+        private bool targetRulePresent = true;
+
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (command.Id.Value == RemoteCommandCatalog.SshSessionPortRead)
+            {
+                return await VpsReady.Tests.ProductionOutput.CaptureAsync(command, Result("22"), cancellationToken);
+            }
+
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwRuleListRead)
+            {
+                var read = ruleListReads++ == 0
+                    ? Result(ActiveWithTarget)
+                    : failRecoveryRead ? Result(string.Empty, exitCode: 1) : Result(targetRulePresent ? ActiveWithTarget : ActiveWithoutTarget);
+                return await VpsReady.Tests.ProductionOutput.CaptureAsync(command, read, cancellationToken);
+            }
+
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove)
+            {
+                targetRulePresent = false;
+                switch (failureKind)
+                {
+                    case "network":
+                        throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+                    case "timeout":
+                        throw new RemoteTransportException(RemoteTransportFailureKind.Timeout);
+                    case "timeout-exception":
+                        throw new TimeoutException("test-owned timeout after deletion effect");
+                    case "unexpected":
+                        throw new InvalidOperationException("test-owned transport error after deletion effect");
+                    case "cancel":
+                        cancellation.Cancel();
+                        throw new OperationCanceledException(cancellationToken);
+                    default:
+                        throw new InvalidOperationException("Unknown removal failure kind.");
+                }
+            }
+
+            throw new InvalidOperationException($"Unexpected command '{command.Id.Value}'.");
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
