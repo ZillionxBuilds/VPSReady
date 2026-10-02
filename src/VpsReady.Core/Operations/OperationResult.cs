@@ -150,7 +150,9 @@ public sealed record OperationResult
         OperationErrorCode errorCode,
         OperationState state = OperationState.Unknown,
         OperationVerification verification = OperationVerification.NotRun,
-        OperationRecovery recovery = OperationRecovery.NotRequired)
+        OperationRecovery recovery = OperationRecovery.NotRequired,
+        string? userMessage = null,
+        string? nextAction = null)
     {
         var message = OperationErrorCatalog.Get(errorCode);
         return new OperationResult(
@@ -160,8 +162,8 @@ public sealed record OperationResult
             verification,
             recovery,
             errorCode,
-            WithStateWarning(message.UserMessage, state),
-            message.NextAction);
+            WithStateWarning(userMessage ?? message.UserMessage, state),
+            nextAction ?? message.NextAction);
     }
 
     public static OperationResult Cancellation(

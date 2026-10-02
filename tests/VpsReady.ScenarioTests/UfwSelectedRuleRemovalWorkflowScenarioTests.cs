@@ -171,6 +171,37 @@ public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
     }
 
     [Fact]
+    public async Task LostRemovalResponseAfterMutableHostEffectRecoversFreshStateWithoutAnotherMutation()
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.f04.remove-response-lost-after-effect");
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        state.Ufw.Rules.Add(new ScenarioFirewallRule("scenario-app", ScenarioRuleProtocol.Tcp, 8443, "Anywhere", ScenarioIpFamily.Ipv4));
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var selected = await SelectionAsync(host, 8443, ScenarioIpFamily.Ipv4);
+        var transport = new PostEffectRemovalFailureScenarioTransport(host);
+        var (workflow, diagnostics) = CreateWorkflow();
+
+        var result = await workflow.RemoveAsync(transport, new UfwRuleRemovalIntent(selected, Confirmed: true));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal("NETWORK_UNAVAILABLE", result.Result.ErrorCode?.ToStableCode());
+        Assert.Equal(OperationState.Applied, result.Result.State);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(OperationRecovery.Succeeded, result.Result.Recovery);
+        Assert.DoesNotContain(state.Ufw.Rules, rule => rule.RuleId == "scenario-app");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v4");
+        Assert.Contains(state.Ufw.Rules, rule => rule.RuleId == "ssh-v6");
+        Assert.Equal(
+            [RemoteCommandCatalog.UbuntuUfwRuleListRead],
+            transport.Commands.SkipWhile(command => command.Id.Value != RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove)
+                .Skip(1)
+                .Select(command => command.Id.Value));
+        Assert.Contains(transport.Phases, phase => phase == DiagnosticPhase.Recovery);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationRecoveryRequired);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.OperationSucceeded);
+    }
+
+    [Fact]
     public async Task ReorderedFreshListingMakesSelectionStaleAndCannotDeleteAnotherRule()
     {
         var state = ScenarioHostState.CreateDefault("scenario.c304.stale-reorder");
@@ -467,6 +498,43 @@ public sealed class UfwSelectedRuleRemovalWorkflowScenarioTests
             }
 
             return host.ExecuteAsync(command, phase, cancellationToken);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class PostEffectRemovalFailureScenarioTransport(DeterministicScenarioHost host) : IRemoteTransport
+    {
+        private bool removalDispatched;
+
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public List<DiagnosticPhase> Phases { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            var phase = command.Id.Value switch
+            {
+                RemoteCommandCatalog.SshSessionPortRead => DiagnosticPhase.Preflight,
+                RemoteCommandCatalog.UbuntuUfwRuleListRead => removalDispatched ? DiagnosticPhase.Recovery : DiagnosticPhase.Preflight,
+                _ => DiagnosticPhase.Apply,
+            };
+            Commands.Add(command);
+            Phases.Add(phase);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove)
+            {
+                removalDispatched = true;
+            }
+
+            var result = await host.ExecuteAsync(command, phase, cancellationToken).ConfigureAwait(false);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuUfwSelectedRuleRemove && result.Succeeded)
+            {
+                // The deterministic host has already mutated its firewall model;
+                // fail only the response path to simulate an ambiguous outcome.
+                throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            }
+
+            return result;
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
