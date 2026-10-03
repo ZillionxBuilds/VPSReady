@@ -73,7 +73,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         var safeEvent = redactor.Redact(diagnosticEvent) with { TimestampUtc = diagnosticEvent.OccurredAtUtc };
         ValidateSafeEvent(safeEvent);
         AssertSafeEnvironment();
-        var line = JsonSerializer.Serialize(JournalEvent.From(safeEvent, environment), JsonOptions) + Environment.NewLine;
+        var line = BoundedJsonlJournal.Serialize(JournalEvent.From(safeEvent, environment));
 
         await writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -92,13 +92,15 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
                 activity.Add(safeEvent.ToActivityEntry());
                 TrimInMemoryCollections();
             }
+
+            // Retention rewrites/deletes the same files as append and Clear Diagnostics.
+            // Keep all three under one gate so cleanup cannot discard a concurrent event.
+            await CleanupRetentionAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             writeGate.Release();
         }
-
-        await CleanupRetentionAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public IReadOnlyList<ActivityEntry> GetActivity(string? filter = null)
@@ -219,7 +221,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             throw new IOException("A support bundle already exists at the selected destination.");
         }
 
-        var eventsJsonl = string.Concat(selected.Select(item => JsonSerializer.Serialize(JournalEvent.From(redactor.Redact(item), environment), JsonOptions) + Environment.NewLine));
+        var eventsJsonl = string.Concat(selected.Select(item => BoundedJsonlJournal.Serialize(JournalEvent.From(redactor.Redact(item), environment))));
         var issueReport = CreateSafeIssueReport(resolvedRunId, requestedOperationId);
         var runSummary = CreateRunSummary(selected, resolvedRunId);
         var environmentJson = JsonSerializer.Serialize(new
@@ -295,7 +297,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             {
                 var lastWriteUtc = file.LastWriteTimeUtc;
                 var existing = await File.ReadAllTextAsync(file.FullName, cancellationToken).ConfigureAwait(false);
-                await WriteJournalAtomicallyAsync(file.FullName, LimitJournalContents(existing, string.Empty), cancellationToken).ConfigureAwait(false);
+                await WriteJournalAtomicallyAsync(file.FullName, BoundedJsonlJournal.Append(existing, string.Empty, MaximumJournalFileBytes, cancellationToken), cancellationToken).ConfigureAwait(false);
                 File.SetLastWriteTimeUtc(file.FullName, lastWriteUtc);
             }
         }
@@ -371,7 +373,7 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         var existing = File.Exists(path)
             ? await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)
             : string.Empty;
-        await WriteJournalAtomicallyAsync(path, LimitJournalContents(existing, line), cancellationToken).ConfigureAwait(false);
+        await WriteJournalAtomicallyAsync(path, BoundedJsonlJournal.Append(existing, line, MaximumJournalFileBytes, cancellationToken), cancellationToken).ConfigureAwait(false);
         File.SetLastWriteTimeUtc(path, occurredAtUtc.UtcDateTime);
     }
 
@@ -410,33 +412,6 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
         }
     }
 
-    private static string LimitJournalContents(string existing, string appendedLine)
-    {
-        var cleanLine = appendedLine.TrimEnd('\r', '\n');
-        if (Encoding.UTF8.GetByteCount(cleanLine) >= MaximumJournalFileBytes)
-        {
-            throw new IOException("A single sanitized journal event exceeds the local journal safety limit.");
-        }
-
-        var lines = existing.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.TrimEnd('\r'))
-            .ToList();
-        if (!string.IsNullOrEmpty(cleanLine))
-        {
-            lines.Add(cleanLine);
-        }
-
-        var startIndex = 0;
-        var byteCount = Encoding.UTF8.GetByteCount(string.Join('\n', lines) + "\n");
-        while (lines.Count - startIndex > 1 && byteCount > MaximumJournalFileBytes)
-        {
-            byteCount -= Encoding.UTF8.GetByteCount(lines[startIndex]) + 1;
-            startIndex++;
-        }
-
-        return lines.Count == startIndex ? string.Empty : string.Join('\n', lines.Skip(startIndex)) + "\n";
-    }
-
     private static IEnumerable<FileInfo> GetJournalFiles(string directory, SearchOption searchOption)
     {
         if (!Directory.Exists(directory))
@@ -444,9 +419,20 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             return [];
         }
 
-        return Directory.EnumerateFiles(directory, "*.jsonl", searchOption)
+        LocalPathPolicy.ValidateRoot(directory);
+        return Directory.EnumerateFiles(directory, "*.jsonl", new EnumerationOptions
+        {
+            RecurseSubdirectories = searchOption == SearchOption.AllDirectories,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+            IgnoreInaccessible = false,
+        })
             .Select(path => new FileInfo(path))
-            .Where(file => (file.Attributes & FileAttributes.ReparsePoint) == 0);
+            .Select(file =>
+            {
+                // Recheck each component before the caller reads or rewrites the file.
+                _ = LocalPathPolicy.ResolveUnder(directory, Path.GetRelativePath(directory, file.FullName));
+                return file;
+            });
     }
 
     private static JournalRunGroup[] GetRunGroups(string runsDirectory)

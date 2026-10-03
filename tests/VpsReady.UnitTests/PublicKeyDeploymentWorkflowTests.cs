@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Runtime.InteropServices;
-using System.Text.RegularExpressions;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
 using VpsReady.Core.Operations;
@@ -167,7 +166,9 @@ public sealed class PublicKeyDeploymentWorkflowTests
 
             var journalPath = Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl");
             var persisted = await File.ReadAllTextAsync(journalPath);
-            Assert.All(commandIds, commandId => Assert.Contains($"\"commandId\": \"{commandId}\"", persisted, StringComparison.Ordinal));
+            var records = JsonlTestEvidence.ReadRecords(persisted);
+            Assert.All(commandIds, commandId => Assert.Contains(records,
+                record => record.GetProperty("commandId").GetString() == commandId));
             AssertSingleCorrelationValue(persisted, "sessionId");
             AssertSingleCorrelationValue(persisted, "runId");
             Assert.Equal(result.Result.OperationId, AssertSingleCorrelationValue(persisted, "operationId"));
@@ -292,10 +293,10 @@ public sealed class PublicKeyDeploymentWorkflowTests
 
     private static string AssertSingleCorrelationValue(string persisted, string propertyName)
     {
-        var values = Regex.Matches(persisted, $"\\\"{propertyName}\\\": \\\"([^\\\"]+)\\\"")
-            .Select(match => match.Groups[1].Value)
+        var values = JsonlTestEvidence.ReadRecords(persisted)
+            .Select(record => record.GetProperty(propertyName).GetString())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        return Assert.Single(values);
+        return Assert.IsType<string>(Assert.Single(values));
     }
 }
