@@ -315,7 +315,8 @@ public sealed class KeyAuthenticationVerificationWorkflowTests
 
             Assert.True(result.Result.Succeeded);
             var persisted = await File.ReadAllTextAsync(Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl"));
-            Assert.Contains($"\"operationId\": \"{result.Result.OperationId}\"", persisted, StringComparison.Ordinal);
+            Assert.All(JsonlTestEvidence.ReadRecords(persisted), record =>
+                Assert.Equal(result.Result.OperationId, record.GetProperty("operationId").GetString()));
             Assert.Contains(RemoteCommandCatalog.SshConnectionTest, persisted, StringComparison.Ordinal);
             Assert.Contains(DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded, persisted, StringComparison.Ordinal);
             Assert.DoesNotContain("private-host.test", persisted, StringComparison.Ordinal);

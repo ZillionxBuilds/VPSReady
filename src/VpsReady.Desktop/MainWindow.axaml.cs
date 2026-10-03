@@ -24,17 +24,24 @@ public partial class MainWindow : Window
 
     private async void CopySafeIssueReportAsync(string report)
     {
+        var diagnostics = viewModel?.ActivityDiagnostics;
+        var copied = false;
         try
         {
             var clipboard = Clipboard;
             if (clipboard is not null)
             {
                 await clipboard.SetTextAsync(report);
+                copied = true;
             }
         }
         catch
         {
-            // The report remains local; the view model shows a user-safe status.
+            // Never expose clipboard exception text or claim an unacknowledged copy.
+        }
+        finally
+        {
+            diagnostics?.ReportSafeIssueReportCopy(copied);
         }
     }
 
