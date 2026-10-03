@@ -285,17 +285,7 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             throw new RemoteTransportException(RemoteTransportFailureKind.Network);
         }
 
-        UbuntuFactCommandCatalog.TryGet(command.Id.Value, out var factDefinition);
-
-        var shellCommand = factDefinition is not null
-            ? factDefinition.ShellCommand!
-            : command.Id.Value is RemoteCommandCatalog.UbuntuHostnameChangeRead or RemoteCommandCatalog.UbuntuHostnameChangeVerify
-                ? UbuntuHostnameCommandCatalog.RequireShellCommand(command)
-                : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptIndexVerify or RemoteCommandCatalog.UbuntuAptUpgradePlan or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradeVerify or RemoteCommandCatalog.UbuntuRebootRequiredRead or RemoteCommandCatalog.UbuntuRebootApply or RemoteCommandCatalog.SshReconnectVerify or RemoteCommandCatalog.UbuntuBootIdentityRead
-                    ? UbuntuPackageCommandCatalog.RequireShellCommand(command)
-                : RemoteCommandCatalog.IsKnown(command.Id.Value) && command.Id.Value is RemoteCommandCatalog.UbuntuTimezoneCurrentRead or RemoteCommandCatalog.UbuntuTimezoneAvailableList or RemoteCommandCatalog.UbuntuTimezoneApply or RemoteCommandCatalog.UbuntuTimezoneVerifyRead
-                    ? UbuntuTimezoneCommandCatalog.RequireShellCommand(command)
-                    : UbuntuFirewallCommandCatalog.RequireShellCommand(command);
+        var shellCommand = ResolveShellCommand(command);
 
         using var timeoutCancellation = new CancellationTokenSource(command.Timeout);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
@@ -326,6 +316,41 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         {
             throw ToSafeConnectionFailure(exception);
         }
+    }
+
+    /// <summary>Routes generic execution through the existing validated command catalogs.</summary>
+    internal static string ResolveShellCommand(RemoteCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (UbuntuFactCommandCatalog.TryGet(command.Id.Value, out var factDefinition))
+        {
+            return factDefinition!.ShellCommand!;
+        }
+
+        // Payload-bearing hostname/key operations use separate ephemeral boundaries.
+        // Generic execution must not provide a fallback for those operations.
+        return command.Id.Value switch
+        {
+            RemoteCommandCatalog.UbuntuHostnameChangeRead or
+            RemoteCommandCatalog.UbuntuHostnameChangeVerify => UbuntuHostnameCommandCatalog.RequireShellCommand(command),
+
+            RemoteCommandCatalog.UbuntuAptIndexUpdate or
+            RemoteCommandCatalog.UbuntuAptIndexVerify or
+            RemoteCommandCatalog.UbuntuAptUpgradePlan or
+            RemoteCommandCatalog.UbuntuAptUpgradeApply or
+            RemoteCommandCatalog.UbuntuAptUpgradeVerify or
+            RemoteCommandCatalog.UbuntuRebootRequiredRead or
+            RemoteCommandCatalog.UbuntuRebootApply or
+            RemoteCommandCatalog.SshReconnectVerify or
+            RemoteCommandCatalog.UbuntuBootIdentityRead => UbuntuPackageCommandCatalog.RequireShellCommand(command),
+
+            RemoteCommandCatalog.UbuntuTimezoneCurrentRead or
+            RemoteCommandCatalog.UbuntuTimezoneAvailableList or
+            RemoteCommandCatalog.UbuntuTimezoneApply or
+            RemoteCommandCatalog.UbuntuTimezoneVerifyRead => UbuntuTimezoneCommandCatalog.RequireShellCommand(command),
+
+            _ => UbuntuFirewallCommandCatalog.RequireShellCommand(command),
+        };
     }
 
     /// <summary>

@@ -17,6 +17,8 @@ namespace VpsReady.UnitTests;
 [Trait("Category", "E1")]
 public sealed class OperationJournalWorkspaceTests
 {
+    private static readonly int[] ExpectedCommandExitCodes = [0, 42];
+    private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
     private static readonly JsonSerializerOptions RelaxedJsonOptions = new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
@@ -818,6 +820,86 @@ public sealed class OperationJournalWorkspaceTests
     }
 
     [Fact]
+    public async Task JournalAndBundleWriteOneCompleteJsonObjectPerPhysicalLine()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "First action", new FixedClock().UtcNow);
+            await WriteFailureAsync(workspace, correlation, "Second action", new FixedClock().UtcNow.AddSeconds(1));
+
+            var log = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var run = await File.ReadAllTextAsync(Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl"));
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(
+                correlation.RunId, Path.Combine(root, "export"), CancellationToken.None);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var exported = await ReadBundleEntryAsync(archive, "events.jsonl");
+
+            foreach (var contents in new[] { log, run, exported })
+            {
+                var lines = contents.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                Assert.Equal(2, lines.Length);
+                foreach (var line in lines)
+                {
+                    using var document = JsonDocument.Parse(line);
+                    Assert.Equal(correlation.OperationId, document.RootElement.GetProperty("operationId").GetString());
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalRolloverPreservesWholeLegacyPrettyJsonRecordsAndNewestEvent()
+    {
+        const int byteLimit = 1024 * 1024;
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "Initial action", new FixedClock().UtcNow);
+            var logPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var runPath = Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl");
+            var legacy = string.Concat(Enumerable.Range(0, 800).Select(index =>
+                JsonSerializer.Serialize(new { recordIndex = index, message = new string('x', 1500) },
+                    PrettyJsonOptions) + "\r\n"));
+            Assert.True(Encoding.UTF8.GetByteCount(legacy) > byteLimit);
+            foreach (var path in new[] { logPath, runPath })
+            {
+                await File.WriteAllTextAsync(path, legacy);
+            }
+
+            await WriteFailureAsync(workspace, correlation, "Newest action", new FixedClock().UtcNow);
+
+            foreach (var path in new[] { logPath, runPath })
+            {
+                Assert.InRange(new FileInfo(path).Length, 1, byteLimit);
+                var lines = await File.ReadAllLinesAsync(path);
+                var records = lines.Select(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    return document.RootElement.Clone();
+                }).ToArray();
+                Assert.Equal(correlation.OperationId, records[^1].GetProperty("operationId").GetString());
+                var retainedIndexes = records[..^1].Select(record => record.GetProperty("recordIndex").GetInt32()).ToArray();
+                Assert.NotEmpty(retainedIndexes);
+                Assert.True(retainedIndexes[0] > 0);
+                Assert.Equal(Enumerable.Range(retainedIndexes[0], 800 - retainedIndexes[0]), retainedIndexes);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RetentionEnforcesTheByteCapAndPreservesTheNewestTwentyRunGroups()
     {
         var root = CreateTemporaryDirectory();
@@ -899,12 +981,7 @@ public sealed class OperationJournalWorkspaceTests
             var report = workspace.CreateSafeIssueReport(correlation.RunId);
             var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exports, CancellationToken.None);
 
-            Assert.Contains("\"exitCode\": 0", journal, StringComparison.Ordinal);
-            Assert.Contains("\"exitCode\": 42", journal, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"exitCode\": 5", journal, StringComparison.Ordinal);
-            Assert.DoesNotContain("\"exitCode\": null", journal, StringComparison.Ordinal);
-            Assert.Contains("\"verification\": \"Failed\"", journal, StringComparison.Ordinal);
-            Assert.Contains("\"recovery\": \"Failed\"", journal, StringComparison.Ordinal);
+            AssertCommandEvidence(journal);
             Assert.Contains("- Exit code: 42", report, StringComparison.Ordinal);
             Assert.Contains("- Verification/recovery: Failed / Failed", report, StringComparison.Ordinal);
             Assert.DoesNotContain(unsafePayload, journal, StringComparison.Ordinal);
@@ -915,9 +992,7 @@ public sealed class OperationJournalWorkspaceTests
             Assert.NotNull(events);
             using var reader = new StreamReader(events.Open(), Encoding.UTF8);
             var selected = reader.ReadToEnd();
-            Assert.Contains("\"exitCode\": 42", selected, StringComparison.Ordinal);
-            Assert.Contains("\"verification\": \"Failed\"", selected, StringComparison.Ordinal);
-            Assert.Contains("\"recovery\": \"Failed\"", selected, StringComparison.Ordinal);
+            AssertCommandEvidence(selected);
             Assert.DoesNotContain(unsafePayload, selected, StringComparison.Ordinal);
 
             StructuredDiagnosticEvent Event(string eventId, DiagnosticPhase phase, DiagnosticStatus status, int? exitCode = null, OperationErrorCode? error = null, OperationVerification? verification = null, OperationRecovery? recovery = null) =>
@@ -927,6 +1002,147 @@ public sealed class OperationJournalWorkspaceTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task MalformedExistingJournalIsPreservedAndFailureDoesNotExposeContent()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "Initial action", new FixedClock().UtcNow);
+            var path = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            const string malformed = "{\"message\":\"seeded-sensitive-content\"} {";
+            await File.WriteAllTextAsync(path, malformed);
+            var exception = await Assert.ThrowsAsync<IOException>(() =>
+                WriteFailureAsync(workspace, correlation, "Newest action", new FixedClock().UtcNow));
+            Assert.Equal(malformed, await File.ReadAllTextAsync(path));
+            Assert.DoesNotContain("seeded-sensitive-content", exception.ToString(), StringComparison.Ordinal);
+            Assert.Single(workspace.GetActivity());
+            Assert.Empty(Directory.EnumerateFiles(workspace.GetLogDirectory(), "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [UnixTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetentionNeverRewritesJournalThroughLinkedRunDirectory(bool nested)
+    {
+        var root = CreateTemporaryDirectory();
+        var outside = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "Initial action", new FixedClock().UtcNow);
+            var outsideFile = Path.Combine(outside, "events.jsonl");
+            var original = string.Concat(Enumerable.Repeat("{\"record\":\"outside-diagnostics\"}\n", 40_000));
+            await File.WriteAllTextAsync(outsideFile, original);
+            var link = nested
+                ? Path.Combine(root, "state", "runs", correlation.RunId, "linked-child")
+                : Path.Combine(root, "state", "runs", "linked-run");
+            Directory.CreateSymbolicLink(link, outside);
+
+            try
+            {
+                await WriteFailureAsync(workspace, correlation, "Newest action", new FixedClock().UtcNow);
+            }
+            catch (IOException)
+            {
+                // Refusing a linked run is safe only if its target was never rewritten.
+            }
+
+            Assert.Equal(original, await File.ReadAllTextAsync(outsideFile));
+            Directory.Delete(link);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalRetentionSharesWriterGateWithAppendAndClear()
+    {
+        var root = CreateTemporaryDirectory();
+        using var clock = new BlockingRetentionClock();
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(new FixedPlatformPaths(root), new FailClosedRedactor(),
+                clock, new DiagnosticEnvironment("0.1.0-test", "review119", "test-os", "test-arch"), new RecordingFolderOpener());
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            var first = Task.Run(() => WriteFailureAsync(workspace, correlation, "First action", new FixedClock().UtcNow));
+            Task? second = null;
+            Task? clear = null;
+            try
+            {
+                await clock.RetentionEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                second = WriteFailureAsync(workspace, correlation, "Second action", new FixedClock().UtcNow);
+                clear = workspace.ClearDiagnosticsAsync(CancellationToken.None);
+                Assert.False(clock.LaterRead.Task.IsCompleted, "A new append entered while retention still owned the journal.");
+                Assert.False(clear.IsCompleted, "Clear entered while retention still owned the journal.");
+            }
+            finally
+            {
+                clock.ReleaseRetention.Set();
+                await first;
+                if (second is not null) { await second; }
+                if (clear is not null) { await clear; }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class BlockingRetentionClock : IClock, IDisposable
+    {
+        private int reads;
+        public TaskCompletionSource RetentionEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource LaterRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim ReleaseRetention { get; } = new();
+
+        public DateTimeOffset UtcNow
+        {
+            get
+            {
+                var read = Interlocked.Increment(ref reads);
+                if (read == 4) // Date, log timestamp, run timestamp, then retention timestamp.
+                {
+                    RetentionEntered.SetResult();
+                    if (!ReleaseRetention.Wait(TimeSpan.FromSeconds(10)))
+                    {
+                        throw new TimeoutException("The controlled retention checkpoint was not released.");
+                    }
+                }
+                else if (read > 4)
+                {
+                    LaterRead.TrySetResult();
+                }
+
+                return new FixedClock().UtcNow;
+            }
+        }
+
+        public void Dispose() => ReleaseRetention.Dispose();
+    }
+
+    private static void AssertCommandEvidence(string jsonl)
+    {
+        var records = JsonlTestEvidence.ReadRecords(jsonl);
+        Assert.Equal(5, records.Length);
+        Assert.Equal(ExpectedCommandExitCodes, records.Where(record => record.TryGetProperty("exitCode", out _))
+            .Select(record => record.GetProperty("exitCode").GetInt32()));
+        Assert.Equal("Failed", records[^1].GetProperty("verification").GetString());
+        Assert.Equal("Failed", records[^1].GetProperty("recovery").GetString());
     }
 
     private static void AssertNoUnsafeData(string content, params string[] unsafeValues)
