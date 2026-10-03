@@ -1,0 +1,465 @@
+name: Blind CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - development
+      - "release/**"
+  push:
+    branches:
+      - main
+      - development
+      - "release/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# github.sha is a synthetic merge commit for pull_request runs.  Each job
+# reconstructs a merge of the PR head onto the current target base instead,
+# then validates and packages that exact tree.
+env:
+  SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+  PR_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+  PR_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+  PUSH_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
+
+concurrency:
+  group: blind-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve-validation:
+    name: Resolve prospective validation identity
+    runs-on: ubuntu-latest
+    outputs:
+      pr_head_sha: ${{ steps.prepare.outputs.pr_head_sha }}
+      pr_base_sha: ${{ steps.prepare.outputs.pr_base_sha }}
+      validation_base_sha: ${{ steps.prepare.outputs.validation_base_sha }}
+      validation_sha: ${{ steps.prepare.outputs.validation_sha }}
+      push_sha: ${{ steps.prepare.outputs.push_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The PR head can predate this local action. Bootstrap from the
+          # workflow definition commit, then let the action check out the
+          # resolved validation tree.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+
+      - id: prepare
+        name: Resolve the one validation identity
+        uses: ./.github/actions/prepare-prospective-validation
+        with:
+          event_name: ${{ github.event_name }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          pr_head_sha: ${{ env.PR_HEAD_SHA }}
+          pr_base_sha: ${{ env.PR_BASE_SHA }}
+          pr_base_ref: ${{ env.PR_BASE_REF }}
+          push_sha: ${{ env.PUSH_SHA }}
+
+  validate:
+    needs: resolve-validation
+    name: E0-E2 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+
+      - name: Reproduce the resolved prospective validation tree
+        uses: ./.github/actions/prepare-prospective-validation
+        with:
+          event_name: ${{ github.event_name }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          pr_head_sha: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          pr_base_sha: ${{ needs.resolve-validation.outputs.pr_base_sha }}
+          pr_base_ref: ${{ env.PR_BASE_REF }}
+          push_sha: ${{ needs.resolve-validation.outputs.push_sha }}
+          validation_base_sha: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Record validation provenance, runner, SDK, OS and architecture
+        shell: pwsh
+        run: |
+          Write-Host "pr.head.sha=$env:PR_HEAD_SHA"
+          Write-Host "pr.base.sha=$env:PR_BASE_SHA"
+          Write-Host "validation.sha=$env:VALIDATION_SHA"
+          Write-Host "push.sha=$env:PUSH_SHA"
+          Write-Host "runner.os=${{ runner.os }}"
+          Write-Host "runner.arch=${{ runner.arch }}"
+          dotnet --info
+
+      # These C003 checks run without a VPS endpoint, credential, SSH target,
+      # provider access, or privilege.
+      - name: E0 restore (C003)
+        run: dotnet restore VpsReady.slnx --locked-mode
+
+      - name: E0 build (C003)
+        run: dotnet build VpsReady.slnx --configuration Release --no-restore
+
+      - name: E0 format (C003)
+        run: dotnet format VpsReady.slnx --verify-no-changes --no-restore
+
+      - name: E0 analyzer build (C003)
+        run: dotnet build VpsReady.slnx --configuration Release --no-restore -p:RunAnalyzersDuringBuild=true
+
+      - name: E0 package inventory (C003)
+        run: dotnet list VpsReady.slnx package --include-transitive
+
+      - name: E0 vulnerability inventory (C003)
+        run: dotnet list VpsReady.slnx package --vulnerable --include-transitive
+
+      - name: E0 tracked-secret scan (C003)
+        shell: bash
+        run: bash eng/verify-tracked-secrets.sh
+
+      - name: E0 user and troubleshooting guide semantic guard (C603)
+        shell: bash
+        run: bash eng/verify-user-troubleshooting-guide.sh
+
+      - name: E0 prospective-source policy
+        shell: bash
+        run: |
+          bash eng/verify-ci-source-sha.sh
+          bash eng/verify-release-candidate-ci.sh
+          bash eng/verify-startup-smoke-suite.sh
+
+      - name: E0 startup-smoke script self-test
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile('eng/startup-smoke-package.ps1', [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) { throw 'Startup-smoke script has PowerShell parser errors.' }
+          ./eng/startup-smoke-package.ps1 -SelfTest
+
+      - name: E1 unit tests
+        run: dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build --logger "trx;LogFileName=unit.trx" --results-directory TestResults/unit
+
+      - name: E2 deterministic scenario tests
+        run: dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build --logger "trx;LogFileName=scenario.trx" --results-directory TestResults/scenario
+
+      - name: Reject unsafe retained test artifacts
+        id: artifact_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh TestResults
+
+      - name: Upload safe test results
+        if: always() && steps.artifact_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ runner.os }}-${{ env.VALIDATION_SHA }}
+          path: TestResults
+          if-no-files-found: ignore
+          retention-days: 14
+
+  local-protocol:
+    needs: resolve-validation
+    name: E3 local-contained protocol
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+
+      - name: Reproduce the resolved prospective validation tree
+        uses: ./.github/actions/prepare-prospective-validation
+        with:
+          event_name: ${{ github.event_name }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          pr_head_sha: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          pr_base_sha: ${{ needs.resolve-validation.outputs.pr_base_sha }}
+          pr_base_ref: ${{ env.PR_BASE_REF }}
+          push_sha: ${{ needs.resolve-validation.outputs.push_sha }}
+          validation_base_sha: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}
+
+      - name: Record contained E3 validation provenance
+        shell: bash
+        run: |
+          printf 'PR_HEAD_SHA=%s\nPR_BASE_SHA=%s\nVALIDATION_SHA=%s\nPUSH_SHA=%s\n' \
+            "$PR_HEAD_SHA" "$PR_BASE_SHA" "$VALIDATION_SHA" "$PUSH_SHA"
+
+      - name: Run declared local-contained E3 suite
+        shell: bash
+        run: |
+          test -x eng/run-local-contained-e3.sh
+          bash eng/run-local-contained-e3.sh
+
+      - name: Reject unsafe retained E3 artifacts
+        id: artifact_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh TestResults
+
+      - name: Upload safe E3 results
+        if: always() && steps.artifact_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e3-local-contained-results-${{ env.VALIDATION_SHA }}
+          path: TestResults
+          if-no-files-found: ignore
+          retention-days: 14
+
+  package:
+    name: E4 package (${{ matrix.rid }})
+    needs:
+      - resolve-validation
+      - validate
+      - local-protocol
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: ubuntu-latest
+            rid: linux-arm64
+          - os: macos-latest
+            rid: osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+          - os: windows-latest
+            rid: win-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+
+      - name: Reproduce the resolved prospective validation tree
+        uses: ./.github/actions/prepare-prospective-validation
+        with:
+          event_name: ${{ github.event_name }}
+          source_sha: ${{ env.SOURCE_SHA }}
+          pr_head_sha: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          pr_base_sha: ${{ needs.resolve-validation.outputs.pr_base_sha }}
+          pr_base_ref: ${{ env.PR_BASE_REF }}
+          push_sha: ${{ needs.resolve-validation.outputs.push_sha }}
+          validation_base_sha: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          expected_validation_sha: ${{ needs.resolve-validation.outputs.validation_sha }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Record package validation provenance, runner, SDK, OS and architecture
+        shell: pwsh
+        run: |
+          Write-Host "pr.head.sha=$env:PR_HEAD_SHA"
+          Write-Host "pr.base.sha=$env:PR_BASE_SHA"
+          Write-Host "validation.sha=$env:VALIDATION_SHA"
+          Write-Host "push.sha=$env:PUSH_SHA"
+          Write-Host "runner.os=${{ runner.os }}"
+          Write-Host "runner.arch=${{ runner.arch }}"
+          Write-Host "artifact.rid=${{ matrix.rid }}"
+          dotnet --info
+
+      - name: Restore locked declared runtime dependencies for publish
+        run: dotnet restore src/VpsReady.Desktop/VpsReady.Desktop.csproj --locked-mode
+
+      - name: Verify C601 packaging profiles
+        shell: bash
+        run: bash eng/verify-packaging-profiles.sh
+
+      - name: Publish and package E4 artifact
+        shell: pwsh
+        run: >
+          ./eng/package-artifact.ps1
+          -Rid '${{ matrix.rid }}'
+          -CommitSha $env:VALIDATION_SHA
+          -RunnerOs '${{ runner.os }}'
+          -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Verify generated third-party notice inventory
+        shell: bash
+        run: >
+          bash eng/verify-third-party-notices.sh
+          --lock src/VpsReady.Desktop/packages.lock.json
+          --notice artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICES.md
+          --inventory artifacts/publish/${{ matrix.rid }}/THIRD_PARTY_NOTICE_INVENTORY.json
+
+      - name: E4 bounded matching-host startup smoke
+        shell: pwsh
+        run: >
+          ./eng/startup-smoke-package.ps1
+          -Rid '${{ matrix.rid }}'
+          -ExpectedCommitSha $env:VALIDATION_SHA
+          -RunnerOs '${{ runner.os }}'
+          -RunnerArchitecture '${{ runner.arch }}'
+
+      - name: Reject unsafe retained startup-smoke report
+        id: startup_smoke_safety
+        if: always()
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh artifacts/startup-smoke
+
+      - name: Upload safe startup-smoke report
+        if: always() && steps.startup_smoke_safety.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-smoke-${{ matrix.rid }}-${{ env.VALIDATION_SHA }}
+          path: artifacts/startup-smoke/${{ matrix.rid }}/startup-smoke-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Reject unsafe retained package material
+        shell: bash
+        run: bash eng/verify-artifact-safety.sh artifacts/publish
+
+      - name: Upload SHA-tied package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpsready-${{ matrix.rid }}-${{ env.VALIDATION_SHA }}
+          path: artifacts/packages
+          if-no-files-found: error
+          retention-days: 14
+
+  validation-provenance:
+    name: Verify shared validation provenance
+    needs:
+      - resolve-validation
+      - validate
+      - local-protocol
+      - package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all test and protocol evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*results-*"
+          path: validation-evidence
+
+      - name: Assert every matrix artifact has the resolved identity and pair
+        shell: bash
+        env:
+          EXPECTED_PR_HEAD_SHA: ${{ needs.resolve-validation.outputs.pr_head_sha }}
+          EXPECTED_PR_BASE_SHA: ${{ needs.resolve-validation.outputs.pr_base_sha }}
+          EXPECTED_VALIDATION_BASE_SHA: ${{ needs.resolve-validation.outputs.validation_base_sha }}
+          EXPECTED_VALIDATION_SHA: ${{ needs.resolve-validation.outputs.validation_sha }}
+          EXPECTED_PUSH_SHA: ${{ needs.resolve-validation.outputs.push_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t provenance_files < <(find validation-evidence -name sha-provenance.env -type f | sort)
+          test "${#provenance_files[@]}" -eq 4
+          for provenance_file in "${provenance_files[@]}"; do
+            grep -Fx "PR_HEAD_SHA=$EXPECTED_PR_HEAD_SHA" "$provenance_file"
+            grep -Fx "PR_BASE_SHA=$EXPECTED_PR_BASE_SHA" "$provenance_file"
+            grep -Fx "VALIDATION_BASE_SHA=$EXPECTED_VALIDATION_BASE_SHA" "$provenance_file"
+            grep -Fx "VALIDATION_SHA=$EXPECTED_VALIDATION_SHA" "$provenance_file"
+            grep -Fx "PUSH_SHA=$EXPECTED_PUSH_SHA" "$provenance_file"
+          done
+
+      - name: Download all package evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "vpsready-*"
+          path: package-evidence
+
+      - name: Download all matching-host startup-smoke evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "startup-smoke-*"
+          path: startup-smoke-evidence
+
+      - name: Assert every startup-smoke report has exact identity and truthful result
+        shell: bash
+        env:
+          EXPECTED_VALIDATION_SHA: ${{ needs.resolve-validation.outputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find startup-smoke-evidence -name startup-smoke-report.json -type f | sort)
+          test "${#reports[@]}" -eq 6
+          passing=0
+          for report in "${reports[@]}"; do
+            jq -e --arg sha "$EXPECTED_VALIDATION_SHA" '
+              .schema_version == 1
+              and .evidence_class == "E4 Packaging/actual matching CI host"
+              and .source_sha == $sha
+              and .self_contained == true
+              and (.archive_sha256 | test("^[0-9a-f]{64}$"))
+              and (.app_version | test("^[0-9]+\\.[0-9]+\\.[0-9]+"))
+              and ((.status == "PASS" and .matching_host == true and .direct_apphost_no_dotnet_guard == "PASS" and .startup_observation == "PROCESS_RUNNING_AFTER_BOUNDED_WAIT" and (.cleanup == "PROCESS_EXITED_AFTER_BOUNDED_SHUTDOWN" or .cleanup == "PROCESS_TREE_CLEANED_AFTER_BOUNDED_SHUTDOWN"))
+                   or (.status == "NOT_RUN" and (.result_reason == "RUNNER_OS_MISMATCH" or .result_reason == "RUNNER_ARCHITECTURE_MISMATCH" or .result_reason == "HEADLESS_DISPLAY_UNAVAILABLE")))' "$report" >/dev/null
+            if jq -e '.status == "PASS"' "$report" >/dev/null; then passing=$((passing + 1)); fi
+          done
+          test "$passing" -ge 2
+
+      - name: Assert every package has the resolved validation identity
+        shell: bash
+        env:
+          EXPECTED_VALIDATION_SHA: ${{ needs.resolve-validation.outputs.validation_sha }}
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find package-evidence -name '*.zip' -type f | sort)
+          test "${#archives[@]}" -eq 6
+          for archive in "${archives[@]}"; do
+            case "$(basename "$archive")" in
+              *-"$EXPECTED_VALIDATION_SHA".zip) ;;
+              *) printf 'Package does not use resolved validation identity: %s\n' "$archive" >&2; exit 1 ;;
+            esac
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICES.md' >/dev/null
+            unzip -Z1 "$archive" | grep -Fx 'THIRD_PARTY_NOTICE_INVENTORY.json' >/dev/null
+            notice_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er --arg expected "$EXPECTED_VALIDATION_SHA" '
+              select(.source_sha == $expected
+                and .third_party_notices.path == "THIRD_PARTY_NOTICES.md"
+                and .third_party_notices.inventory_path == "THIRD_PARTY_NOTICE_INVENTORY.json"
+                and (.third_party_notices.runtime_package_count > 0)
+                and .third_party_notices.source_lock == "src/VpsReady.Desktop/packages.lock.json")
+              | .third_party_notices.sha256')"
+            actual_notice_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICES.md | sha256sum | awk '{print $1}')"
+            test "$actual_notice_sha" = "$notice_sha"
+            inventory_sha="$(unzip -p "$archive" artifact-manifest.json | jq -er '.third_party_notices.inventory_sha256')"
+            actual_inventory_sha="$(unzip -p "$archive" THIRD_PARTY_NOTICE_INVENTORY.json | sha256sum | awk '{print $1}')"
+            test "$actual_inventory_sha" = "$inventory_sha"
+          done
+
+  required:
+    name: required
+    if: always()
+    needs:
+      - resolve-validation
+      - validate
+      - local-protocol
+      - package
+      - validation-provenance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every blind evidence job
+        shell: bash
+        env:
+          RESOLVE_RESULT: ${{ needs.resolve-validation.result }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          LOCAL_PROTOCOL_RESULT: ${{ needs.local-protocol.result }}
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          PROVENANCE_RESULT: ${{ needs.validation-provenance.result }}
+        run: |
+          set -euo pipefail
+          test "$RESOLVE_RESULT" = success
+          test "$VALIDATE_RESULT" = success
+          test "$LOCAL_PROTOCOL_RESULT" = success
+          test "$PACKAGE_RESULT" = success
+          test "$PROVENANCE_RESULT" = success

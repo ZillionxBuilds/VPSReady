@@ -1,0 +1,13 @@
+{
+  "ubuntu.facts.os-release.read": "ID=ubuntu\nVERSION=\"24.04.2 LTS\"",
+  "ubuntu.facts.kernel-architecture.read": "Linux 6.8.0-59-generic x86_64",
+  "ubuntu.facts.hostname.read": "ubuntu-lab",
+  "ubuntu.facts.uptime.read": "93600.50 1200.00",
+  "ubuntu.facts.current-user.read": "ubuntu",
+  "ubuntu.facts.privilege.read": "root=false\nsudo=available",
+  "ubuntu.facts.cpu.read": "processor : 0\nmodel name : Example CPU\n\nprocessor : 1\nmodel name : Example CPU",
+  "ubuntu.facts.memory.read": "MemTotal:       2097152 kB\nMemAvailable:    1048576 kB",
+  "ubuntu.facts.root-disk.read": "/dev/vda1 21474836480 10737418240 10737418240 50% /",
+  "ubuntu.facts.ufw-availability.read": "ufw=available",
+  "ubuntu.facts.ufw-status.read": "Status: inactive"
+}

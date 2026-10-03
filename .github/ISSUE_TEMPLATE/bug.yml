@@ -6,7 +6,7 @@ body:
     id: parent
     attributes:
       label: Related card/milestone/release
-      placeholder: "#1 / release/0.1.0 @ SHA"
+      placeholder: "ZillionxBuilds/VPSReady#2 / release/0.1.0 @ SHA"
     validations:
       required: true
   - type: dropdown

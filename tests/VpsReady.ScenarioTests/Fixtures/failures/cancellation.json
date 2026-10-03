@@ -1,0 +1,6 @@
+{
+  "scenario_id": "scenario.cancellation",
+  "kind": "cancellation",
+  "expected_error": "CANCELLED",
+  "evidence": "E2"
+}

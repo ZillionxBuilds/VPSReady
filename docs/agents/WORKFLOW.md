@@ -38,6 +38,12 @@ No agent requests a real VPS for a routine card. Missing VPS access is expected,
 
 The Orchestrator owns authoritative transitions. Workpad evidence must identify E0–E4 accurately.
 
+## 3.1 GitHub Project/Kanban projection
+
+When the existing VPSReady GitHub Project is accessible, it is the required Owner-facing projection of the canonical Issue/Workpad workflow. The Orchestrator alone synchronizes its Status at every meaningful transition and first verifies the issue, sole Workpad, one status label, current role, Project item, and #1 when milestone-relevant. Reuse the existing Project and closest existing columns: Backlog, Ready, In Progress, Review, QA, Blocked, Done, and any existing Manual QA/Principal/Owner columns. Do not create a duplicate board or new status taxonomy during active delivery.
+
+Workers request rather than apply Project transitions in their handoff: `Requested next workflow state: <STATE>`. The Orchestrator applies the Issue/Workpad/Project change as closely atomically as the APIs permit. The Agent Watchdog reconciles Project drift every tick and records `KANBAN_DRIFT_REPAIRED`. If access or mutation fails, record `KANBAN_SYNC_FAILED`, exact API error, desired state, and retry action in the affected Workpad and #1; retry on the next tick. A Project-only failure does not block unrelated product work while Issues remain writable.
+
 ## 4. Major milestone gates
 
 A major milestone is a coherent user-facing or risk-bearing phase composed of accepted cards.
@@ -163,3 +169,5 @@ Next owner/action:
 ```
 
 A handoff with failed/not-run checks says so explicitly. Partial or simulated behavior is never presented as complete real-infrastructure validation.
+
+Every worker handoff also ends with: `Requested next workflow state: <STATE>`. This is a request to the Orchestrator, not a competing transition authority.

@@ -1,0 +1,342 @@
+using System.Globalization;
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+
+namespace VpsReady.Infrastructure.Remote;
+
+/// <summary>
+/// C304's narrow destructive workflow. It removes only a confirmed rule that
+/// still has the exact opaque identity in a newly read complete listing. It
+/// then removes the unique semantic rule, rather than its mutable display
+/// number, so an intervening reorder cannot target another rule. A normal flow
+/// never removes a TCP rule on the active SSH port, for either IP family, and
+/// never reports success before a further fresh listing proves the intended
+/// semantic rule is absent.
+/// </summary>
+public sealed class UfwSelectedRuleRemovalWorkflow
+{
+    private const string ActionName = "RemoveSelectedFirewallRule";
+    private readonly IDiagnosticSink diagnostics;
+
+    public UfwSelectedRuleRemovalWorkflow(IDiagnosticSink diagnostics)
+    {
+        this.diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+    }
+
+    public Task<UfwRuleRemovalOperationResult> RemoveAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent? intent,
+        CancellationToken cancellationToken = default) =>
+        RemoveCoreAsync(transport, intent, null, cancellationToken);
+
+    public Task<UfwRuleRemovalOperationResult> RemoveAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent? intent,
+        SessionOperationDiagnostics sessionDiagnostics,
+        CancellationToken cancellationToken = default) =>
+        RemoveCoreAsync(transport, intent, sessionDiagnostics, cancellationToken);
+
+    private async Task<UfwRuleRemovalOperationResult> RemoveCoreAsync(
+        IRemoteTransport transport,
+        UfwRuleRemovalIntent? intent,
+        SessionOperationDiagnostics? sessionDiagnostics,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(transport);
+        var correlation = new WorkflowDiagnosticContext(
+            sessionDiagnostics?.Correlation ?? CorrelationIds.Create("ufw_selected_rule_remove"), sessionDiagnostics);
+        var listCommand = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.UbuntuUfwRuleListRead);
+        var sessionPortCommand = UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.SshSessionPortRead);
+        await ReportAsync(correlation, DiagnosticEventCatalog.OperationStarted, DiagnosticPhase.Validate, DiagnosticStatus.Started, "Selected firewall-rule removal started.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
+
+        if (!UfwRuleRemovalIntent.TryCreate(intent, out var selectedIdentity, out var validationError))
+        {
+            var invalid = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Validate, DiagnosticStatus.Failed, "A current rule selection and explicit confirmation are required before removal.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Validation).ConfigureAwait(false);
+            return new UfwRuleRemovalOperationResult(invalid, null, validationError, IsStale: false, IsActiveSshProtected: false);
+        }
+
+        var applyAttempted = false;
+        var activeSshPort = 0;
+        UfwRuleRemovalRequest? removalRequest = null;
+        try
+        {
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Preflight, DiagnosticStatus.Running, "Reading the active SSH port before planning selected firewall-rule removal.", CancellationToken.None, sessionPortCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var activeSshPortResult = await transport.ExecuteAsync(sessionPortCommand, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Preflight, activeSshPortResult, sessionPortCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryReadPort(activeSshPortResult, out activeSshPort))
+            {
+                var error = activeSshPortResult.Succeeded ? OperationErrorCode.Parse : OperationErrorCode.Command;
+                var failure = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, "The active SSH port could not be confirmed, so no firewall rule was removed.", CancellationToken.None, sessionPortCommand.Id.Value, error).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(failure, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+            }
+
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Preflight, DiagnosticStatus.Running, "Reading a fresh complete firewall-rule listing before removal.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
+            var preflight = await ReadAsync(correlation, DiagnosticPhase.Preflight, transport, listCommand, cancellationToken).ConfigureAwait(false);
+            if (!IsVerifiableActive(preflight))
+            {
+                var failure = OperationResult.Failure(correlation.OperationId, ErrorForRead(preflight), OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, "Firewall rules could not be read as a complete active listing, so no rule was removed.", CancellationToken.None, listCommand.Id.Value, failure.ErrorCode).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(failure, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+            }
+
+            var selectedRule = preflight.Snapshot.Rules.SingleOrDefault(rule => Equals(rule.Identity, selectedIdentity));
+            if (selectedRule is null)
+            {
+                var stale = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, "The selected firewall rule changed or is no longer present; refresh and select it again.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Validation).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(stale, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: true, IsActiveSshProtected: false);
+            }
+
+            // This deliberately blocks every TCP rule on the current SSH port,
+            // including IPv4 and IPv6 variants and restrictive actions. A safe
+            // migration flow is separate future scope; C304 never infers one.
+            if (selectedRule.Protocol == UfwRuleProtocol.Tcp && selectedRule.ContainsPort(activeSshPort))
+            {
+                var protectedResult = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, "The selected rule affects the active SSH port and cannot be removed by the normal flow.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Validation).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(protectedResult, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: true);
+            }
+
+            if (!UfwRuleRemovalRequest.TryCreate(selectedRule, out removalRequest))
+            {
+                var invalidFreshRule = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Parse, OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, "The refreshed firewall rule could not be safely prepared for removal.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Parse).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(invalidFreshRule, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: true, IsActiveSshProtected: false);
+            }
+
+            if (preflight.Snapshot.Rules.Count(removalRequest!.MatchesSemantic) != 1)
+            {
+                var ambiguous = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Validation, OperationState.Unchanged);
+                await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Plan, DiagnosticStatus.Failed, "The selected firewall rule is not uniquely identifiable after refresh, so no rule was removed.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Validation).ConfigureAwait(false);
+                return new UfwRuleRemovalOperationResult(ambiguous, preflight.Snapshot, UfwRuleRemovalValidationError.None, IsStale: true, IsActiveSshProtected: false);
+            }
+
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Plan, DiagnosticStatus.Running, "The confirmed current firewall rule is ready for removal.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
+            var applyCommand = UbuntuFirewallCommandCatalog.CreateSelectedRuleRemovalRequest(removalRequest!);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Apply, DiagnosticStatus.Running, "Removing the confirmed firewall rule.", CancellationToken.None, applyCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            applyAttempted = true;
+            var applied = await transport.ExecuteAsync(applyCommand, cancellationToken).ConfigureAwait(false);
+            await ReportCommandAsync(correlation, DiagnosticPhase.Apply, applied, applyCommand.Id.Value).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!applied.Succeeded)
+            {
+                return await FailureAfterApplyAsync(correlation, transport, listCommand, removalRequest!, activeSshPort, ErrorForApply(applied), cancelled: false).ConfigureAwait(false);
+            }
+
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationRunning, DiagnosticPhase.Verify, DiagnosticStatus.Running, "Verifying selected firewall-rule removal from a fresh complete listing.", CancellationToken.None, listCommand.Id.Value).ConfigureAwait(false);
+            var verified = await ReadAsync(correlation, DiagnosticPhase.Verify, transport, listCommand, cancellationToken).ConfigureAwait(false);
+            if (!IsVerifiableActive(verified) || verified.Snapshot.Rules.Any(removalRequest.MatchesSemantic))
+            {
+                return await FailureAfterApplyAsync(correlation, transport, listCommand, removalRequest!, activeSshPort, IsVerifiableActive(verified) ? OperationErrorCode.Verification : ErrorForRead(verified), cancelled: false).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var success = OperationResult.Success(correlation.OperationId, OperationState.Applied);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationSucceeded, DiagnosticPhase.Verify, DiagnosticStatus.Succeeded, "The selected firewall rule is absent from a fresh verified listing.", CancellationToken.None, listCommand.Id.Value, verification: OperationVerification.Passed, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
+            return new UfwRuleRemovalOperationResult(success, verified.Snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+        }
+        catch (OperationCanceledException)
+        {
+            if (applyAttempted)
+            {
+                return await FailureAfterApplyAsync(correlation, transport, listCommand, removalRequest!, activeSshPort, OperationErrorCode.Cancelled, cancelled: true).ConfigureAwait(false);
+            }
+
+            var cancelled = OperationResult.Cancellation(correlation.OperationId, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationCancelled, DiagnosticPhase.Preflight, DiagnosticStatus.Cancelled, "Selected firewall-rule removal was cancelled before the delete command was sent.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired).ConfigureAwait(false);
+            return new UfwRuleRemovalOperationResult(cancelled, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+        }
+        catch (RemoteTransportException exception)
+        {
+            var error = ToErrorCode(exception.Kind);
+            if (applyAttempted)
+            {
+                return await FailureAfterApplyAsync(correlation, transport, listCommand, removalRequest!, activeSshPort, error, cancelled: false).ConfigureAwait(false);
+            }
+
+            var failure = OperationResult.Failure(correlation.OperationId, error, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, "Selected firewall-rule removal could not complete safely before the delete command was sent.", CancellationToken.None, listCommand.Id.Value, failure.ErrorCode).ConfigureAwait(false);
+            return new UfwRuleRemovalOperationResult(failure, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+        }
+        catch (TimeoutException)
+        {
+            if (applyAttempted)
+            {
+                return await FailureAfterApplyAsync(correlation, transport, listCommand, removalRequest!, activeSshPort, OperationErrorCode.Timeout, cancelled: false).ConfigureAwait(false);
+            }
+
+            var failure = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Timeout, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, "Selected firewall-rule removal timed out before the delete command was sent.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Timeout).ConfigureAwait(false);
+            return new UfwRuleRemovalOperationResult(failure, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+        }
+        catch
+        {
+            if (applyAttempted)
+            {
+                return await FailureAfterApplyAsync(correlation, transport, listCommand, removalRequest!, activeSshPort, OperationErrorCode.Unexpected, cancelled: false).ConfigureAwait(false);
+            }
+
+            var failure = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unchanged);
+            await ReportAsync(correlation, DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Preflight, DiagnosticStatus.Failed, "Selected firewall-rule removal did not complete before the delete command was sent.", CancellationToken.None, listCommand.Id.Value, OperationErrorCode.Unexpected).ConfigureAwait(false);
+            return new UfwRuleRemovalOperationResult(failure, null, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+        }
+    }
+
+    private async Task<UfwRuleRemovalOperationResult> FailureAfterApplyAsync(
+        WorkflowDiagnosticContext correlation,
+        IRemoteTransport transport,
+        RemoteCommand listCommand,
+        UfwRuleRemovalRequest removalRequest,
+        int activeSshPort,
+        OperationErrorCode originalError,
+        bool cancelled)
+    {
+        await ReportAsync(correlation, DiagnosticEventCatalog.OperationRecoveryRequired, DiagnosticPhase.Recovery, DiagnosticStatus.RecoveryRequired, "The selected rule removal was not verified; refreshing firewall state without further mutation.", CancellationToken.None, listCommand.Id.Value, originalError).ConfigureAwait(false);
+
+        UfwRuleListRead recovered;
+        try
+        {
+            // A caller timeout/cancellation cannot interrupt this one bounded,
+            // read-only recovery after the delete may have taken effect.
+            recovered = await ReadAsync(correlation, DiagnosticPhase.Recovery, transport, listCommand, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch
+        {
+            return await RecoveryFailedAsync(correlation, listCommand, cancelled, null, OperationState.Unknown,
+                "The delete may have taken effect, but current firewall state could not be confirmed.",
+                "Stop further firewall changes. Refresh from a new trusted session or inspect UFW through a separate verified access path.").ConfigureAwait(false);
+        }
+
+        if (!IsVerifiableActive(recovered))
+        {
+            return await RecoveryFailedAsync(correlation, listCommand, cancelled, null, OperationState.Unknown,
+                "The delete may have taken effect, but a complete active firewall listing could not be confirmed.",
+                "Stop further firewall changes. Refresh from a new trusted session or inspect UFW through a separate verified access path.").ConfigureAwait(false);
+        }
+
+        // The read itself used the current authenticated transport. Also
+        // require the active SSH port allow to remain visible before calling
+        // an ambiguous firewall result recovered.
+        var activeSshAllowPresent = activeSshPort is >= 1 and <= 65535
+            && recovered.Snapshot.Rules.Any(rule =>
+                rule.Protocol == UfwRuleProtocol.Tcp
+                && rule.ContainsPort(activeSshPort)
+                && rule.Action == UfwRuleAction.Allow);
+        if (!activeSshAllowPresent)
+        {
+            return await RecoveryFailedAsync(correlation, listCommand, cancelled, recovered.Snapshot, OperationState.PartiallyApplied,
+                "Firewall state was refreshed, but the active SSH-port allow rule is no longer visible.",
+                "Stop further firewall changes. Verify SSH access and restore the active SSH-port allow rule through a trusted access path.").ConfigureAwait(false);
+        }
+
+        var removalApplied = !recovered.Snapshot.Rules.Any(removalRequest.MatchesSemantic);
+        var state = removalApplied ? OperationState.Applied : OperationState.Unchanged;
+        var verification = removalApplied ? OperationVerification.Passed : OperationVerification.Failed;
+        var message = removalApplied
+            ? "The remove response was lost or cancelled, but a fresh firewall listing confirms the selected rule is absent and the active SSH-port allow remains."
+            : "The selected firewall rule is still present in a fresh listing; no further firewall change was sent. The requested removal did not complete.";
+        var nextAction = removalApplied
+            ? "Refresh the firewall list before another change; the selected rule is already absent."
+            : "Refresh the firewall list and review the selected rule before deciding whether to retry.";
+
+        var result = cancelled
+            ? OperationResult.Cancellation(correlation.OperationId, state, verification, OperationRecovery.Succeeded, message, nextAction)
+            : OperationResult.Failure(correlation.OperationId, originalError, state, verification, OperationRecovery.Succeeded, message, nextAction);
+        var terminalEvent = cancelled ? DiagnosticEventCatalog.OperationCancelled : DiagnosticEventCatalog.OperationFailed;
+        var terminalStatus = cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed;
+        var terminalError = cancelled ? OperationErrorCode.Cancelled : originalError;
+        await ReportAsync(correlation, terminalEvent, DiagnosticPhase.Recovery, terminalStatus, message, CancellationToken.None,
+            listCommand.Id.Value, terminalError, verification: verification, recovery: OperationRecovery.Succeeded).ConfigureAwait(false);
+        return new UfwRuleRemovalOperationResult(result, recovered.Snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+    }
+
+    private async Task<UfwRuleRemovalOperationResult> RecoveryFailedAsync(
+        WorkflowDiagnosticContext correlation,
+        RemoteCommand listCommand,
+        bool cancelled,
+        UfwSnapshot? snapshot,
+        OperationState state,
+        string message,
+        string nextAction)
+    {
+        var result = cancelled
+            ? OperationResult.Cancellation(correlation.OperationId, state, OperationVerification.Unknown, OperationRecovery.Failed, message, nextAction)
+            : OperationResult.Failure(correlation.OperationId, OperationErrorCode.Recovery, state, OperationVerification.Unknown, OperationRecovery.Failed, message, nextAction);
+        var terminalEvent = cancelled ? DiagnosticEventCatalog.OperationCancelled : DiagnosticEventCatalog.OperationFailed;
+        var terminalStatus = cancelled ? DiagnosticStatus.Cancelled : DiagnosticStatus.Failed;
+        var terminalError = cancelled ? OperationErrorCode.Cancelled : OperationErrorCode.Recovery;
+        await ReportAsync(correlation, terminalEvent, DiagnosticPhase.Recovery, terminalStatus, message, CancellationToken.None,
+            listCommand.Id.Value, terminalError, verification: OperationVerification.Unknown, recovery: OperationRecovery.Failed).ConfigureAwait(false);
+        return new UfwRuleRemovalOperationResult(result, snapshot, UfwRuleRemovalValidationError.None, IsStale: false, IsActiveSshProtected: false);
+    }
+
+    private async Task<UfwRuleListRead> ReadAsync(WorkflowDiagnosticContext correlation, DiagnosticPhase phase, IRemoteTransport transport, RemoteCommand command, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var result = await transport.ExecuteAsync(command, cancellationToken).ConfigureAwait(false);
+        await ReportCommandAsync(correlation, phase, result, command.Id.Value).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        return UbuntuServerFactParser.ParseUfwRuleList(result);
+    }
+
+    private async Task ReportCommandAsync(WorkflowDiagnosticContext correlation, DiagnosticPhase phase, RemoteCommandResult result, string commandId) =>
+        await ReportAsync(correlation, DiagnosticEventCatalog.CommandCompleted, phase, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Failed, "Firewall command completed.", CancellationToken.None, commandId, result.Succeeded ? null : OperationErrorCode.Command, result.Duration, result.ExitCode).ConfigureAwait(false);
+
+    private async Task ReportAsync(WorkflowDiagnosticContext correlation, string eventId, DiagnosticPhase phase, DiagnosticStatus status, string message, CancellationToken cancellationToken, string? commandId = null, OperationErrorCode? errorCode = null, TimeSpan? duration = null, int? exitCode = null, OperationVerification? verification = null, OperationRecovery? recovery = null)
+    {
+        try
+        {
+            await correlation.WriteAsync(diagnostics, new StructuredDiagnosticEvent(eventId, "Firewall", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled or DiagnosticStatus.RecoveryRequired ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, message, commandId, errorCode?.ToStableCode(), ActionName, duration, ExitCode: exitCode, Verification: verification, Recovery: recovery)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // A diagnostic sink failure must not create remote-operation success or expose sink detail.
+        }
+    }
+
+    private static bool TryReadPort(RemoteCommandResult result, out int port)
+    {
+        port = result.ParserEvidence is { CommandId: RemoteCommandCatalog.SshSessionPortRead, Number: { } value } ? value : 0;
+        return result.Succeeded && port is >= 1 and <= 65535;
+    }
+
+    private static bool IsVerifiableActive(UfwRuleListRead read) => read.IsComplete && read.Snapshot.State == UfwFirewallState.Active;
+
+    private static OperationErrorCode ErrorForRead(UfwRuleListRead read) => read.Status switch
+    {
+        UfwRuleListReadStatus.RemoteFailure => OperationErrorCode.Command,
+        UfwRuleListReadStatus.PrivilegeFailure => OperationErrorCode.Privilege,
+        UfwRuleListReadStatus.Complete => OperationErrorCode.Unsupported,
+        _ => OperationErrorCode.Parse,
+    };
+
+    private static OperationErrorCode ErrorForApply(RemoteCommandResult result) => result.ExitCode switch
+    {
+        13 or 77 => OperationErrorCode.Privilege,
+        127 => OperationErrorCode.Unsupported,
+        _ => OperationErrorCode.Command,
+    };
+
+    private static OperationErrorCode ToErrorCode(RemoteTransportFailureKind failure) => failure switch
+    {
+        RemoteTransportFailureKind.Network => OperationErrorCode.Network,
+        RemoteTransportFailureKind.ConnectionRefused => OperationErrorCode.ConnectionRefused,
+        RemoteTransportFailureKind.Timeout => OperationErrorCode.Timeout,
+        RemoteTransportFailureKind.Authentication => OperationErrorCode.Authentication,
+        RemoteTransportFailureKind.HostTrust => OperationErrorCode.HostTrust,
+        _ => OperationErrorCode.Unexpected,
+    };
+}
+
+public sealed record UfwRuleRemovalOperationResult(
+    OperationResult Result,
+    UfwSnapshot? Snapshot,
+    UfwRuleRemovalValidationError ValidationError,
+    bool IsStale,
+    bool IsActiveSshProtected);

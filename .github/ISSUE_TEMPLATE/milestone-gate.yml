@@ -6,7 +6,7 @@ body:
     id: parent
     attributes:
       label: Parent release/milestone
-      placeholder: "#1 / #4"
+      placeholder: "Mapped tracker URL from middleman/repository-migration/identity-map.json"
     validations:
       required: true
   - type: textarea

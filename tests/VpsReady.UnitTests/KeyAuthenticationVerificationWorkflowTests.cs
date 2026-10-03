@@ -1,0 +1,486 @@
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Local;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Diagnostics;
+using VpsReady.Infrastructure.Remote;
+
+namespace VpsReady.UnitTests;
+
+[Trait("Category", "E1")]
+public sealed class KeyAuthenticationVerificationWorkflowTests
+{
+    [Fact]
+    public async Task CancellationDuringTerminalKeyAuthJournalCannotRecordSuccessThenReturnCancelled()
+    {
+        var transport = new RecordingKeyAuthenticationTransport();
+        var diagnostics = new BlockingKeyAuthSuccessSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        using var cancellation = new CancellationTokenSource();
+        var verification = workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+        await diagnostics.SuccessEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        diagnostics.Release.TrySetResult();
+        var result = await verification;
+
+        var terminal = diagnostics.Events.Where(item => item.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed).ToArray();
+        Assert.Single(terminal);
+        Assert.Equal(result.Result.Succeeded, terminal[0].EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded);
+        Assert.Equal(result.Result.OperationId, terminal[0].Correlation.OperationId);
+        Assert.True(transport.Disposed);
+    }
+
+    [Fact]
+    public async Task CancellationBeforeSeparateKeyVerificationFinishesNeverReportsSuccess()
+    {
+        var transport = new RecordingKeyAuthenticationTransport { BlockVerification = true };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        using var cancellation = new CancellationTokenSource();
+        var verification = workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+        await transport.VerificationEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        cancellation.Cancel();
+        var result = await verification;
+
+        Assert.True(result.Result.Cancelled);
+        Assert.True(transport.Disposed);
+        Assert.DoesNotContain(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded);
+        var terminal = Assert.Single(diagnostics.Events, item => item.EventId is
+            DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled or
+            DiagnosticEventCatalog.KeyAuthenticationVerificationFailed);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled, terminal.EventId);
+        Assert.Equal(result.Result.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task SeparateTrustedKeyConnectionMustCompleteTheCataloguedVerificationBeforeSuccess()
+    {
+        var transport = new RecordingKeyAuthenticationTransport();
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.True(result.Result.Succeeded);
+        Assert.Null(result.VerificationErrorCode);
+        Assert.Equal(1, transport.ConnectCalls);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, Assert.Single(transport.Commands).Id.Value);
+        Assert.True(transport.Disposed);
+        Assert.Contains(diagnostics.Events, item =>
+            item.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded
+            && item.Phase == DiagnosticPhase.Verify
+            && item.CommandId == RemoteCommandCatalog.SshConnectionTest
+            && item.Correlation.OperationId == result.Result.OperationId);
+        Assert.Contains(diagnostics.Events, item => item.EventId == DiagnosticEventCatalog.CommandCompleted && item.ExitCode == 0);
+        Assert.All(diagnostics.Events, item => Assert.DoesNotContain("/private/keys", item.Message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task MissingExplicitMatchingTrustFailsBeforeTheMinimumCommandAndDisposesCandidate()
+    {
+        var transport = new RecordingKeyAuthenticationTransport { Assessment = null };
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), new RecordingDiagnosticSink());
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.HostTrust, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.HostTrust, result.VerificationErrorCode);
+        Assert.Empty(transport.Commands);
+        Assert.True(transport.Disposed);
+    }
+
+    [Fact]
+    public async Task AuthenticationAndVerificationFailuresNeverBecomeSuccessOrAlterTheOrdinarySession()
+    {
+        var authenticationTransport = new RecordingKeyAuthenticationTransport
+        {
+            ConnectFailure = new RemoteTransportException(RemoteTransportFailureKind.Authentication),
+        };
+        var verificationTransport = new RecordingKeyAuthenticationTransport { VerificationExitCode = 1 };
+        var workflow = new KeyAuthenticationVerificationWorkflow(
+            new QueueTransportFactory(authenticationTransport, verificationTransport),
+            new RecordingDiagnosticSink());
+
+        var authentication = await workflow.VerifyAsync(CreateRequest());
+        var verification = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.Equal(OperationErrorCode.Authentication, authentication.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Authentication, authentication.VerificationErrorCode);
+        Assert.Empty(authenticationTransport.Commands);
+        Assert.False(verification.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Verification, verification.Result.ErrorCode);
+        Assert.Equal(OperationVerification.Failed, verification.Result.Verification);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Verification, verification.VerificationErrorCode);
+        Assert.Single(verificationTransport.Commands);
+        Assert.True(authenticationTransport.Disposed);
+        Assert.True(verificationTransport.Disposed);
+    }
+
+    [Fact]
+    public async Task CancellationAndTimeoutAreTypedAndDoNotExecuteVerification()
+    {
+        var cancelledTransport = new RecordingKeyAuthenticationTransport { BlockConnect = true };
+        var timeoutTransport = new RecordingKeyAuthenticationTransport { BlockConnect = true };
+        var workflow = new KeyAuthenticationVerificationWorkflow(
+            new QueueTransportFactory(cancelledTransport),
+            new RecordingDiagnosticSink());
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        var cancellation = await workflow.VerifyAsync(CreateRequest(), cancelled.Token);
+        var timeout = await new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(timeoutTransport),
+            new RecordingDiagnosticSink()).VerifyAsync(CreateRequest(TimeSpan.FromMilliseconds(10)));
+
+        Assert.True(cancellation.Result.Cancelled);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Cancelled, cancellation.VerificationErrorCode);
+        Assert.Equal(OperationErrorCode.Timeout, timeout.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Timeout, timeout.VerificationErrorCode);
+        Assert.Empty(cancelledTransport.Commands);
+        Assert.Empty(timeoutTransport.Commands);
+        // Pre-cancelled work never creates or owns a candidate at all.
+        Assert.False(cancelledTransport.Disposed);
+        Assert.True(timeoutTransport.Disposed);
+    }
+
+    [Fact]
+    public async Task VerificationTransportTimeoutRetainsVerifyPhaseAndCommandIdentity()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            VerificationFailure = new RemoteTransportException(RemoteTransportFailureKind.Timeout),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Timeout, result.VerificationErrorCode);
+        Assert.Single(transport.Commands);
+        Assert.True(transport.Disposed);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task WorkflowTimeoutDuringMinimumCommandRetainsVerifyPhaseAndCommandIdentity()
+    {
+        var transport = new RecordingKeyAuthenticationTransport { BlockVerification = true };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        var verification = workflow.VerifyAsync(CreateRequest(TimeSpan.FromSeconds(1)));
+
+        await transport.VerificationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await verification.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Timeout, result.VerificationErrorCode);
+        Assert.Equal(OperationVerification.NotRun, result.Result.Verification);
+        Assert.Single(transport.Commands);
+        Assert.True(transport.Disposed);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.SshConnectionTest, terminal.CommandId);
+    }
+
+    [Fact]
+    public async Task CandidateCleanupFailureAfterVerifiedCommandCannotPublishSuccessOrEscape()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            DisposeFailure = new InvalidOperationException("synthetic cleanup failure"),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.True(transport.Disposed);
+        Assert.Single(transport.Commands);
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Unexpected, result.VerificationErrorCode);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, Assert.Single(TerminalEvents(diagnostics)).EventId);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("synthetic cleanup failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SessionTerminalDiagnosticRetainsPassedVerificationWhenCandidateCleanupFails()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            DisposeFailure = new InvalidOperationException("synthetic cleanup failure"),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+        var correlation = CorrelationIds.Create("key_auth_verify");
+        var sessionDiagnostics = SessionOperationDiagnostics.ForKeyAuthentication(correlation, diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest(), sessionDiagnostics);
+        await sessionDiagnostics.FinalizeAsync(result.Result);
+
+        Assert.Equal(OperationErrorCode.Unexpected, result.Result.ErrorCode);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, terminal.EventId);
+        Assert.Equal(correlation.OperationId, terminal.Correlation.OperationId);
+        Assert.Equal(OperationVerification.Passed, terminal.Verification);
+        Assert.DoesNotContain(diagnostics.Events, item => item.Message.Contains("synthetic cleanup failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CandidateCleanupFailureCannotReplacePriorAuthenticationFailure()
+    {
+        var transport = new RecordingKeyAuthenticationTransport
+        {
+            ConnectFailure = new RemoteTransportException(RemoteTransportFailureKind.Authentication),
+            DisposeFailure = new InvalidOperationException("synthetic cleanup failure"),
+        };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest());
+
+        Assert.True(transport.Disposed);
+        Assert.Empty(transport.Commands);
+        Assert.Equal(OperationErrorCode.Authentication, result.Result.ErrorCode);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Authentication, result.VerificationErrorCode);
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationFailed, Assert.Single(TerminalEvents(diagnostics)).EventId);
+    }
+
+    [Fact]
+    public async Task CancellationDuringCandidateCleanupPrecedesTerminalSuccess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var transport = new RecordingKeyAuthenticationTransport { OnDispose = cancellation.Cancel };
+        var diagnostics = new RecordingDiagnosticSink();
+        var workflow = new KeyAuthenticationVerificationWorkflow(new QueueTransportFactory(transport), diagnostics);
+
+        var result = await workflow.VerifyAsync(CreateRequest(), cancellation.Token);
+
+        Assert.True(transport.Disposed);
+        Assert.Single(transport.Commands);
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationVerification.Passed, result.Result.Verification);
+        Assert.Equal(KeyAuthenticationVerificationErrorCatalog.Cancelled, result.VerificationErrorCode);
+        var terminal = Assert.Single(TerminalEvents(diagnostics));
+        Assert.Equal(DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled, terminal.EventId);
+        Assert.Equal(DiagnosticPhase.Recovery, terminal.Phase);
+    }
+
+    private static IEnumerable<StructuredDiagnosticEvent> TerminalEvents(RecordingDiagnosticSink diagnostics) =>
+        diagnostics.Events.Where(item => item.EventId is DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded
+            or DiagnosticEventCatalog.KeyAuthenticationVerificationFailed
+            or DiagnosticEventCatalog.KeyAuthenticationVerificationCancelled);
+
+    [Fact]
+    public void RequestRejectsAHostOrPortThatIsNotTheExplicitTrustedIdentity()
+    {
+        Assert.Throws<ArgumentException>(() => new KeyAuthenticationVerificationRequest(
+            new RemoteEndpoint("private-host.test", 22, "admin"),
+            new KnownHostIdentity("private-host.test", 2200),
+            SelectedKey(),
+            TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public async Task ProductionJournalAndSafeReportRetainOnlyCorrelatedSafeKeyAuthVerificationEvidence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "VpsReady.C405", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c405build", "test-os", "test-arch"),
+                new NoOpFolderOpener());
+            var result = await new KeyAuthenticationVerificationWorkflow(
+                new QueueTransportFactory(new RecordingKeyAuthenticationTransport()),
+                new RedactingDiagnosticSink(redactor, journal)).VerifyAsync(CreateRequest());
+
+            Assert.True(result.Result.Succeeded);
+            var persisted = await File.ReadAllTextAsync(Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.All(JsonlTestEvidence.ReadRecords(persisted), record =>
+                Assert.Equal(result.Result.OperationId, record.GetProperty("operationId").GetString()));
+            Assert.Contains(RemoteCommandCatalog.SshConnectionTest, persisted, StringComparison.Ordinal);
+            Assert.Contains(DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-host.test", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("/private/keys", persisted, StringComparison.Ordinal);
+
+            var report = journal.CreateSafeIssueReport();
+            Assert.Contains(result.Result.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains("VerifyKeyAuthentication / Verify", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("private-host.test", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("/private/keys", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    private static KeyAuthenticationVerificationRequest CreateRequest(TimeSpan? timeout = null) => new(
+        new RemoteEndpoint("private-host.test", 22, "admin"),
+        new KnownHostIdentity("private-host.test", 22),
+        SelectedKey(),
+        timeout ?? TimeSpan.FromSeconds(1));
+
+    private static ExistingSshKeySelectionResult SelectedKey() => ExistingSshKeySelectionResult.Success(
+        OperationResult.Success("selected-key-opaque", OperationState.Unchanged),
+        new ExistingSshKeyLocation("/private/keys/id_ed25519"),
+        new ExistingSshKeyMetadata("ed25519", "SHA256:opaque"));
+
+    private sealed class QueueTransportFactory(params RecordingKeyAuthenticationTransport[] transports) : IRemoteTransportFactory
+    {
+        private readonly Queue<RecordingKeyAuthenticationTransport> transports = new(transports);
+
+        public IRemoteTransport Create() => transports.Dequeue();
+    }
+
+    private sealed class RecordingKeyAuthenticationTransport : IKeyAuthenticationSshTransport
+    {
+        public List<RemoteCommand> Commands { get; } = [];
+
+        public int ConnectCalls { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public bool BlockConnect { get; init; }
+
+        public bool BlockVerification { get; init; }
+
+        public TaskCompletionSource VerificationEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int VerificationExitCode { get; init; }
+
+        public Exception? ConnectFailure { get; init; }
+
+        public Exception? VerificationFailure { get; init; }
+
+        public Exception? DisposeFailure { get; init; }
+
+        public Action? OnDispose { get; init; }
+
+        public KnownHostTrustAssessment? Assessment { get; set; } = new(KnownHostTrustState.Matching, challenge: null, recoveredCorruptStore: false);
+
+        public KnownHostTrustAssessment? LastHostTrustAssessment => Assessment;
+
+        public async Task ConnectWithPrivateKeyAsync(RemoteEndpoint endpoint, KnownHostIdentity trustedHost, ExistingSshKeyLocation privateKey, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            ConnectCalls++;
+            Assert.Equal(new KnownHostIdentity(endpoint.Host, endpoint.Port), trustedHost);
+            Assert.Equal("ExistingSshKeyLocation [path redacted]", privateKey.ToString());
+            if (ConnectFailure is not null)
+            {
+                throw ConnectFailure;
+            }
+
+            if (BlockConnect)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+        }
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command);
+            if (VerificationFailure is not null)
+            {
+                throw VerificationFailure;
+            }
+
+            if (BlockVerification)
+            {
+                VerificationEntered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            return new RemoteCommandResult(VerificationExitCode, string.Empty, string.Empty, TimeSpan.Zero, command.OutputCapturePolicy);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            OnDispose?.Invoke();
+            if (DisposeFailure is not null)
+            {
+                throw DisposeFailure;
+            }
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingDiagnosticSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+
+        public Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            Events.Add(diagnosticEvent);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class BlockingKeyAuthSuccessSink : IDiagnosticSink
+    {
+        public List<StructuredDiagnosticEvent> Events { get; } = [];
+        public TaskCompletionSource SuccessEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task WriteAsync(StructuredDiagnosticEvent diagnosticEvent, CancellationToken cancellationToken)
+        {
+            if (diagnosticEvent.EventId == DiagnosticEventCatalog.KeyAuthenticationVerificationSucceeded)
+            {
+                SuccessEntered.TrySetResult();
+                await Release.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
+            }
+            Events.Add(diagnosticEvent);
+        }
+    }
+
+    private sealed class FixedPlatformPaths(string root) : IPlatformPaths
+    {
+        public string GetStateDirectory() => GetDirectory(LocalStorageArea.State);
+
+        public string GetDirectory(LocalStorageArea area) => area switch
+        {
+            LocalStorageArea.State => Path.Combine(root, "state"),
+            LocalStorageArea.Configuration => Path.Combine(root, "configuration"),
+            LocalStorageArea.Ssh => Path.Combine(root, "ssh"),
+            _ => throw new ArgumentOutOfRangeException(nameof(area), area, "Unknown storage area."),
+        };
+
+        public string ResolvePath(LocalStorageArea area, string relativePath) => LocalPathPolicy.ResolveUnder(GetDirectory(area), relativePath);
+    }
+
+    private sealed class FixedClock : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = new(2040, 1, 1, 12, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class NoOpFolderOpener : IDiagnosticFolderOpener
+    {
+        public Task OpenAsync(string directory, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+    }
+}

@@ -1,0 +1,1238 @@
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
+using VpsReady.Application;
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Local;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Diagnostics;
+using VpsReady.Infrastructure.Remote;
+using VpsReady.Tests;
+
+namespace VpsReady.UnitTests;
+
+[Trait("Category", "E1")]
+public sealed class OperationJournalWorkspaceTests
+{
+    private static readonly int[] ExpectedCommandExitCodes = [0, 42];
+    private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions RelaxedJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    [Fact]
+    public void BundleSafetyScanMasksOnlyTopLevelCommandIdNotNestedContextOrFreeText()
+    {
+        var commandId = RemoteCommandCatalog.UbuntuAuthorizedKeysVerify;
+        var message = $"Escaped free text says \"commandId\": \"{commandId}\".";
+        var json = JsonSerializer.Serialize(new { commandId, context = new { commandId }, message }, RelaxedJsonOptions);
+
+        var scanCopy = OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(json);
+
+        using var parsed = JsonDocument.Parse(scanCopy);
+        Assert.Equal("[CATALOGUED_COMMAND_ID]", parsed.RootElement.GetProperty("commandId").GetString());
+        Assert.Equal(commandId, parsed.RootElement.GetProperty("context").GetProperty("commandId").GetString());
+        Assert.Equal(message, parsed.RootElement.GetProperty("message").GetString());
+        Assert.Contains(commandId, scanCopy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BundleSafetyScanFailsClosedOnMalformedJournal()
+    {
+        Assert.ThrowsAny<JsonException>(() => OperationJournalWorkspace.MaskCataloguedCommandIdsForSafetyScan(
+            "{\"commandId\": \"ubuntu.ssh.authorized-keys.verify\"} {"));
+    }
+
+    [Fact]
+    public async Task CancelledFirewallSessionExportsOnlyItsAuthoritativeTerminalResult()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root), redactor, new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "firewall-test", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            var correlation = CorrelationIds.Create("firewall_add");
+            var scope = SessionOperationDiagnostics.ForFirewall(correlation, sink, "add");
+            var before = """
+                Status: active
+
+                     To                         Action      From
+                     --                         ------      ----
+                [ 1] 22/tcp                     ALLOW IN    Anywhere
+                """;
+            var after = """
+                Status: active
+
+                     To                         Action      From
+                     --                         ------      ----
+                [ 1] 22/tcp                     ALLOW IN    Anywhere
+                [ 2] 443/tcp                    ALLOW IN    Anywhere
+                """;
+            var transport = new FirewallFixtureTransport(before, string.Empty, after, after, "22");
+            var lower = await new FirewallManagement(sink).AddAsync(
+                transport, new UfwAllowRuleInput(UfwRuleProtocol.Tcp, 443, "Anywhere", UfwIpFamily.Ipv4), scope);
+
+            Assert.True(lower.Result.Succeeded);
+            Assert.DoesNotContain(journal.GetActivity(correlation.OperationId), entry => entry.Message == "Firewall allow rule is present in a fresh verified listing.");
+            await scope.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+            var activity = journal.GetActivity(correlation.OperationId);
+            Assert.Contains(activity, entry => entry.OperationId == correlation.OperationId && entry.State == ActivityState.Cancelled);
+            Assert.DoesNotContain(activity, entry => entry.Message == "Firewall allow rule is present in a fresh verified listing.");
+            var persisted = await File.ReadAllTextAsync(Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl"));
+            Assert.Contains(DiagnosticEventCatalog.OperationCancelled, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.OperationSucceeded, persisted, StringComparison.Ordinal);
+            var report = journal.CreateSafeIssueReport(correlation.RunId);
+            Assert.Contains(correlation.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains($"Cancelled / {OperationErrorCode.Cancelled.ToStableCode()}", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("fixture.invalid", report, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) { Directory.Delete(root, recursive: true); }
+        }
+    }
+
+    private sealed class FirewallFixtureTransport(params string[] outputs) : IRemoteTransport
+    {
+        private readonly Queue<string> outputs = new(outputs);
+
+        public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) =>
+            ProductionOutput.CaptureAsync(command,
+                new RemoteCommandResult(0, outputs.Count > 0 ? outputs.Dequeue() : throw new InvalidOperationException("Unexpected fixture command."), string.Empty, TimeSpan.FromMilliseconds(5)),
+                cancellationToken);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task CancelledSessionFinalizationNeverExportsTheWorkflowSuccessCandidate()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var journal = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "session-test", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            var correlation = CorrelationIds.Create("deploy_key");
+            var finalization = SessionOperationDiagnostics.ForPublicKeyDeployment(correlation, sink);
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.PublicKeyDeploymentStarted,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("validate"),
+                DiagnosticPhase.Validate,
+                DiagnosticStatus.Started,
+                "Public-key deployment started.",
+                Action: "DeployPublicKey"));
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationRunning,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("preflight"),
+                DiagnosticPhase.Preflight,
+                DiagnosticStatus.Running,
+                "raw authorized_keys contents must not appear",
+                Action: "DeployPublicKey"));
+            await finalization.RecordAsync(sink, new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.PublicKeyDeploymentSucceeded,
+                "SSH key deployment",
+                DiagnosticLevel.Information,
+                correlation.ForStep("verify"),
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Succeeded,
+                "This candidate success must not be exported.",
+                RemoteCommandCatalog.UbuntuAuthorizedKeysVerify,
+                Action: "DeployPublicKey"));
+
+            await finalization.FinalizeAsync(OperationResult.Cancellation(correlation.OperationId, OperationState.Unknown));
+
+            var activity = journal.GetActivity();
+            Assert.All(activity, entry => Assert.Equal(correlation.OperationId, entry.OperationId));
+            Assert.Contains(activity, entry => entry.State == ActivityState.Cancelled);
+            Assert.DoesNotContain(activity, entry => entry.State == ActivityState.Succeeded);
+            var persisted = await File.ReadAllTextAsync(Path.Combine(journal.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("This candidate success must not be exported.", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("raw authorized_keys contents", persisted, StringComparison.Ordinal);
+            var report = journal.CreateSafeIssueReport(correlation.RunId);
+            Assert.Contains(correlation.OperationId, report, StringComparison.Ordinal);
+            Assert.Contains($"Cancelled / {OperationErrorCode.Cancelled.ToStableCode()}", report, StringComparison.Ordinal);
+            Assert.DoesNotContain("This candidate success must not be exported.", report, StringComparison.Ordinal);
+
+            var bundle = await journal.ExportSanitizedSupportBundleAsync(
+                correlation.RunId, Path.Combine(root, "user-selected-export"), CancellationToken.None);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var entry = Assert.Single(archive.Entries, item => item.FullName == "events.jsonl");
+            using var reader = new StreamReader(entry.Open());
+            var bundledEvents = await reader.ReadToEndAsync();
+            Assert.Contains(DiagnosticEventCatalog.PublicKeyDeploymentCancelled, bundledEvents, StringComparison.Ordinal);
+            Assert.Contains(RemoteCommandCatalog.UbuntuAuthorizedKeysVerify, bundledEvents, StringComparison.Ordinal);
+            Assert.DoesNotContain(DiagnosticEventCatalog.PublicKeyDeploymentSucceeded, bundledEvents, StringComparison.Ordinal);
+            Assert.DoesNotContain("raw authorized_keys contents", bundledEvents, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ActivitySelectedIssueReportUsesOnlySelectedOperationWithinSharedRun()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var run = DiagnosticRunContext.StartSession();
+            var selectedOperation = run.StartOperation("overview");
+            var laterOperation = run.StartOperation("firewall");
+            await WriteFailureAsync(workspace, selectedOperation, "Overview", new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            await WriteFailureAsync(workspace, laterOperation, "Firewall", new DateTimeOffset(2040, 1, 1, 0, 1, 0, TimeSpan.Zero));
+            string? copiedReport = null;
+            var viewModel = new ActivityDiagnosticsViewModel(workspace, report => copiedReport = report);
+            viewModel.SelectedEntry = Assert.Single(viewModel.Entries, entry => entry.OperationId == selectedOperation.OperationId);
+
+            viewModel.CopySafeIssueReportCommand.Execute(null);
+
+            Assert.NotNull(copiedReport);
+            Assert.Contains(selectedOperation.OperationId, copiedReport, StringComparison.Ordinal);
+            Assert.DoesNotContain(laterOperation.OperationId, copiedReport, StringComparison.Ordinal);
+            Assert.Contains("Overview", copiedReport, StringComparison.Ordinal);
+            Assert.DoesNotContain("Firewall", copiedReport, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ActivitySelectedSupportBundleContainsOnlySelectedOperationWithinSharedRun()
+    {
+        var root = CreateTemporaryDirectory();
+        var exports = Path.Combine(root, "selected-export");
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var run = DiagnosticRunContext.StartSession();
+            var selectedOperation = run.StartOperation("overview");
+            var laterOperation = run.StartOperation("firewall");
+            await WriteFailureAsync(workspace, selectedOperation, "Overview", new DateTimeOffset(2040, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            await WriteFailureAsync(workspace, laterOperation, "Firewall", new DateTimeOffset(2040, 1, 1, 0, 1, 0, TimeSpan.Zero));
+            var viewModel = new ActivityDiagnosticsViewModel(workspace, _ => { });
+            viewModel.SelectedEntry = Assert.Single(viewModel.Entries, entry => entry.OperationId == selectedOperation.OperationId);
+
+            await viewModel.ExportSanitizedSupportBundleAsync(exports);
+
+            var bundlePath = Assert.Single(Directory.GetFiles(exports, "*.zip"));
+            using var archive = ZipFile.OpenRead(bundlePath);
+            var events = await ReadBundleEntryAsync(archive, "events.jsonl");
+            var report = await ReadBundleEntryAsync(archive, "issue-report.md");
+            var summary = await ReadBundleEntryAsync(archive, "run-summary.md");
+            using var manifest = JsonDocument.Parse(await ReadBundleEntryAsync(archive, "manifest.json"));
+            foreach (var content in new[] { events, report })
+            {
+                Assert.Contains(selectedOperation.OperationId, content, StringComparison.Ordinal);
+                Assert.DoesNotContain(laterOperation.OperationId, content, StringComparison.Ordinal);
+                Assert.Contains("Overview", content, StringComparison.Ordinal);
+                Assert.DoesNotContain("Firewall", content, StringComparison.Ordinal);
+            }
+
+            Assert.Contains(selectedOperation.OperationId, summary, StringComparison.Ordinal);
+            Assert.DoesNotContain(laterOperation.OperationId, summary, StringComparison.Ordinal);
+            Assert.Equal(selectedOperation.OperationId, manifest.RootElement.GetProperty("operation_id").GetString());
+            Assert.Equal(run.RunId, manifest.RootElement.GetProperty("run_id").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task OperationScopedReportAndBundleRejectMalformedOperationIdBeforeExportSideEffects()
+    {
+        var root = CreateTemporaryDirectory();
+        var destination = Path.Combine(root, "invalid-operation-export");
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var run = DiagnosticRunContext.StartSession();
+
+            var reportException = Assert.Throws<ArgumentException>(() => workspace.CreateSafeIssueReport(run.RunId, "op-not-opaque"));
+            var bundleException = await Assert.ThrowsAsync<ArgumentException>(() => workspace.ExportSanitizedSupportBundleAsync(
+                run.RunId,
+                destination,
+                CancellationToken.None,
+                "op-not-opaque"));
+
+            Assert.Equal("operationId", reportException.ParamName);
+            Assert.Equal("operationId", bundleException.ParamName);
+            Assert.False(Directory.Exists(destination));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+
+            var missingOperation = run.StartOperation("missing");
+            var emptyReport = workspace.CreateSafeIssueReport(run.RunId, missingOperation.OperationId);
+            Assert.Contains($"- Run ID: {run.RunId}", emptyReport, StringComparison.Ordinal);
+            Assert.Contains($"- Operation ID: {missingOperation.OperationId}", emptyReport, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task HostAndUserPseudonymsStayStableThroughJournalAndBundleRedaction()
+    {
+        var root = CreateTemporaryDirectory();
+        const string host = "203.0.113.7";
+        const string user = "ubuntu";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "privacytest", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    "Connection verification failed.",
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["host"] = new(DiagnosticDataClassification.HostIdentifier, host),
+                        ["username"] = new(DiagnosticDataClassification.UserName, user),
+                    }),
+                CancellationToken.None);
+
+            var expectedHost = redactor.Redact(host, DiagnosticDataClassification.HostIdentifier).SafeText;
+            var expectedUser = redactor.Redact(user, DiagnosticDataClassification.UserName).SafeText;
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(
+                correlation.RunId,
+                Path.Combine(root, "user-selected-export"),
+                CancellationToken.None);
+            using var journalDocument = JsonDocument.Parse(journal);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            using var reader = new StreamReader(archive.GetEntry("events.jsonl")!.Open(), Encoding.UTF8);
+            var exportedEvents = reader.ReadToEnd();
+            using var bundleDocument = JsonDocument.Parse(exportedEvents);
+
+            foreach (var (key, expected) in new[] { ("host", expectedHost), ("username", expectedUser) })
+            {
+                Assert.Equal(expected, journalDocument.RootElement.GetProperty("context").GetProperty(key).GetProperty("value").GetString());
+                Assert.Equal(expected, bundleDocument.RootElement.GetProperty("context").GetProperty(key).GetProperty("value").GetString());
+            }
+
+            foreach (var surface in new[] { journal, report, exportedEvents })
+            {
+                Assert.DoesNotContain(host, surface, StringComparison.Ordinal);
+                Assert.DoesNotContain(user, surface, StringComparison.Ordinal);
+            }
+
+            Assert.DoesNotContain(host, Assert.Single(workspace.GetActivity()).Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("app_version")]
+    [InlineData("build_sha")]
+    [InlineData("local_os")]
+    [InlineData("local_arch")]
+    [InlineData("artifact_rid")]
+    public async Task TokenLikeEnvironmentMetadataIsSanitizedOnEveryDiagnosticSurface(string field)
+    {
+        var root = CreateTemporaryDirectory();
+        var exportDirectory = Path.Combine(root, "user-selected-export");
+        var syntheticToken = string.Concat("gh", "p_", "syntheticnotarealtoken12345");
+        var redactor = new FailClosedRedactor();
+        var redacted = redactor.Redact(syntheticToken);
+        Assert.False(redacted.WasOmitted);
+        Assert.NotEqual(syntheticToken, redacted.SafeText);
+        var environment = new DiagnosticEnvironment(
+            field == "app_version" ? syntheticToken : "0.1.0-test",
+            field == "build_sha" ? syntheticToken : "testbuild",
+            field == "local_os" ? syntheticToken : "test-os",
+            field == "local_arch" ? syntheticToken : "test-arch",
+            field == "artifact_rid" ? syntheticToken : "osx-arm64");
+
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                environment,
+                new RecordingFolderOpener());
+
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await new RedactingDiagnosticSink(redactor, workspace).WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    "Connection verification failed."),
+                CancellationToken.None);
+
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exportDirectory, CancellationToken.None);
+            Assert.DoesNotContain(syntheticToken, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(syntheticToken, report, StringComparison.Ordinal);
+
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                var content = reader.ReadToEnd();
+                Assert.DoesNotContain(syntheticToken, content, StringComparison.Ordinal);
+                if (entry.FullName == "environment.json")
+                {
+                    Assert.Contains("[REDACTED_TOKEN]", content, StringComparison.Ordinal);
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ConnectionFormFailureReachesLocalActivityAndJournalWithOpaqueCorrelation()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "uncommitted-9965c5bc", System.Runtime.InteropServices.RuntimeInformation.OSDescription, "Arm64", "osx-arm64"),
+                new RecordingFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = CorrelationIds.Create("validate");
+            await sink.WriteAsync(new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                "Connection",
+                DiagnosticLevel.Error,
+                correlation,
+                DiagnosticPhase.Validate,
+                DiagnosticStatus.Failed,
+                "Enter a valid host or IP address. Enter an SSH port from 1 to 65535. Enter a username without spaces. Enter a password using the password field. Correct the indicated fields, then try again.",
+                ErrorCode: OperationErrorCode.Validation.ToStableCode(),
+                Action: "TestConnection",
+                OutputPolicy: OutputCapturePolicy.None), CancellationToken.None);
+
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal(correlation.OperationId, entry.OperationId);
+            Assert.Equal(ActivityState.Failed, entry.State);
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            Assert.Contains(correlation.OperationId, journal, StringComparison.Ordinal);
+            Assert.Contains("VALIDATION_FAILED", journal, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task LocalKeyFailureJournalProjectsLocalGuidanceWithoutLeakingItsPath()
+    {
+        var root = CreateTemporaryDirectory();
+        const string seededPath = "/private/local-key-test-path";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            redactor.RegisterSensitiveValue(seededPath);
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "localguide", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("generate_key");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.LocalKeyGenerationFailed,
+                    "Local SSH key",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Failed,
+                    $"Generation failed at {seededPath}",
+                    ErrorCode: "LOCAL_KEY_TARGET_COLLISION",
+                    Action: "Generate local SSH key"),
+                CancellationToken.None);
+
+            var entry = Assert.Single(workspace.GetActivity());
+            Assert.Equal("Review the error and verify the local state before retrying.", entry.NextSafeAction);
+            Assert.Equal(correlation.OperationId, entry.OperationId);
+            var journal = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            Assert.DoesNotContain(seededPath, entry.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededPath, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(seededPath, report, StringComparison.Ordinal);
+            Assert.DoesNotContain("verify the remote state", entry.NextSafeAction, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalOmitsFullOpenSshPublicKeyLinesFromActivityJournalReportAndBundle()
+    {
+        var root = CreateTemporaryDirectory();
+        var exportDirectory = Path.Combine(root, "user-selected-export");
+        var encodedKey = Convert.ToBase64String(Encoding.UTF8.GetBytes("c607-public-key-redaction-regression-material"));
+        var publicKeyLine = $"ssh-ed25519 {encodedKey} c607-redaction-test";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            var safeSummary = redactor.Redact("ssh-ed25519 SHA256:c607-safe-summary");
+            Assert.False(safeSummary.WasOmitted);
+            Assert.Equal("ssh-ed25519 SHA256:c607-safe-summary", safeSummary.SafeText);
+
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c607build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("deploy_public_key");
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "SSH key deployment",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Apply,
+                    DiagnosticStatus.Failed,
+                    $"Unexpected key text: {publicKeyLine}",
+                    Action: $"Deploy {publicKeyLine}",
+                    StandardOutput: new BoundedOutput(OutputCapturePolicy.SanitizedTruncated, 0, publicKeyLine, WasTruncated: false, WasOmitted: false),
+                    StandardError: new BoundedOutput(OutputCapturePolicy.SanitizedTruncated, 0, publicKeyLine, WasTruncated: false, WasOmitted: false),
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["public_key"] = new(DiagnosticDataClassification.PublicSafe, publicKeyLine),
+                    }),
+                CancellationToken.None);
+
+            var activity = Assert.Single(workspace.GetActivity());
+            var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var journal = await File.ReadAllTextAsync(journalPath);
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exportDirectory, CancellationToken.None);
+
+            Assert.Equal("PAYLOAD_OMITTED_BY_REDACTION_POLICY", activity.Message);
+            AssertOmittedPublicKey(activity.Message, publicKeyLine, encodedKey);
+            AssertOmittedPublicKey(journal, publicKeyLine, encodedKey);
+            AssertOmittedPublicKey(report, publicKeyLine, encodedKey);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                var content = reader.ReadToEnd();
+                Assert.DoesNotContain(publicKeyLine, content, StringComparison.Ordinal);
+                Assert.DoesNotContain(encodedKey, content, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SupportBundleExportRejectsRelativeDestinationBeforeNormalizationWithoutCreatingAnExport()
+    {
+        var root = CreateTemporaryDirectory();
+        var relativeDestination = Path.Combine("vpsready-relative-export", Guid.NewGuid().ToString("N"));
+        var normalizedDestination = Path.GetFullPath(relativeDestination);
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                new FailClosedRedactor(),
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c607build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+
+            var exception = await Assert.ThrowsAsync<ArgumentException>(() => workspace.ExportSanitizedSupportBundleAsync(
+                runId: null,
+                destinationDirectory: relativeDestination,
+                CancellationToken.None));
+
+            Assert.Equal("destinationDirectory", exception.ParamName);
+            Assert.False(Directory.Exists(normalizedDestination));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+        }
+        finally
+        {
+            if (Directory.Exists(normalizedDestination))
+            {
+                Directory.Delete(normalizedDestination, recursive: true);
+            }
+
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalAndSupportBundleAreBoundedSanitizedChecksummedAndExplicitlyLocal()
+    {
+        var root = CreateTemporaryDirectory();
+        var exportDirectory = Path.Combine(root, "user-selected-export");
+        try
+        {
+            var sensitiveValue = string.Concat("c108", "-session-sensitive-value");
+            var bearerValue = string.Concat("gh", "p_", "c108tokenabcdefghijklmnop");
+            const string host = "c108-host.example.test";
+            var redactor = new FailClosedRedactor();
+            redactor.RegisterSensitiveValue(sensitiveValue);
+            redactor.RegisterSensitiveValue(bearerValue);
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch", "linux-x64"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    "Connection",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    $"The operation contained {sensitiveValue}.",
+                    ErrorCode: "SSH_AUTHENTICATION_FAILED",
+                    StandardError: BoundedOutputCapture.Capture(bearerValue, OutputCapturePolicy.SanitizedTruncated, redactor),
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["server"] = new(DiagnosticDataClassification.HostIdentifier, host),
+                    }),
+                CancellationToken.None);
+
+            var entries = workspace.GetActivity("connection");
+            var logPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var runPath = Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl");
+            Assert.Single(entries);
+            Assert.True(File.Exists(logPath));
+            Assert.True(File.Exists(runPath));
+
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exportDirectory, CancellationToken.None);
+            Assert.True(File.Exists(bundle.BundlePath));
+            Assert.Equal(correlation.RunId, bundle.RunId);
+            Assert.Equal(CalculateSha256(bundle.BundlePath), bundle.Sha256);
+
+            var journal = await File.ReadAllTextAsync(logPath);
+            AssertNoUnsafeData(journal, sensitiveValue, bearerValue, host);
+            AssertNoUnsafeData(report, sensitiveValue, bearerValue, host);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            Assert.Equal(
+                ["environment.json", "events.jsonl", "issue-report.md", "known-limitations.md", "manifest.json", "run-summary.md"],
+                archive.Entries.Select(entry => entry.FullName).OrderBy(name => name, StringComparer.Ordinal));
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                AssertNoUnsafeData(reader.ReadToEnd(), sensitiveValue, bearerValue, host);
+            }
+
+            var manifest = archive.GetEntry("manifest.json");
+            Assert.NotNull(manifest);
+            using (var reader = new StreamReader(manifest!.Open(), Encoding.UTF8))
+            {
+                using var document = JsonDocument.Parse(reader.ReadToEnd());
+                Assert.Equal("c108build", document.RootElement.GetProperty("build_sha").GetString());
+                Assert.Equal("linux-x64", document.RootElement.GetProperty("artifact_rid").GetString());
+                var manifestFiles = document.RootElement.GetProperty("files").EnumerateArray().ToArray();
+                Assert.Equal(
+                    ["environment.json", "events.jsonl", "issue-report.md", "known-limitations.md", "run-summary.md"],
+                    manifestFiles.Select(file => file.GetProperty("path").GetString()));
+                foreach (var manifestFile in manifestFiles)
+                {
+                    var path = manifestFile.GetProperty("path").GetString();
+                    var expectedSha256 = manifestFile.GetProperty("sha256").GetString();
+                    var entry = archive.GetEntry(path!);
+                    Assert.NotNull(entry);
+                    using var entryStream = entry!.Open();
+                    Assert.Equal(expectedSha256, Convert.ToHexString(SHA256.HashData(entryStream)).ToLowerInvariant());
+                }
+            }
+
+            await workspace.ClearDiagnosticsAsync(CancellationToken.None);
+            Assert.Empty(workspace.GetActivity());
+            Assert.False(File.Exists(logPath));
+            Assert.False(File.Exists(runPath));
+            Assert.True(File.Exists(bundle.BundlePath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FolderActionUsesOnlyTheResolvedPerUserLogDirectory()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var opener = new RecordingFolderOpener();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                new FailClosedRedactor(),
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch"),
+                opener);
+
+            await workspace.OpenLogFolderAsync(CancellationToken.None);
+
+            Assert.Equal(workspace.GetLogDirectory(), opener.OpenedDirectory);
+            Assert.StartsWith(Path.Combine(root, "state"), opener.OpenedDirectory, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalRejectsNonOpaqueCorrelationAndOmitsUntypedTrustConfigAndServerTextFromEverySurface()
+    {
+        var root = CreateTemporaryDirectory();
+        var exports = Path.Combine(root, "exports");
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var invalidCorrelation = new CorrelationIds("ses_untrusted-correlation", "run_untrusted-correlation", "op_untrusted-correlation", "verify");
+            var directEvent = new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                "Connection",
+                DiagnosticLevel.Error,
+                invalidCorrelation,
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Failed,
+                "Safe message.");
+
+            await Assert.ThrowsAsync<ArgumentException>(() => workspace.WriteSanitizedAsync(directEvent, CancellationToken.None));
+
+            var trustPayload = string.Concat("known", "_hosts");
+            var serverValue = string.Concat("c108", "-server", ".example", ".test");
+            var configPayload = string.Join(
+                Environment.NewLine,
+                "Host c108-alias",
+                "  User c108-admin",
+                "  Port 2202",
+                "  IdentitiesOnly yes");
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            await pipeline.WriteAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationFailed,
+                    $"{trustPayload} diagnostics",
+                    DiagnosticLevel.Error,
+                    correlation,
+                    DiagnosticPhase.Verify,
+                    DiagnosticStatus.Failed,
+                    $"{trustPayload} entry references {serverValue}{Environment.NewLine}{configPayload}",
+                    Action: $"Inspect {trustPayload}{Environment.NewLine}{configPayload}",
+                    Context: new Dictionary<string, DiagnosticValue>
+                    {
+                        ["trusted_host"] = new(DiagnosticDataClassification.PublicSafe, serverValue),
+                        ["ssh_profile"] = new(DiagnosticDataClassification.PublicSafe, configPayload),
+                    }),
+                CancellationToken.None);
+
+            var activity = Assert.Single(workspace.GetActivity());
+            var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exports, CancellationToken.None);
+            AssertNoUnsafeData(activity.Message, trustPayload, serverValue, configPayload);
+            AssertNoUnsafeData(await File.ReadAllTextAsync(journalPath), trustPayload, serverValue, configPayload);
+            AssertNoUnsafeData(report, trustPayload, serverValue, configPayload);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+                AssertNoUnsafeData(reader.ReadToEnd(), trustPayload, serverValue, configPayload);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalAndBundleWriteOneCompleteJsonObjectPerPhysicalLine()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "First action", new FixedClock().UtcNow);
+            await WriteFailureAsync(workspace, correlation, "Second action", new FixedClock().UtcNow.AddSeconds(1));
+
+            var log = await File.ReadAllTextAsync(Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl"));
+            var run = await File.ReadAllTextAsync(Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl"));
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(
+                correlation.RunId, Path.Combine(root, "export"), CancellationToken.None);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var exported = await ReadBundleEntryAsync(archive, "events.jsonl");
+
+            foreach (var contents in new[] { log, run, exported })
+            {
+                var lines = contents.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                Assert.Equal(2, lines.Length);
+                foreach (var line in lines)
+                {
+                    using var document = JsonDocument.Parse(line);
+                    Assert.Equal(correlation.OperationId, document.RootElement.GetProperty("operationId").GetString());
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalRolloverPreservesWholeLegacyPrettyJsonRecordsAndNewestEvent()
+    {
+        const int byteLimit = 1024 * 1024;
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "Initial action", new FixedClock().UtcNow);
+            var logPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var runPath = Path.Combine(root, "state", "runs", correlation.RunId, "events.jsonl");
+            var legacy = string.Concat(Enumerable.Range(0, 800).Select(index =>
+                JsonSerializer.Serialize(new { recordIndex = index, message = new string('x', 1500) },
+                    PrettyJsonOptions) + "\r\n"));
+            Assert.True(Encoding.UTF8.GetByteCount(legacy) > byteLimit);
+            foreach (var path in new[] { logPath, runPath })
+            {
+                await File.WriteAllTextAsync(path, legacy);
+            }
+
+            await WriteFailureAsync(workspace, correlation, "Newest action", new FixedClock().UtcNow);
+
+            foreach (var path in new[] { logPath, runPath })
+            {
+                Assert.InRange(new FileInfo(path).Length, 1, byteLimit);
+                var lines = await File.ReadAllLinesAsync(path);
+                var records = lines.Select(line =>
+                {
+                    using var document = JsonDocument.Parse(line);
+                    return document.RootElement.Clone();
+                }).ToArray();
+                Assert.Equal(correlation.OperationId, records[^1].GetProperty("operationId").GetString());
+                var retainedIndexes = records[..^1].Select(record => record.GetProperty("recordIndex").GetInt32()).ToArray();
+                Assert.NotEmpty(retainedIndexes);
+                Assert.True(retainedIndexes[0] > 0);
+                Assert.Equal(Enumerable.Range(retainedIndexes[0], 800 - retainedIndexes[0]), retainedIndexes);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RetentionEnforcesTheByteCapAndPreservesTheNewestTwentyRunGroups()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            var paths = new FixedPlatformPaths(root);
+            var runs = paths.ResolvePath(LocalStorageArea.State, "runs");
+            Directory.CreateDirectory(runs);
+            var clock = new FixedClock();
+            var oversizedJournal = string.Concat(Enumerable.Repeat("{\"event_id\":\"operation.started\"}\n", 40_000));
+            for (var index = 0; index < 55; index++)
+            {
+                var runDirectory = Path.Combine(runs, $"run_{index:D24}");
+                Directory.CreateDirectory(runDirectory);
+                var path = Path.Combine(runDirectory, "events.jsonl");
+                await File.WriteAllTextAsync(path, oversizedJournal);
+                File.SetLastWriteTimeUtc(path, clock.UtcNow.AddMinutes(-index - 1).UtcDateTime);
+            }
+
+            using var workspace = new OperationJournalWorkspace(
+                paths,
+                new FailClosedRedactor(),
+                clock,
+                new DiagnosticEnvironment("0.1.0-test", "c108build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            await workspace.WriteSanitizedAsync(
+                new StructuredDiagnosticEvent(
+                    DiagnosticEventCatalog.OperationStarted,
+                    "Connection",
+                    DiagnosticLevel.Information,
+                    DiagnosticRunContext.StartSession().StartOperation("validate"),
+                    DiagnosticPhase.Validate,
+                    DiagnosticStatus.Started,
+                    "Safe journal retention probe."),
+                CancellationToken.None);
+
+            var retainedRuns = Directory.EnumerateDirectories(runs).ToArray();
+            var retainedBytes = Directory.EnumerateFiles(Path.Combine(root, "state"), "*.jsonl", SearchOption.AllDirectories)
+                .Sum(path => new FileInfo(path).Length);
+            Assert.True(retainedRuns.Length >= RetentionPolicy.DiagnosticDefault.MinimumRetainedFiles);
+            Assert.True(retainedBytes <= RetentionPolicy.DiagnosticDefault.MaximumTotalBytes);
+            Assert.True(Directory.Exists(Path.Combine(runs, "run_000000000000000000000000")));
+            Assert.True(Directory.Exists(Path.Combine(runs, "run_000000000000000000000018")));
+            Assert.False(Directory.Exists(Path.Combine(runs, "run_000000000000000000000054")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SafeCommandEvidenceProjectsApplicableExitVerificationAndRecoveryWithoutRawPayloads()
+    {
+        var root = CreateTemporaryDirectory();
+        var exports = Path.Combine(root, "selected-export");
+        const string unsafePayload = "c607-command-output-must-not-persist";
+        try
+        {
+            var redactor = new FailClosedRedactor();
+            redactor.RegisterSensitiveValue(unsafePayload);
+            using var workspace = new OperationJournalWorkspace(
+                new FixedPlatformPaths(root),
+                redactor,
+                new FixedClock(),
+                new DiagnosticEnvironment("0.1.0-test", "c607build", "test-os", "test-arch"),
+                new RecordingFolderOpener());
+            var pipeline = new RedactingDiagnosticSink(redactor, workspace);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("apply");
+
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Apply, DiagnosticStatus.Succeeded, exitCode: 0), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.CommandCompleted, DiagnosticPhase.Apply, DiagnosticStatus.Failed, exitCode: 42, error: OperationErrorCode.Command), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Apply, DiagnosticStatus.Failed, error: OperationErrorCode.Network, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.OperationCancelled, DiagnosticPhase.Apply, DiagnosticStatus.Cancelled, error: OperationErrorCode.Cancelled, verification: OperationVerification.NotRun, recovery: OperationRecovery.NotRequired), CancellationToken.None);
+            await pipeline.WriteAsync(Event(DiagnosticEventCatalog.OperationFailed, DiagnosticPhase.Recovery, DiagnosticStatus.Failed, error: OperationErrorCode.Recovery, verification: OperationVerification.Failed, recovery: OperationRecovery.Failed), CancellationToken.None);
+
+            var journalPath = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            var journal = await File.ReadAllTextAsync(journalPath);
+            var report = workspace.CreateSafeIssueReport(correlation.RunId);
+            var bundle = await workspace.ExportSanitizedSupportBundleAsync(correlation.RunId, exports, CancellationToken.None);
+
+            AssertCommandEvidence(journal);
+            Assert.Contains("- Exit code: 42", report, StringComparison.Ordinal);
+            Assert.Contains("- Verification/recovery: Failed / Failed", report, StringComparison.Ordinal);
+            Assert.DoesNotContain(unsafePayload, journal, StringComparison.Ordinal);
+            Assert.DoesNotContain(unsafePayload, report, StringComparison.Ordinal);
+
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            var events = archive.GetEntry("events.jsonl");
+            Assert.NotNull(events);
+            using var reader = new StreamReader(events.Open(), Encoding.UTF8);
+            var selected = reader.ReadToEnd();
+            AssertCommandEvidence(selected);
+            Assert.DoesNotContain(unsafePayload, selected, StringComparison.Ordinal);
+
+            StructuredDiagnosticEvent Event(string eventId, DiagnosticPhase phase, DiagnosticStatus status, int? exitCode = null, OperationErrorCode? error = null, OperationVerification? verification = null, OperationRecovery? recovery = null) =>
+                new(eventId, "Safe diagnostics", status is DiagnosticStatus.Failed or DiagnosticStatus.Cancelled ? DiagnosticLevel.Error : DiagnosticLevel.Information, correlation.ForStep(phase.ToString().ToLowerInvariant()), phase, status, $"Safe command evidence omitted {unsafePayload}.", RemoteCommandCatalog.UbuntuUfwStatusRead, error?.ToStableCode(), "C607Evidence", ExitCode: exitCode, Verification: verification, Recovery: recovery);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MalformedExistingJournalIsPreservedAndFailureDoesNotExposeContent()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "Initial action", new FixedClock().UtcNow);
+            var path = Path.Combine(workspace.GetLogDirectory(), "app-20400101.jsonl");
+            const string malformed = "{\"message\":\"seeded-sensitive-content\"} {";
+            await File.WriteAllTextAsync(path, malformed);
+            var exception = await Assert.ThrowsAsync<IOException>(() =>
+                WriteFailureAsync(workspace, correlation, "Newest action", new FixedClock().UtcNow));
+            Assert.Equal(malformed, await File.ReadAllTextAsync(path));
+            Assert.DoesNotContain("seeded-sensitive-content", exception.ToString(), StringComparison.Ordinal);
+            Assert.Single(workspace.GetActivity());
+            Assert.Empty(Directory.EnumerateFiles(workspace.GetLogDirectory(), "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [UnixTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetentionNeverRewritesJournalThroughLinkedRunDirectory(bool nested)
+    {
+        var root = CreateTemporaryDirectory();
+        var outside = CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = CreateWorkspace(root);
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            await WriteFailureAsync(workspace, correlation, "Initial action", new FixedClock().UtcNow);
+            var outsideFile = Path.Combine(outside, "events.jsonl");
+            var original = string.Concat(Enumerable.Repeat("{\"record\":\"outside-diagnostics\"}\n", 40_000));
+            await File.WriteAllTextAsync(outsideFile, original);
+            var link = nested
+                ? Path.Combine(root, "state", "runs", correlation.RunId, "linked-child")
+                : Path.Combine(root, "state", "runs", "linked-run");
+            Directory.CreateSymbolicLink(link, outside);
+
+            try
+            {
+                await WriteFailureAsync(workspace, correlation, "Newest action", new FixedClock().UtcNow);
+            }
+            catch (IOException)
+            {
+                // Refusing a linked run is safe only if its target was never rewritten.
+            }
+
+            Assert.Equal(original, await File.ReadAllTextAsync(outsideFile));
+            Directory.Delete(link);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task JournalRetentionSharesWriterGateWithAppendAndClear()
+    {
+        var root = CreateTemporaryDirectory();
+        using var clock = new BlockingRetentionClock();
+        try
+        {
+            using var workspace = new OperationJournalWorkspace(new FixedPlatformPaths(root), new FailClosedRedactor(),
+                clock, new DiagnosticEnvironment("0.1.0-test", "review119", "test-os", "test-arch"), new RecordingFolderOpener());
+            var correlation = DiagnosticRunContext.StartSession().StartOperation("verify");
+            var first = Task.Run(() => WriteFailureAsync(workspace, correlation, "First action", new FixedClock().UtcNow));
+            Task? second = null;
+            Task? clear = null;
+            try
+            {
+                await clock.RetentionEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                second = WriteFailureAsync(workspace, correlation, "Second action", new FixedClock().UtcNow);
+                clear = workspace.ClearDiagnosticsAsync(CancellationToken.None);
+                Assert.False(clock.LaterRead.Task.IsCompleted, "A new append entered while retention still owned the journal.");
+                Assert.False(clear.IsCompleted, "Clear entered while retention still owned the journal.");
+            }
+            finally
+            {
+                clock.ReleaseRetention.Set();
+                await first;
+                if (second is not null) { await second; }
+                if (clear is not null) { await clear; }
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class BlockingRetentionClock : IClock, IDisposable
+    {
+        private int reads;
+        public TaskCompletionSource RetentionEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource LaterRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ManualResetEventSlim ReleaseRetention { get; } = new();
+
+        public DateTimeOffset UtcNow
+        {
+            get
+            {
+                var read = Interlocked.Increment(ref reads);
+                if (read == 4) // Date, log timestamp, run timestamp, then retention timestamp.
+                {
+                    RetentionEntered.SetResult();
+                    if (!ReleaseRetention.Wait(TimeSpan.FromSeconds(10)))
+                    {
+                        throw new TimeoutException("The controlled retention checkpoint was not released.");
+                    }
+                }
+                else if (read > 4)
+                {
+                    LaterRead.TrySetResult();
+                }
+
+                return new FixedClock().UtcNow;
+            }
+        }
+
+        public void Dispose() => ReleaseRetention.Dispose();
+    }
+
+    private static void AssertCommandEvidence(string jsonl)
+    {
+        var records = JsonlTestEvidence.ReadRecords(jsonl);
+        Assert.Equal(5, records.Length);
+        Assert.Equal(ExpectedCommandExitCodes, records.Where(record => record.TryGetProperty("exitCode", out _))
+            .Select(record => record.GetProperty("exitCode").GetInt32()));
+        Assert.Equal("Failed", records[^1].GetProperty("verification").GetString());
+        Assert.Equal("Failed", records[^1].GetProperty("recovery").GetString());
+    }
+
+    private static void AssertNoUnsafeData(string content, params string[] unsafeValues)
+    {
+        foreach (var value in unsafeValues)
+        {
+            Assert.DoesNotContain(value, content, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("authorized_keys", content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("known_hosts", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static OperationJournalWorkspace CreateWorkspace(string root) => new(
+        new FixedPlatformPaths(root),
+        new FailClosedRedactor(),
+        new FixedClock(),
+        new DiagnosticEnvironment("0.1.0-test", "activity-operation-scope", "test-os", "test-arch"),
+        new RecordingFolderOpener());
+
+    private static Task WriteFailureAsync(
+        OperationJournalWorkspace workspace,
+        CorrelationIds correlation,
+        string action,
+        DateTimeOffset occurredAtUtc) => workspace.WriteSanitizedAsync(
+            new StructuredDiagnosticEvent(
+                DiagnosticEventCatalog.OperationFailed,
+                action,
+                DiagnosticLevel.Error,
+                correlation,
+                DiagnosticPhase.Verify,
+                DiagnosticStatus.Failed,
+                $"{action} operation failed safely.",
+                Action: action,
+                TimestampUtc: occurredAtUtc),
+            CancellationToken.None);
+
+    private static async Task<string> ReadBundleEntryAsync(ZipArchive archive, string name)
+    {
+        var entry = archive.GetEntry(name);
+        Assert.NotNull(entry);
+        using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
+        return await reader.ReadToEndAsync();
+    }
+
+    private static void AssertOmittedPublicKey(string content, string publicKeyLine, string encodedKey)
+    {
+        Assert.DoesNotContain(publicKeyLine, content, StringComparison.Ordinal);
+        Assert.DoesNotContain(encodedKey, content, StringComparison.Ordinal);
+        Assert.Contains("PAYLOAD_OMITTED_BY_REDACTION_POLICY", content, StringComparison.Ordinal);
+    }
+
+    private static string CalculateSha256(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    private static string CreateTemporaryDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "VpsReady.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private sealed class FixedPlatformPaths(string root) : IPlatformPaths
+    {
+        public string GetStateDirectory() => GetDirectory(LocalStorageArea.State);
+
+        public string GetDirectory(LocalStorageArea area) => area switch
+        {
+            LocalStorageArea.State => Path.Combine(root, "state"),
+            LocalStorageArea.Configuration => Path.Combine(root, "configuration"),
+            LocalStorageArea.Ssh => Path.Combine(root, "ssh"),
+            _ => throw new ArgumentOutOfRangeException(nameof(area), area, "Unknown storage area."),
+        };
+
+        public string ResolvePath(LocalStorageArea area, string relativePath) => LocalPathPolicy.ResolveUnder(GetDirectory(area), relativePath);
+    }
+
+    private sealed class FixedClock : IClock
+    {
+        public DateTimeOffset UtcNow { get; } = new(2040, 1, 1, 12, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class RecordingFolderOpener : IDiagnosticFolderOpener
+    {
+        public string OpenedDirectory { get; private set; } = string.Empty;
+
+        public Task OpenAsync(string directory, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            OpenedDirectory = directory;
+            return Task.CompletedTask;
+        }
+    }
+}

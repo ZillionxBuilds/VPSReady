@@ -1,0 +1,194 @@
+using Microsoft.Extensions.DependencyInjection;
+using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Operations;
+using VpsReady.Core.Remote;
+using VpsReady.Infrastructure.Remote;
+
+namespace VpsReady.ScenarioTests;
+
+[Trait("Category", "E2")]
+public sealed class PackageIndexUpdateWorkflowScenarioTests
+{
+    [Fact]
+    public async Task RefreshMutatesStateAndSucceedsOnlyAfterVerification()
+    {
+        await using var services = ScenarioComposition.Create("c502-refresh");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(services.GetRequiredService<IDiagnosticSink>()), services.GetRequiredService<IDiagnosticSink>()).UpdateAsync(host);
+        Assert.True(result.Result.Succeeded);
+        Assert.Equal(1, state.Apt.IndexGeneration);
+    }
+
+    [Fact]
+    public async Task LockAndVerifyFaultsFailClosedWithoutFalseSuccess()
+    {
+        await using var lockedServices = ScenarioComposition.Create("c502-lock", state => state.Apt.IsLocked = true);
+        var locked = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(lockedServices.GetRequiredService<IDiagnosticSink>()), lockedServices.GetRequiredService<IDiagnosticSink>()).UpdateAsync(lockedServices.GetRequiredService<DeterministicScenarioHost>());
+        await using var verifyServices = ScenarioComposition.Create("c502-verify");
+        var faults = verifyServices.GetRequiredService<ScenarioFaultPlan>();
+        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.VerificationMismatch, "c502-verify", RemoteCommandCatalog.UbuntuAptIndexVerify);
+        var verify = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(verifyServices.GetRequiredService<IDiagnosticSink>()), verifyServices.GetRequiredService<IDiagnosticSink>()).UpdateAsync(verifyServices.GetRequiredService<DeterministicScenarioHost>());
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Locked, locked.ErrorCode);
+        Assert.False(verify.Result.Succeeded);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Verification, verify.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ApplyCancellationIsNotSuccessAndUnknownCommandStillFailsLoudly()
+    {
+        await using var services = ScenarioComposition.Create("c502-cancel");
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        faults.Inject(DiagnosticPhase.Apply, ScenarioFaultKind.Cancellation, "c502-cancel", RemoteCommandCatalog.UbuntuAptIndexUpdate);
+        var host = services.GetRequiredService<DeterministicScenarioHost>();
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(services.GetRequiredService<IDiagnosticSink>()), services.GetRequiredService<IDiagnosticSink>()).UpdateAsync(host);
+        Assert.True(result.Result.Cancelled);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ExecuteAsync(RemoteCommand.Create(new RemoteCommandId("scenario.unknown.command"), [], TimeSpan.FromSeconds(1)), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CancellationAfterAppliedIndexChangeKeepsRemoteStateUnknownWithoutVerify()
+    {
+        await using var services = ScenarioComposition.Create("c502-post-apply-cancel");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        using var cancellation = new CancellationTokenSource();
+        var transport = new CancelAfterApplyTransport(services.GetRequiredService<DeterministicScenarioHost>(), cancellation);
+
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics)
+            .UpdateAsync(transport, cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(1, state.Apt.IndexGeneration);
+        Assert.DoesNotContain(RemoteCommandCatalog.UbuntuAptIndexVerify, transport.Commands);
+        Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateCancelled);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateFailed);
+        Assert.All(recorder.Events, item => Assert.Equal(result.Result.OperationId, item.Correlation.OperationId));
+    }
+
+    [Fact]
+    public async Task CancellationAtSuccessfulPreflightKeepsIndexUnchangedAndSkipsApply()
+    {
+        await using var services = ScenarioComposition.Create("c502-pre-apply-cancel");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        using var cancellation = new CancellationTokenSource();
+        var diagnostics = new CancelOnPrivilegeSuccessSink(services.GetRequiredService<IDiagnosticSink>(), cancellation);
+
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics)
+            .UpdateAsync(services.GetRequiredService<DeterministicScenarioHost>(), cancellation.Token);
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unchanged, result.Result.State);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(0, state.Apt.IndexGeneration);
+        Assert.DoesNotContain(recorder.Events, item => item.CommandId == RemoteCommandCatalog.UbuntuAptIndexUpdate);
+        var terminal = Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateCancelled);
+        Assert.Equal(DiagnosticPhase.Preflight, terminal.Phase);
+        Assert.Null(terminal.CommandId);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+        Assert.All(recorder.Events, item => Assert.Equal(result.Result.OperationId, item.Correlation.OperationId));
+    }
+
+    [Fact]
+    public async Task VerificationCancellationIdentifiesItsOwnCommandWithoutFalseSuccess()
+    {
+        await using var services = ScenarioComposition.Create("c502-verify-cancel");
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+        faults.Inject(DiagnosticPhase.Verify, ScenarioFaultKind.Cancellation, "c502-verify-cancel", RemoteCommandCatalog.UbuntuAptIndexVerify);
+
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics)
+            .UpdateAsync(services.GetRequiredService<DeterministicScenarioHost>());
+
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(OperationState.Unknown, result.Result.State);
+        Assert.Equal(1, state.Apt.IndexGeneration);
+        var terminal = Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateCancelled);
+        Assert.Equal(DiagnosticPhase.Verify, terminal.Phase);
+        Assert.Equal(RemoteCommandCatalog.UbuntuAptIndexVerify, terminal.CommandId);
+        Assert.DoesNotContain(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateSucceeded);
+        Assert.All(recorder.Events, item => Assert.Equal(result.Result.OperationId, item.Correlation.OperationId));
+    }
+
+    [Fact]
+    public async Task PreflightCancellationIsTypedAndKeepsNestedDiagnosticsInThePackageCorrelation()
+    {
+        await using var services = ScenarioComposition.Create("c502-preflight-cancel");
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        faults.Inject(DiagnosticPhase.Preflight, ScenarioFaultKind.Cancellation, "c502-preflight-cancel", RemoteCommandCatalog.UbuntuPrivilegeRead);
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var recorder = services.GetRequiredService<ScenarioDiagnosticRecorder>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).UpdateAsync(services.GetRequiredService<DeterministicScenarioHost>());
+
+        var packageStart = Assert.Single(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PackageIndexUpdateStarted);
+        Assert.True(result.Result.Cancelled);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Cancelled, result.ErrorCode);
+        Assert.Equal(OperationErrorCode.Cancelled, result.Result.ErrorCode);
+        Assert.Equal(0, state.Apt.IndexGeneration);
+        Assert.DoesNotContain(recorder.Events, item => item.CommandId == RemoteCommandCatalog.UbuntuAptIndexUpdate);
+        Assert.Contains(recorder.Events, item => item.EventId == DiagnosticEventCatalog.PrivilegePreflightFailed && item.Status == DiagnosticStatus.Cancelled);
+        Assert.All(recorder.Events, item =>
+        {
+            Assert.Equal(packageStart.Correlation.SessionId, item.Correlation.SessionId);
+            Assert.Equal(packageStart.Correlation.RunId, item.Correlation.RunId);
+            Assert.Equal(packageStart.Correlation.OperationId, item.Correlation.OperationId);
+        });
+    }
+
+    [Fact]
+    public async Task PreflightTimeoutIsTypedAndDoesNotMutateThePackageIndex()
+    {
+        await using var services = ScenarioComposition.Create("c502-preflight-timeout");
+        var faults = services.GetRequiredService<ScenarioFaultPlan>();
+        faults.Inject(DiagnosticPhase.Preflight, ScenarioFaultKind.Timeout, "c502-preflight-timeout", RemoteCommandCatalog.UbuntuPrivilegeRead);
+        var state = services.GetRequiredService<ScenarioHostState>();
+        var diagnostics = services.GetRequiredService<IDiagnosticSink>();
+
+        var result = await new PackageIndexUpdateWorkflow(new PrivilegePreflightWorkflow(diagnostics), diagnostics).UpdateAsync(services.GetRequiredService<DeterministicScenarioHost>());
+
+        Assert.False(result.Result.Succeeded);
+        Assert.Equal(OperationErrorCode.Timeout, result.Result.ErrorCode);
+        Assert.Equal(PackageIndexUpdateErrorCatalog.Timeout, result.ErrorCode);
+        Assert.Equal(0, state.Apt.IndexGeneration);
+    }
+
+    private sealed class CancelAfterApplyTransport(DeterministicScenarioHost host, CancellationTokenSource cancellation) : IRemoteTransport
+    {
+        public List<string> Commands { get; } = [];
+
+        public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Id.Value);
+            var result = await host.ExecuteAsync(command, cancellationToken);
+            if (command.Id.Value == RemoteCommandCatalog.UbuntuAptIndexUpdate)
+            {
+                cancellation.Cancel();
+            }
+
+            return result;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CancelOnPrivilegeSuccessSink(IDiagnosticSink inner, CancellationTokenSource cancellation) : IDiagnosticSink
+    {
+        public async Task WriteAsync(StructuredDiagnosticEvent entry, CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(entry, cancellationToken);
+            if (entry.EventId == DiagnosticEventCatalog.PrivilegePreflightSucceeded)
+            {
+                cancellation.Cancel();
+            }
+        }
+    }
+}

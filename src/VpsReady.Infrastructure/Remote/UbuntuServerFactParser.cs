@@ -1,0 +1,480 @@
+using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
+using VpsReady.Core.Remote;
+
+namespace VpsReady.Infrastructure.Remote;
+
+/// <summary>
+/// Parses the fixed C205 Ubuntu fact sources. Remote output is untrusted: a
+/// parser returns Unknown rather than throwing or fabricating a value.
+/// </summary>
+public static partial class UbuntuServerFactParser
+{
+    private const long BytesPerKiB = 1024;
+    private static readonly Regex SafeAtom = new("^[A-Za-z0-9][A-Za-z0-9._-]{0,252}$", RegexOptions.CultureInvariant);
+    private static readonly Regex KeyValue = new("^(?<key>[A-Za-z_][A-Za-z0-9_]*)=(?<value>.*)$", RegexOptions.CultureInvariant);
+    private static readonly Regex MemInfo = new("^(?<key>MemTotal|MemAvailable):\\s*(?<value>[0-9]+)\\s*kB$", RegexOptions.CultureInvariant);
+    private static readonly Regex CpuProcessor = new("^processor\\s*:\\s*(?<index>[0-9]+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex CpuModel = new("^(?<key>model name|Hardware)\\s*:\\s*(?<value>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UptimeDecimal = new("\\A[0-9]+(?:\\.[0-9]+)?\\z", RegexOptions.CultureInvariant);
+    private static readonly Regex Disk = new("^(?<source>\\S+)\\s+(?<size>\\S+)\\s+(?<used>\\S+)\\s+(?<available>\\S+)\\s+(?<percent>[0-9]{1,3})%\\s+/$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwHeader = new("^To\\s+Action\\s+From$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwSeparator = new("^-+\\s+-+\\s+-+$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwRule = new("^\\[\\s*(?<number>[1-9][0-9]{0,5})\\]\\s+(?<port>[1-9][0-9]{0,4})(?::(?<endPort>[1-9][0-9]{0,4}))?/(?<protocol>[A-Za-z]+)(?<toV6>\\s+\\(v6\\))?\\s+(?<action>[A-Z]+)\\s+IN\\s+(?<source>.+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex UfwPartialRule = new("^\\[\\s*[0-9]+(?:\\]|$)", RegexOptions.CultureInvariant);
+    private const int MaximumUfwRuleRows = 512;
+
+    /// <summary>C301 detects state only; C302 owns numbered-rule parsing.</summary>
+    public static UfwSnapshot ParseUfwDetection(RemoteCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.Succeeded)
+        {
+            return UfwSnapshot.StateOnly(UfwFirewallState.Error);
+        }
+
+        var lines = Lines(result.StandardOutput);
+        if (lines.Length == 1 && lines[0] == "ufw=unavailable")
+        {
+            return UfwSnapshot.StateOnly(UfwFirewallState.Absent);
+        }
+
+        return ReadUnambiguousUfwStatusHeader(lines) switch
+        {
+            "Status: inactive" => UfwSnapshot.StateOnly(UfwFirewallState.Inactive),
+            "Status: active" => UfwSnapshot.StateOnly(UfwFirewallState.Active),
+            _ => UfwSnapshot.StateOnly(UfwFirewallState.Unknown),
+        };
+    }
+
+    /// <summary>
+    /// Parses the bounded, C-locale output from <c>ufw status numbered</c>.
+    /// Any row which is malformed, unsupported, ambiguous, or incomplete makes
+    /// the entire listing unusable; callers must retain their prior snapshot.
+    /// </summary>
+    public static UfwRuleListRead ParseUfwRuleList(RemoteCommandResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.Succeeded)
+        {
+            return UfwRuleListRead(UfwFirewallState.Error, result.ExitCode is 13 or 77 ? UfwRuleListReadStatus.PrivilegeFailure : UfwRuleListReadStatus.RemoteFailure);
+        }
+
+        if (Encoding.UTF8.GetByteCount(result.StandardOutput) > UbuntuFactCommandCatalog.MaximumOutputBytes)
+        {
+            return UfwRuleListRead(UfwFirewallState.Unknown, UfwRuleListReadStatus.Partial);
+        }
+
+        var lines = Lines(result.StandardOutput);
+        if (lines.Length == 1 && lines[0] == "ufw=unavailable")
+        {
+            return UfwRuleListRead(UfwFirewallState.Absent, UfwRuleListReadStatus.Complete);
+        }
+
+        if (lines.Length == 1 && lines[0] == "Status: inactive")
+        {
+            return UfwRuleListRead(UfwFirewallState.Inactive, UfwRuleListReadStatus.Complete);
+        }
+
+        if (lines.Length < 3 || lines[0] != "Status: active" || !UfwHeader.IsMatch(lines[1]) || !UfwSeparator.IsMatch(lines[2]))
+        {
+            return UfwRuleListRead(UfwFirewallState.Unknown, UfwRuleListReadStatus.Malformed);
+        }
+
+        if (lines.Length - 3 > MaximumUfwRuleRows)
+        {
+            return UfwRuleListRead(UfwFirewallState.Active, UfwRuleListReadStatus.Partial);
+        }
+
+        var rules = new List<UfwRule>(lines.Length - 3);
+        var numbers = new HashSet<int>();
+        var identities = new HashSet<UfwRuleIdentity>();
+        foreach (var line in lines.Skip(3))
+        {
+            var parsed = ParseUfwRule(line);
+            if (parsed.Rule is null)
+            {
+                return UfwRuleListRead(UfwFirewallState.Active, parsed.Status);
+            }
+
+            if (!numbers.Add(parsed.Rule.Number) || !identities.Add(parsed.Rule.Identity))
+            {
+                return UfwRuleListRead(UfwFirewallState.Active, UfwRuleListReadStatus.Ambiguous);
+            }
+
+            rules.Add(parsed.Rule);
+        }
+
+        return new UfwRuleListRead(new UfwSnapshot(UfwFirewallState.Active, rules), UfwRuleListReadStatus.Complete);
+    }
+
+    public static ServerFact<UbuntuOperatingSystem> ParseOperatingSystem(string output)
+    {
+        var values = ParseKeyValues(output);
+        if (!values.TryGetValue("ID", out var id)
+            || !values.TryGetValue("VERSION", out var version)
+            || !string.Equals(Unquote(id), "ubuntu", StringComparison.OrdinalIgnoreCase)
+            || !IsSafeDisplayValue(Unquote(version)))
+        {
+            return ServerFact.Unknown<UbuntuOperatingSystem>();
+        }
+
+        return ServerFact.Known(new UbuntuOperatingSystem("ubuntu", Unquote(version)));
+    }
+
+    public static ServerFact<KernelArchitecture> ParseKernelArchitecture(string output)
+    {
+        var parts = SplitSingleLine(output);
+        if (parts is null || parts.Length != 3 || !string.Equals(parts[0], "Linux", StringComparison.Ordinal)
+            || !IsSafeAtom(parts[1]) || !IsSafeAtom(parts[2]))
+        {
+            return ServerFact.Unknown<KernelArchitecture>();
+        }
+
+        return ServerFact.Known(new KernelArchitecture(parts[1], parts[2]));
+    }
+
+    public static ServerFact<string> ParseHostname(string output) => ParseSafeSingleAtom(output);
+
+    public static ServerFact<string> ParseCurrentUser(string output) => ParseSafeSingleAtom(output);
+
+    public static ServerFact<TimeSpan> ParseUptime(string output)
+    {
+        var parts = SplitSingleLine(output);
+        if (parts is null || parts.Length != 2
+            || !UptimeDecimal.IsMatch(parts[0]) || !UptimeDecimal.IsMatch(parts[1])
+            || !double.TryParse(parts[0], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var seconds)
+            || !double.TryParse(parts[1], NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var idleSeconds)
+            || !double.IsFinite(seconds) || !double.IsFinite(idleSeconds)
+            || seconds >= TimeSpan.MaxValue.TotalSeconds)
+        {
+            return ServerFact.Unknown<TimeSpan>();
+        }
+
+        try
+        {
+            return ServerFact.Known(TimeSpan.FromSeconds(seconds));
+        }
+        catch (OverflowException)
+        {
+            return ServerFact.Unknown<TimeSpan>();
+        }
+    }
+
+    public static ServerFact<PrivilegeCapability> ParsePrivilege(string output)
+    {
+        var values = ParseKeyValues(output);
+        if (values.Count != 2 || !values.TryGetValue("root", out var root) || !values.TryGetValue("sudo", out var sudo))
+        {
+            return ServerFact.Unknown<PrivilegeCapability>();
+        }
+
+        var capability = (root, sudo) switch
+        {
+            ("true", "not_required") => new PrivilegeCapability(true, SudoCapability.NotRequired),
+            ("false", "available") => new PrivilegeCapability(false, SudoCapability.Available),
+            ("false", "unavailable") => new PrivilegeCapability(false, SudoCapability.Unavailable),
+            _ => null,
+        };
+
+        return capability is null
+            ? ServerFact.Unknown<PrivilegeCapability>()
+            : ServerFact.Known(capability);
+    }
+
+    public static ServerFact<CpuFacts> ParseCpu(string output)
+    {
+        var lines = Lines(output);
+        var processorIndices = new HashSet<int>();
+        foreach (var line in lines.Where(line => line.StartsWith("processor", StringComparison.Ordinal)
+            && (line.Length == "processor".Length || line["processor".Length] is ':' or ' ' or '\t')))
+        {
+            var match = CpuProcessor.Match(line);
+            if (!match.Success
+                || !int.TryParse(match.Groups["index"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var index)
+                || !processorIndices.Add(index))
+            {
+                return ServerFact.Unknown<CpuFacts>();
+            }
+        }
+
+        var modelNames = new HashSet<string>(StringComparer.Ordinal);
+        var hardwareNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in lines.Where(line => line.StartsWith("model name", StringComparison.Ordinal)
+            || line.StartsWith("Hardware", StringComparison.Ordinal)))
+        {
+            var match = CpuModel.Match(line);
+            var value = match.Groups["value"].Value.Trim();
+            if (!match.Success || !IsSafeDisplayValue(value))
+            {
+                return ServerFact.Unknown<CpuFacts>();
+            }
+
+            var names = match.Groups["key"].Value == "model name" ? modelNames : hardwareNames;
+            names.Add(value);
+        }
+
+        if (processorIndices.Count == 0)
+        {
+            return ServerFact.Unknown<CpuFacts>();
+        }
+
+        var candidates = modelNames.Count > 0 ? modelNames : hardwareNames;
+        return ServerFact.Known(new CpuFacts(processorIndices.Count, candidates.Count == 1 ? candidates.Single() : null));
+    }
+
+    public static ServerFact<MemoryFacts> ParseMemory(string output)
+    {
+        var values = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var line in Lines(output))
+        {
+            if (!line.StartsWith("MemTotal:", StringComparison.Ordinal)
+                && !line.StartsWith("MemAvailable:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var match = MemInfo.Match(line);
+            if (!match.Success || !long.TryParse(match.Groups["value"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var kibibytes)
+                || kibibytes > long.MaxValue / BytesPerKiB
+                || !values.TryAdd(match.Groups["key"].Value, kibibytes * BytesPerKiB))
+            {
+                return ServerFact.Unknown<MemoryFacts>();
+            }
+        }
+
+        return values.TryGetValue("MemTotal", out var total) && values.TryGetValue("MemAvailable", out var available)
+            && total > 0 && available >= 0 && available <= total
+            ? ServerFact.Known(new MemoryFacts(total, available))
+            : ServerFact.Unknown<MemoryFacts>();
+    }
+
+    public static ServerFact<RootDiskFacts> ParseRootDisk(string output)
+    {
+        if (Encoding.UTF8.GetByteCount(output) > 64 * 1024)
+        {
+            return ServerFact.Unknown<RootDiskFacts>();
+        }
+
+        var line = SingleLine(output);
+        var match = line is null ? null : Disk.Match(line);
+        if (match is null || !match.Success || !IsSafeDisplayValue(match.Groups["source"].Value)
+            || !TryParseBytes(match.Groups["size"].Value, out var size)
+            || !TryParseBytes(match.Groups["used"].Value, out var used)
+            || !TryParseBytes(match.Groups["available"].Value, out var available)
+            || !int.TryParse(match.Groups["percent"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var percent)
+            || size <= 0 || used < 0 || available < 0 || used > size || available > size
+            || used > size - available || percent is < 0 or > 100)
+        {
+            return ServerFact.Unknown<RootDiskFacts>();
+        }
+
+        return ServerFact.Known(new RootDiskFacts(match.Groups["source"].Value, size, used, available, percent));
+    }
+
+    public static ServerFact<UfwAvailability> ParseUfwAvailability(string output) =>
+        SingleLine(output) switch
+        {
+            "ufw=available" => ServerFact.Known(UfwAvailability.Available),
+            "ufw=unavailable" => ServerFact.Known(UfwAvailability.Unavailable),
+            _ => ServerFact.Unknown<UfwAvailability>(),
+        };
+
+    public static ServerFact<UfwStatus> ParseUfwStatus(string output)
+    {
+        var status = ReadUnambiguousUfwStatusHeader(Lines(output));
+        return status switch
+        {
+            "Status: active" => ServerFact.Known(UfwStatus.Active),
+            "Status: inactive" => ServerFact.Known(UfwStatus.Inactive),
+            _ => ServerFact.Unknown<UfwStatus>(),
+        };
+    }
+
+    private static string? ReadUnambiguousUfwStatusHeader(string[] lines)
+    {
+        if (lines.Length == 0 || lines[0] is not ("Status: active" or "Status: inactive"))
+        {
+            return null;
+        }
+
+        // UFW may print a multi-line rule listing after the first line, but a
+        // second status line makes the state contradictory rather than known.
+        for (var index = 1; index < lines.Length; index++)
+        {
+            if (lines[index].StartsWith("Status:", StringComparison.Ordinal))
+            {
+                return null;
+            }
+        }
+
+        return lines[0];
+    }
+
+    private static ServerFact<string> ParseSafeSingleAtom(string output)
+    {
+        var line = SingleLine(output);
+        return line is not null && IsSafeAtom(line)
+            ? ServerFact.Known(line)
+            : ServerFact.Unknown<string>();
+    }
+
+    private static Dictionary<string, string> ParseKeyValues(string output)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in Lines(output))
+        {
+            var match = KeyValue.Match(line);
+            if (!match.Success || !values.TryAdd(match.Groups["key"].Value, match.Groups["value"].Value))
+            {
+                return [];
+            }
+        }
+
+        return values;
+    }
+
+    // The producer requests findmnt --bytes. Rounded human units are not exact
+    // byte evidence. Require ASCII digits too: numeric TryParse permits trailing
+    // NUL characters even with NumberStyles.None. Never accept those as bytes.
+    private static bool TryParseBytes(string text, out long bytes) =>
+        long.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out bytes)
+        && text.All(char.IsAsciiDigit);
+
+    private static string[]? SplitSingleLine(string output)
+    {
+        var line = SingleLine(output);
+        return line is null ? null : line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static string? SingleLine(string output)
+    {
+        var lines = Lines(output);
+        return lines.Length == 1 ? lines[0] : null;
+    }
+
+    private static string[] Lines(string? output) => string.IsNullOrEmpty(output)
+        ? []
+        : output.Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool IsSafeAtom(string value) => SafeAtom.IsMatch(value);
+
+    private static bool IsSafeDisplayValue(string value) => value.Length is > 0 and <= 256 && !value.Any(char.IsControl);
+
+    private static string Unquote(string value) => value.Length >= 2 && value[0] == '"' && value[^1] == '"'
+        ? value[1..^1]
+        : value;
+
+    private static UfwRuleListRead UfwRuleListRead(UfwFirewallState state, UfwRuleListReadStatus status) =>
+        new(UfwSnapshot.StateOnly(state), status);
+
+    private static (UfwRule? Rule, UfwRuleListReadStatus Status) ParseUfwRule(string line)
+    {
+        if (line.Length > 1024)
+        {
+            return (null, UfwRuleListReadStatus.Partial);
+        }
+
+        var match = UfwRule.Match(line);
+        if (!match.Success)
+        {
+            return (null, UfwPartialRule.IsMatch(line) ? UfwRuleListReadStatus.Partial : UfwRuleListReadStatus.Malformed);
+        }
+
+        var hasEndPort = match.Groups["endPort"].Success;
+        if (!int.TryParse(match.Groups["number"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            || !int.TryParse(match.Groups["port"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var port)
+            || port is < 1 or > 65535)
+        {
+            return (null, UfwRuleListReadStatus.Unsupported);
+        }
+        int? endPort = null;
+        if (hasEndPort)
+        {
+            if (!int.TryParse(match.Groups["endPort"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
+                || end <= port || end > 65535)
+            {
+                return (null, UfwRuleListReadStatus.Unsupported);
+            }
+            endPort = end;
+        }
+
+        var protocol = match.Groups["protocol"].Value switch
+        {
+            "tcp" => UfwRuleProtocol.Tcp,
+            "udp" => UfwRuleProtocol.Udp,
+            _ => (UfwRuleProtocol?)null,
+        };
+        var action = match.Groups["action"].Value switch
+        {
+            "ALLOW" => UfwRuleAction.Allow,
+            "DENY" => UfwRuleAction.Deny,
+            "REJECT" => UfwRuleAction.Reject,
+            "LIMIT" => UfwRuleAction.Limit,
+            _ => (UfwRuleAction?)null,
+        };
+        if (protocol is null || action is null)
+        {
+            return (null, UfwRuleListReadStatus.Unsupported);
+        }
+
+        var source = match.Groups["source"].Value.Trim();
+        var destinationIsV6 = match.Groups["toV6"].Success;
+        var sourceIsV6 = source.EndsWith(" (v6)", StringComparison.Ordinal);
+        if (destinationIsV6 != sourceIsV6)
+        {
+            return (null, UfwRuleListReadStatus.Ambiguous);
+        }
+
+        var family = destinationIsV6 ? UfwIpFamily.Ipv6 : UfwIpFamily.Ipv4;
+        if (sourceIsV6)
+        {
+            source = source[..^5].TrimEnd();
+        }
+
+        if (!TryParseUfwSource(source, family, out var normalizedSource))
+        {
+            return (null, UfwRuleListReadStatus.Unsupported);
+        }
+
+        var identity = UfwRuleIdentity.Create(number, protocol.Value, port, normalizedSource, action.Value, family, endPort);
+        return (new UfwRule(identity, number, protocol.Value, port, normalizedSource, action.Value, family, endPort), UfwRuleListReadStatus.Complete);
+    }
+
+    private static bool TryParseUfwSource(string source, UfwIpFamily family, out string normalizedSource)
+    {
+        normalizedSource = string.Empty;
+        if (source == "Anywhere")
+        {
+            normalizedSource = source;
+            return true;
+        }
+
+        var slash = source.LastIndexOf('/');
+        var addressText = slash < 0 ? source : source[..slash];
+        var prefixText = slash < 0 ? null : source[(slash + 1)..];
+        if (!IPAddress.TryParse(addressText, out var address)
+            || (family == UfwIpFamily.Ipv4 && address.AddressFamily != AddressFamily.InterNetwork)
+            || (family == UfwIpFamily.Ipv6 && address.AddressFamily != AddressFamily.InterNetworkV6))
+        {
+            return false;
+        }
+
+        // Numeric parsers may accept a trailing NUL; a rule from untrusted UFW
+        // output must contain only the ASCII digits UFW actually prints.
+        if (prefixText is not null
+            && (!prefixText.All(char.IsAsciiDigit)
+                || !int.TryParse(prefixText, NumberStyles.None, CultureInfo.InvariantCulture, out var prefix)
+                || prefix < 0
+                || prefix > (family == UfwIpFamily.Ipv4 ? 32 : 128)))
+        {
+            return false;
+        }
+
+        normalizedSource = source;
+        return true;
+    }
+}
