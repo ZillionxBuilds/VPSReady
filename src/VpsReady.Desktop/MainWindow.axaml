@@ -337,6 +337,13 @@
               </StackPanel>
               <StackPanel Spacing="7" IsVisible="{Binding ConnectionOverview.IsPrivateKeyMode}">
                 <Button Click="ChooseInitialPrivateKeyAsync" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="Browse private key for login" HorizontalAlignment="Left" />
+                <StackPanel x:Name="InitialPrivateKeyFolderHints" Spacing="3">
+                  <TextBlock Classes="field-hint" Text="Common OpenSSH key folders (your key may be elsewhere):" TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyMacFolderHint" Classes="field-hint" Text="macOS: ~/.ssh (usually /Users/your-name/.ssh). In the file picker, press Cmd+Shift+G and enter ~/.ssh." TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyWindowsFolderHint" Classes="field-hint" Text="Windows: %USERPROFILE%\.ssh (usually C:\Users\your-name\.ssh)." TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyLinuxFolderHint" Classes="field-hint" Text="Linux: ~/.ssh (usually /home/your-name/.ssh)." TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyFileHint" Classes="field-hint" Text="Choose the private key, such as id_ed25519 or id_rsa, not the .pub file. No key is selected automatically." TextWrapping="Wrap" />
+                </StackPanel>
                 <TextBlock AutomationProperties.Name="Selected login private key file" Text="{Binding ConnectionOverview.KeyFileName}" TextWrapping="Wrap" />
                 <TextBlock Text="{Binding ConnectionOverview.SelectedKeyAlgorithm}" />
                 <TextBlock Text="{Binding ConnectionOverview.SelectedKeyFingerprint}" TextWrapping="Wrap" />
