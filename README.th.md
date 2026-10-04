@@ -67,11 +67,24 @@ dotnet run --project src/VpsReady.Desktop/VpsReady.Desktop.csproj --configuratio
 
 สคริปต์เลือก `x64` หรือ `arm64` ตามเครื่องโดยอัตโนมัติ หากต้องการสถาปัตยกรรมอีกแบบ
 **ภายในระบบปฏิบัติการเดียวกัน** ให้เพิ่ม `--arch x64` หรือ `--arch arm64` เช่น
-`./scripts/build/linux.sh --arch arm64` ผลลัพธ์อยู่ใน `artifacts/local-build/<rid>.*`
-ซึ่งสคริปต์จะพิมพ์ path จริงออกมาและสร้างโฟลเดอร์ใหม่ทุกครั้ง เปิด
-`./VpsReady.Desktop` บน macOS/Linux หรือ `./VpsReady.Desktop.exe` ใน Git Bash
-บน Windows จากโฟลเดอร์นั้น เมื่อต้องย้ายแอปให้คัดลอก **ทั้งโฟลเดอร์**
+`./scripts/build/linux.sh --arch arm64` ผลลัพธ์อยู่ที่ชื่อคงที่ `artifacts/local-build/<rid>/`
+ปิดแอปก่อน build ใหม่ หาก build สำเร็จจะเปลี่ยนผลลัพธ์เก่า หากล้มเหลวจะเก็บ build เดิมไว้
+จึงต้องตรวจว่า build สำเร็จก่อนใช้ `local-build-info.json` ระบุ RID, source SHA และสถานะ unsigned
+หาก source ยังมีการแก้ไขจะขึ้น `uncommitted-<sha>` สคริปต์ไม่แทนที่โฟลเดอร์ที่ไม่มี marker
+ไม่ใช้ symbolic link และไม่ build ใน checkout เดียวกันพร้อมกัน เมื่อต้องย้ายแอปให้คัดลอก **ทั้งโฟลเดอร์**
 เพราะยังไม่ใช่ไฟล์เดี่ยว และไฟล์ของแต่ละ OS ใช้แทนกันไม่ได้
+
+บน Mac Apple Silicon ให้เปิด Terminal ใน checkout ที่ต้องการตรวจ แล้วใช้คำสั่งคงที่:
+
+```bash
+./scripts/build/macos.sh
+./artifacts/local-build/osx-arm64/VpsReady.Desktop
+```
+
+Mac Intel ใช้ `osx-x64`; Windows ใช้ `win-x64`/`win-arm64` และชื่อไฟล์ `VpsReady.Desktop.exe`;
+Linux ใช้ `linux-x64`/`linux-arm64` ชื่อไฟล์ `VpsReady.Desktop` คำสั่งรันไม่เปลี่ยนหลัง rebuild
+และไม่ต้องใส่วันเวลาหรือ SHA ใน path ต้อง build จาก feature checkout เพื่อดูงานที่ยังไม่ merge
+ส่วน candidate ZIP สำหรับตรวจรับยังคงมี SHA/checksum แยกต่างหาก ไม่ใช่ artifact ชื่อคงที่นี้
 
 สคริปต์นี้ไม่ได้เซ็นชื่อ notarize ทำ checksum หรือสร้าง candidate package
 macOS Gatekeeper/Windows SmartScreen อาจเตือนไฟล์ที่ไม่ได้ลงลายเซ็น

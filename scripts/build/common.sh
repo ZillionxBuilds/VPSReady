@@ -64,21 +64,68 @@ if [[ -n "$(git -C "$repo_root" status --porcelain)" ]]; then
 fi
 
 output_parent="$repo_root/artifacts/local-build"
+if [[ -L "$repo_root/artifacts" || -L "$output_parent" ]]; then
+  printf 'Error: local build directories must not be symbolic links.\n' >&2
+  exit 1
+fi
 mkdir -p "$output_parent"
-output_dir="$(mktemp -d "$output_parent/$rid.XXXXXX")"
+output_dir="$output_parent/$rid"
+marker='.vpsready-local-build'
+if [[ -L "$output_dir" || ( -e "$output_dir" && ( ! -d "$output_dir" || ! -f "$output_dir/$marker" || -L "$output_dir/$marker" ) ) ]]; then
+  printf 'Error: refusing to replace output without a local-build ownership marker.\n' >&2
+  exit 1
+fi
+if [[ -f "$output_dir/$marker" && "$(<"$output_dir/$marker")" != "$rid" ]]; then
+  printf 'Error: existing local-build marker does not match the RID.\n' >&2
+  exit 1
+fi
+lock_dir="$output_parent/.build.lock"
+if ! mkdir "$lock_dir" 2>/dev/null; then
+  printf 'Error: another local build or a retained build lock exists.\n' >&2
+  exit 1
+fi
+stage_dir=''
+backup_dir=''
+cleanup() {
+  if [[ -n "$backup_dir" && -d "$backup_dir" && ! -e "$output_dir" ]]; then
+    mv "$backup_dir" "$output_dir" || return
+    backup_dir=''
+  fi
+  for scratch_dir in "$stage_dir" "$backup_dir"; do
+    if [[ -n "$scratch_dir" && "$scratch_dir" == "$output_parent/.$rid."* && ! -L "$scratch_dir" ]]; then
+      rm -rf -- "$scratch_dir"
+    fi
+  done
+  rmdir "$lock_dir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+stage_dir="$(mktemp -d "$output_parent/.$rid.stage.XXXXXX")"
 
 printf 'Restoring locked solution dependencies...\n'
 dotnet restore "$repo_root/VpsReady.slnx" --locked-mode
 printf 'Publishing unsigned, self-contained %s build...\n' "$rid"
 dotnet publish "$project" --configuration Release --no-restore --runtime "$rid" \
   --self-contained true -p:UseAppHost=true -p:VpsReadyBuildSha="$source_revision" \
-  --output "$output_dir"
+  --output "$stage_dir"
 
-if [[ ! -f "$output_dir/$executable" ]]; then
+if [[ ! -f "$stage_dir/$executable" || -L "$stage_dir/$executable" ]]; then
   printf 'Error: publish finished without the expected executable: %s\n' "$executable" >&2
   exit 1
 fi
 
+printf '%s\n' "$rid" > "$stage_dir/$marker"
+printf '{"schema_version":1,"artifact_rid":"%s","source_revision":"%s","self_contained":true,"signing":"UNSIGNED","real_vps":"NOT TESTED"}\n' "$rid" "$source_revision" > "$stage_dir/local-build-info.json"
+if [[ -d "$output_dir" ]]; then
+  backup_dir="$(mktemp -d "$output_parent/.$rid.previous.XXXXXX")"
+  rmdir "$backup_dir"
+  mv "$output_dir" "$backup_dir"
+fi
+mv "$stage_dir" "$output_dir"
+stage_dir=''
+
 printf '\nBuilt: %s\nExecutable: %s\n' "$rid" "$output_dir/$executable"
+printf 'Source revision: %s\nFixed run command: ./artifacts/local-build/%s/%s\n' "$source_revision" "$rid" "$executable"
 printf 'This local build is UNSIGNED and not an official candidate package.\n'
 printf 'Build success does not establish startup, server, or Owner VPS evidence.\n'
