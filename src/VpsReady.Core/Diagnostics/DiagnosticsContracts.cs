@@ -165,6 +165,11 @@ public static class DiagnosticEventCatalog
     public const string TimezoneChangeSucceeded = "system.timezone_change.succeeded";
     public const string TimezoneChangeFailed = "system.timezone_change.failed";
     public const string TimezoneChangeCancelled = "system.timezone_change.cancelled";
+    public const string ReadinessStarted = "readiness.check.started";
+    public const string ReadinessRowObserved = "readiness.row.observed";
+    public const string ReadinessCompleted = "readiness.check.completed";
+    public const string ReadinessFailed = "readiness.check.failed";
+    public const string ReadinessCancelled = "readiness.check.cancelled";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -182,6 +187,7 @@ public static class DiagnosticEventCatalog
         RebootStarted, RebootSucceeded, RebootFailed, RebootCancelled, RebootRecoveryRequired,
         HostnameChangeStarted, HostnameChangePlanned, HostnameChangeSucceeded, HostnameChangeFailed, HostnameChangeCancelled,
         TimezoneChangeStarted, TimezoneChangePlanned, TimezoneChangeSucceeded, TimezoneChangeFailed, TimezoneChangeCancelled,
+        ReadinessStarted, ReadinessRowObserved, ReadinessCompleted, ReadinessFailed, ReadinessCancelled,
     };
 
     public static bool IsKnown(string eventId) => Known.Contains(eventId);
@@ -248,6 +254,15 @@ public static class DiagnosticCommandCatalog
     public const string UbuntuTimezoneAvailableList = "ubuntu.timezone.available.list";
     public const string UbuntuTimezoneApply = "ubuntu.timezone.apply";
     public const string UbuntuTimezoneVerifyRead = "ubuntu.timezone.verify.read";
+    public const string ReadinessPlatformRead = "readiness.platform.read";
+    public const string ReadinessPrivilegeRead = "readiness.privilege.read";
+    public const string ReadinessUfwRead = "readiness.ufw.read";
+    public const string ReadinessAuditRead = "readiness.packages.audit.read";
+    public const string ReadinessDiskRead = "readiness.root-disk.read";
+    public const string ReadinessRebootRead = "readiness.reboot.read";
+    public const string ReadinessIdentityRead = "readiness.identity-time.read";
+    public const string ReadinessTimeSyncRead = "readiness.time-sync.read";
+    public const string ReadinessCachedUpgradeRead = "readiness.cached-upgrade.read";
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -292,6 +307,8 @@ public static class DiagnosticCommandCatalog
         UbuntuTimezoneAvailableList,
         UbuntuTimezoneApply,
         UbuntuTimezoneVerifyRead,
+        ReadinessPlatformRead, ReadinessPrivilegeRead, ReadinessUfwRead, ReadinessAuditRead,
+        ReadinessDiskRead, ReadinessRebootRead, ReadinessIdentityRead, ReadinessTimeSyncRead, ReadinessCachedUpgradeRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -304,6 +321,7 @@ public static class DiagnosticErrorCatalog
         .Select(errorCode => errorCode.ToStableCode())
         .Concat(LocalEd25519KeyGenerationErrorCatalog.All)
         .Concat(ExistingSshKeySelectionErrorCatalog.All)
+        .Concat(InitialPrivateKeyErrorCatalog.All)
         .Concat(KeyAuthenticationVerificationErrorCatalog.All)
         .Concat(OpenSshConfigEditErrorCatalog.All)
         .Concat(PrivilegePreflightErrorCatalog.All)
@@ -312,6 +330,8 @@ public static class DiagnosticErrorCatalog
         .Concat(RebootErrorCatalog.All)
         .Concat(HostnameChangeErrorCatalog.All)
         .Concat(TimezoneChangeErrorCatalog.All)
+        .Concat(Enum.GetValues<ReadinessReason>().Select(reason => new ReadinessCheckResult(ReadinessCheckId.R01,
+            ReadinessCheckState.Unknown, reason, ReadinessSource.None).ReasonCode))
         .ToHashSet(StringComparer.Ordinal);
 
     public static bool IsKnown(string errorCode) => Known.Contains(errorCode);

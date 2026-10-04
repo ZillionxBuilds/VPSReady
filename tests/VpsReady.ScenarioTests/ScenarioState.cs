@@ -1,5 +1,6 @@
 using System.Globalization;
 using VpsReady.Core.Diagnostics;
+using VpsReady.Core.Remote;
 
 namespace VpsReady.ScenarioTests;
 
@@ -95,6 +96,7 @@ public sealed class ScenarioHostState
     public ScenarioRebootState Reboot { get; }
 
     public ScenarioLocalFileState LocalFiles { get; }
+    public ScenarioReadinessState Readiness { get; } = new();
 
     public string Hostname
     {
@@ -122,6 +124,20 @@ public sealed class ScenarioHostState
         Ubuntu.FactsFixture = fixtureKind;
         Ubuntu.RawFactsOutput = ScenarioFixtures.Load(fixtureKind);
     }
+}
+
+public sealed class ScenarioReadinessState
+{
+    public long RootTotalBytes { get; set; } = 21474836480;
+    public long RootAvailableBytes { get; set; } = 10737418240;
+    public bool RootWritable { get; set; } = true;
+    public bool AuditClean { get; set; } = true;
+    public bool TimeSynchronized { get; set; } = true;
+    public bool CredentialAvailable { get; set; } = true;
+    public SshAuthenticationMode AuthenticationMode { get; set; } = SshAuthenticationMode.PrivateKey;
+    public int FreshLoginAttempts { get; set; }
+    public int ProbeDisposals { get; set; }
+    public HashSet<string> DeniedCommands { get; } = new(StringComparer.Ordinal);
 }
 
 public sealed class ScenarioSshState

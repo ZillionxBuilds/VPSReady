@@ -1,6 +1,8 @@
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using VpsReady.Application;
+using VpsReady.Core.Remote;
+using Avalonia.Threading;
 
 namespace VpsReady.Desktop;
 
@@ -18,9 +20,51 @@ public partial class MainWindow : Window
     {
         DataContext = viewModel;
         this.viewModel = viewModel;
+        Closed += (_, _) => { viewModel.ConnectionOverview?.ClearSecretInput(); viewModel.ConnectionOverview?.ClearKeyPassphrase(); viewModel.Readiness?.Dispose(); };
+        viewModel.ReadinessSectionRequested += FocusReadinessSection;
         viewModel.SafeIssueReportReady += CopySafeIssueReportAsync;
         viewModel.SupportBundleExportRequested += ExportSanitizedSupportBundleAsync;
     }
+
+    private async void CheckReadinessAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Readiness is { } readiness) { await readiness.CheckAsync(); }
+    }
+
+    private void CopyReadinessSafeIssueReport(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        viewModel?.CopyReadinessSafeReport();
+    }
+
+    private void ExportReadinessSupportBundle(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        viewModel?.ExportReadinessBundle();
+    }
+
+    private void FocusReadinessSection(ReadinessDestination page, string section) => Dispatcher.UIThread.Post(() =>
+    {
+        var name = (page, section) switch
+        {
+            (ReadinessDestination.Connection, "authentication") => "ReadinessAuthentication",
+            (ReadinessDestination.Overview, "platform") => "ReadinessPlatform",
+            (ReadinessDestination.Overview, "storage") => "ReadinessStorage",
+            (ReadinessDestination.Firewall, "status") => "ReadinessFirewallStatus",
+            (ReadinessDestination.Firewall, "ssh-access") => "ReadinessFirewallSsh",
+            (ReadinessDestination.SshKeysAndConfig, "key-access") => "ReadinessKeyAccess",
+            (ReadinessDestination.System, "privilege") => "ReadinessPrivilege",
+            (ReadinessDestination.System, "packages") => "ReadinessPackages",
+            (ReadinessDestination.System, "reboot") => "ReadinessReboot",
+            (ReadinessDestination.System, "identity-time") => "ReadinessIdentityTime",
+            (ReadinessDestination.System, "time-guidance") => "ReadinessTimeGuidance",
+            (ReadinessDestination.ActivityAndDiagnostics, "diagnostics") => "ReadinessDiagnostics",
+            _ => null,
+        };
+        if (name is not null && this.FindControl<Control>(name) is { } control)
+        {
+            control.BringIntoView();
+            control.Focus();
+        }
+    }, DispatcherPriority.Background);
 
     private async void CopySafeIssueReportAsync(string report)
     {
@@ -89,6 +133,7 @@ public partial class MainWindow : Window
         finally
         {
             connection.SecretInput.Clear();
+            connection.ClearKeyPassphrase();
         }
     }
 
@@ -98,6 +143,31 @@ public partial class MainWindow : Window
         {
             await connection.InvalidateForIdentityEditAsync();
         }
+    }
+
+    private async void ChooseInitialPrivateKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is not { } connection) { return; }
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Choose the private key for initial login", AllowMultiple = false });
+            if (files.Count == 1) { await connection.SelectInitialPrivateKeyAsync(files[0].Path.LocalPath); }
+        }
+        catch { connection.ClearKeyPassphrase(); }
+    }
+
+    private void ConnectionKeyPassphraseKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is not { } connection) { return; }
+        var action = PasswordInputKeys.Classify(e.Key, e.KeyModifiers);
+        if (action == PasswordInputKeyAction.Backspace) { connection.BackspaceKeyPassphrase(); e.Handled = true; }
+        else if (action == PasswordInputKeyAction.Clear) { connection.ClearKeyPassphrase(); e.Handled = true; }
+        else if (action == PasswordInputKeyAction.RejectPaste) { e.Handled = true; }
+    }
+
+    private void ConnectionKeyPassphraseTextInput(object? sender, Avalonia.Input.TextInputEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection) { connection.AppendKeyPassphraseText(e.Text.AsSpan()); e.Handled = true; }
     }
 
     private async void ViewPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

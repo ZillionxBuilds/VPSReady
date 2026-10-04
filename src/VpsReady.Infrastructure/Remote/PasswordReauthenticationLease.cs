@@ -79,6 +79,15 @@ public sealed class PasswordReauthenticationLease : IDisposable
         }
     }
 
+    internal VpsReady.Application.PasswordSessionSecret CreateCredentialSnapshot()
+    {
+        lock (gate)
+        {
+            var value = characters ?? throw new InvalidOperationException("The reauthentication credential has been cleared.");
+            return new VpsReady.Application.PasswordSessionSecret(value);
+        }
+    }
+
     public void Dispose() => Clear();
 
     public override string ToString() => "[credential redacted]";

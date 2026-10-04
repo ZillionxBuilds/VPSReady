@@ -3,6 +3,7 @@ using System.Globalization;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Operations;
 using VpsReady.Core.Remote;
+using VpsReady.Core.Local;
 
 namespace VpsReady.Application;
 
@@ -15,6 +16,14 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private readonly IApplicationSession session;
     private readonly IServerOverviewReader? overviewReader;
     private readonly IDiagnosticSink? diagnostics;
+    private readonly IInitialPrivateKeySelector? initialKeySelector;
+    private string? selectedPrivateKeyPath;
+    private bool isPrivateKeyMode;
+    private bool needsKeyPassphrase;
+    private string keyFileName = "No private key selected.";
+    private string keySelectionStatus = "Select a private key for initial SSH login. No .pub file is required.";
+    private string? selectedKeyAlgorithm;
+    private string? selectedKeyFingerprint;
     private readonly object cancellationGate = new();
     private CancellationTokenSource? connectionCancellation;
     private CancellationTokenSource? overviewCancellation;
@@ -30,12 +39,13 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     private ConnectionScreenState overviewState = ConnectionScreenState.Unknown;
     private HostTrustReview? hostTrustReview;
 
-    public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session, IServerOverviewReader? overviewReader = null, IDiagnosticSink? diagnostics = null)
+    public ConnectionOverviewViewModel(IConnectionSessionLifecycle lifecycle, IApplicationSession session, IServerOverviewReader? overviewReader = null, IDiagnosticSink? diagnostics = null, IInitialPrivateKeySelector? initialKeySelector = null)
     {
         this.lifecycle = lifecycle;
         this.session = session;
         this.overviewReader = overviewReader;
         this.diagnostics = diagnostics;
+        this.initialKeySelector = initialKeySelector;
         RefreshCommand = new DelegateCommand(() => _ = RefreshAsync());
         CancelConnectionCommand = new DelegateCommand(CancelConnection);
         CancelRefreshCommand = new DelegateCommand(CancelRefresh);
@@ -88,6 +98,57 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
     public bool HasConnectedSession => session.Snapshot.IsConnected;
     public ConnectionSecretInput SecretInput { get; } = new();
     public string SecretDisplay => new('•', SecretInput.Length);
+    public ConnectionSecretInput KeyPassphraseInput { get; } = new();
+    public string KeyPassphraseDisplay => new('•', KeyPassphraseInput.Length);
+    public bool IsPasswordMode { get => !IsPrivateKeyMode; set { if (value) { IsPrivateKeyMode = false; } } }
+    public bool IsPrivateKeyMode
+    {
+        get => isPrivateKeyMode;
+        set
+        {
+            if (!SetProperty(ref isPrivateKeyMode, value)) { return; }
+            OnPropertyChanged(nameof(IsPasswordMode));
+            selectedPrivateKeyPath = null;
+            KeyFileName = "No private key selected.";
+            SelectedKeyAlgorithm = null;
+            SelectedKeyFingerprint = null;
+            NeedsKeyPassphrase = false;
+            _ = InvalidateForIdentityEditAsync();
+        }
+    }
+    public bool NeedsKeyPassphrase { get => needsKeyPassphrase; private set => SetProperty(ref needsKeyPassphrase, value); }
+    public string KeyFileName { get => keyFileName; private set => SetProperty(ref keyFileName, value); }
+    public string KeySelectionStatus { get => keySelectionStatus; private set => SetProperty(ref keySelectionStatus, value); }
+    public string? SelectedKeyAlgorithm { get => selectedKeyAlgorithm; private set => SetProperty(ref selectedKeyAlgorithm, value); }
+    public string? SelectedKeyFingerprint { get => selectedKeyFingerprint; private set => SetProperty(ref selectedKeyFingerprint, value); }
+
+    public async Task SelectInitialPrivateKeyAsync(string path, CancellationToken cancellationToken = default)
+    {
+        if (!IsPrivateKeyMode || !CanEditConnectionIdentity || initialKeySelector is null) { return; }
+        var invalidation = InvalidateForIdentityEditAsync();
+        var revision = Volatile.Read(ref identityRevision);
+        await invalidation.ConfigureAwait(false);
+        if (revision != Volatile.Read(ref identityRevision)) { return; }
+        selectedPrivateKeyPath = path;
+        KeyFileName = Path.GetFileName(path);
+        SelectedKeyAlgorithm = null;
+        SelectedKeyFingerprint = null;
+        using var result = await initialKeySelector.SelectAsync(path, null, cancellationToken).ConfigureAwait(false);
+        if (revision != Volatile.Read(ref identityRevision)) { return; }
+        NeedsKeyPassphrase = result.Error == InitialPrivateKeyError.PassphraseRequired;
+        SelectedKeyAlgorithm = result.Credential?.Algorithm;
+        SelectedKeyFingerprint = result.Credential?.Fingerprint;
+        KeySelectionStatus = result.Succeeded ? "Private key validated locally. Test connection to verify host trust and server authentication."
+            : DescribeKeyError(result.Error);
+    }
+
+    public void AppendKeyPassphraseText(ReadOnlySpan<char> value)
+    {
+        if (!KeyPassphraseInput.TryAppendText(value)) { KeyPassphraseInput.Clear(); KeySelectionStatus = "Key passphrase input was invalid or exceeded 4096 characters; re-enter it."; }
+        OnPropertyChanged(nameof(KeyPassphraseDisplay));
+    }
+    public void BackspaceKeyPassphrase() { KeyPassphraseInput.Backspace(); OnPropertyChanged(nameof(KeyPassphraseDisplay)); }
+    public void ClearKeyPassphrase() { KeyPassphraseInput.Clear(); OnPropertyChanged(nameof(KeyPassphraseDisplay)); }
 
     public void AppendSecretCharacter(char value)
     {
@@ -148,7 +209,43 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
             SetHostTrustReview(null);
             using var transient = SecretInput.TakeForSubmission();
             OnPropertyChanged(nameof(SecretDisplay));
-            var validation = ConnectionInputValidator.Validate(host, port, user, transient.Characters, timeout);
+            ConnectionInputValidationResult validation;
+            if (IsPrivateKeyMode)
+            {
+                using var submittedUnlock = KeyPassphraseInput.TakeForSubmission();
+                OnPropertyChanged(nameof(KeyPassphraseDisplay));
+                var unlock = submittedUnlock.Characters.IsEmpty ? null : new PasswordSessionSecret(submittedUnlock.Characters);
+                InitialPrivateKeySelectionResult? selected = null;
+                try
+                {
+                    if (initialKeySelector is not null && selectedPrivateKeyPath is not null)
+                    {
+                        selected = await initialKeySelector.SelectAsync(selectedPrivateKeyPath, unlock, cancellation.Token).ConfigureAwait(false);
+                    }
+                    if (revision != Volatile.Read(ref identityRevision)) { selected?.Dispose(); return; }
+                    if (selected?.Credential is not { } key)
+                    {
+                        await DisconnectLifecycleSafelyAsync().ConfigureAwait(false);
+                        if (revision != Volatile.Read(ref identityRevision)) { return; }
+                        State = ConnectionScreenState.Failed;
+                        NeedsKeyPassphrase = NeedsKeyPassphrase || selected?.Error == InitialPrivateKeyError.PassphraseRequired;
+                        KeySelectionStatus = Status = DescribeKeyError(selected?.Error);
+                        var correlation = CorrelationIds.Create("validate_key");
+                        OperationId = correlation.OperationId;
+                        ErrorCode = InitialPrivateKeyErrorCatalog.Code(selected?.Error);
+                        await ReportValidationFailureAsync(correlation).ConfigureAwait(false);
+                        return;
+                    }
+                    SelectedKeyAlgorithm = key.Algorithm;
+                    SelectedKeyFingerprint = key.Fingerprint;
+                    validation = ConnectionInputValidator.ValidatePrivateKey(host, port, user, key, timeout);
+                }
+                finally { unlock?.Clear(); }
+            }
+            else
+            {
+                validation = ConnectionInputValidator.Validate(host, port, user, transient.Characters, timeout);
+            }
             if (!validation.IsValid)
             {
                 var correlation = CorrelationIds.Create("validate");
@@ -190,6 +287,16 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         }
     }
 
+    private static string DescribeKeyError(InitialPrivateKeyError? error) => error switch
+    {
+        InitialPrivateKeyError.PassphraseRequired => "This private key is encrypted. Enter its key passphrase, not the server password, then retry explicitly.",
+        InitialPrivateKeyError.Permission => "Private key permissions are not restrictive or the file is unreadable. Review them locally; VPSReady will not change the file.",
+        InitialPrivateKeyError.UnsupportedFormat => "Select a supported OpenSSH Ed25519/RSA private key or an unencrypted RSA PEM key; not a .pub, certificate, agent or PuTTY key.",
+        InitialPrivateKeyError.InvalidKeyOrPassphrase => "The private key could not be unlocked or parsed. Review the file and key passphrase; no server-password fallback will be attempted.",
+        InitialPrivateKeyError.Cancelled => "Private key validation was cancelled. Retry explicitly when ready.",
+        _ => "Select a readable regular private key file, at most 256 KiB, without links/reparse points. No .pub companion is needed.",
+    };
+
     private static string DescribeValidationErrors(IReadOnlyList<ConnectionInputValidationError> errors)
     {
         var guidance = errors.Select(error => error switch
@@ -218,7 +325,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
                     DiagnosticPhase.Validate,
                     DiagnosticStatus.Failed,
                     Status,
-                    ErrorCode: OperationErrorCode.Validation.ToStableCode(),
+                    ErrorCode: ErrorCode ?? OperationErrorCode.Validation.ToStableCode(),
                     Action: "TestConnection",
                     OutputPolicy: OutputCapturePolicy.None),
                 CancellationToken.None).ConfigureAwait(false);
@@ -389,6 +496,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
         var revision = Interlocked.Increment(ref identityRevision);
         ClearSecretInput();
         CancelConnection();
+        ClearKeyPassphrase();
         CancelRefresh();
         lock (cancellationGate) { hostTrustCancellation?.Cancel(); }
         SetHostTrustReview(null);

@@ -80,7 +80,8 @@ public sealed class RebootWorkflow : IRebootWorkflow
                 return await FailureAsync(correlation, OperationErrorCode.Validation, RebootErrorCatalog.Confirmation, DiagnosticPhase.Validate, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
             }
 
-            if (transport is not IRebootReconnectTransport reconnectTransport)
+            if (transport is not IRebootReconnectTransport reconnectTransport
+                || transport is IAuthenticatedSessionTransport { CanReauthenticate: false })
             {
                 return await FailureAsync(correlation, OperationErrorCode.Verification, RebootErrorCatalog.Verification, DiagnosticPhase.Preflight, null, OperationState.Unchanged, RebootReconnectOutcome.NotStarted).ConfigureAwait(false);
             }

@@ -17,13 +17,14 @@ public sealed class AppViewModelTests
         Assert.False(viewModel.HasStartupFailure);
         Assert.Equal(ShellPage.Connection, viewModel.SelectedPage.Page);
         Assert.Equal(
-            ["Connection", "Overview", "Firewall", "SSH Keys & Config", "System", "Activity & Diagnostics"],
+            ["Connection", "Overview", "VPS Ready", "Firewall", "SSH Keys & Config", "System", "Activity & Diagnostics"],
             viewModel.NavigationItems.Select(item => item.Label));
     }
 
     [Theory]
     [InlineData(ShellPage.Connection)]
     [InlineData(ShellPage.Overview)]
+    [InlineData(ShellPage.Readiness)]
     [InlineData(ShellPage.Firewall)]
     [InlineData(ShellPage.SshKeysAndConfig)]
     [InlineData(ShellPage.System)]

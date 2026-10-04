@@ -62,6 +62,62 @@
               </StackPanel>
             </Grid>
           </Border>
+          <Border Classes="card" IsVisible="{Binding HasReadinessNavigationGuidance}">
+            <StackPanel Spacing="8">
+              <TextBlock Text="{Binding ReadinessNavigationGuidance}" TextWrapping="Wrap" />
+              <Button Command="{Binding OpenReadinessCommand}" Content="Back to VPS Ready" HorizontalAlignment="Left" />
+            </StackPanel>
+          </Border>
+          <Border Classes="card" IsVisible="{Binding SelectedPage.IsReadinessPage}">
+            <StackPanel Spacing="12">
+              <TextBlock Classes="section-title" Text="{Binding Readiness.Profile}" />
+              <TextBlock AutomationProperties.Name="VPS Ready verdict" Text="{Binding Readiness.Status}" TextWrapping="Wrap" FontWeight="SemiBold" />
+              <TextBlock AutomationProperties.Name="Required readiness progress" Text="{Binding Readiness.RequiredProgress}" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding Readiness.EvidenceTime}" TextWrapping="Wrap" />
+              <TextBlock Text="REAL VPS: NOT TESTED. This checklist does not certify provider controls, workload fitness or server-wide authentication policy." TextWrapping="Wrap" />
+              <WrapPanel ItemSpacing="8" LineSpacing="8">
+                <Button Click="CheckReadinessAsync" IsEnabled="{Binding Readiness.CanCheck}" Content="Check VPS Ready" />
+                <Button Command="{Binding Readiness.CancelCommand}" IsEnabled="{Binding Readiness.CanCancel}" Content="Cancel check" />
+                <Button Command="{Binding OpenConnectionCommand}" IsVisible="{Binding Readiness.IsDisconnected}" Content="Connect first" />
+                <Button Command="{Binding OpenReadinessDiagnosticsCommand}" Content="Open diagnostics" />
+                <Button Click="CopyReadinessSafeIssueReport" IsEnabled="{Binding Readiness.CanExportEvidence}" Content="Copy Safe Issue Report" />
+                <Button Click="ExportReadinessSupportBundle" IsEnabled="{Binding Readiness.CanExportEvidence}" Content="Export Sanitized Support Bundle" />
+              </WrapPanel>
+              <TextBlock Text="{Binding Readiness.OperationId}" TextWrapping="Wrap" />
+              <TextBlock Text="Filter checks" />
+              <ComboBox ItemsSource="{Binding Readiness.Filters}" SelectedItem="{Binding Readiness.Filter, Mode=TwoWay}" HorizontalAlignment="Left" MinWidth="190" />
+              <ItemsControl ItemsSource="{Binding Readiness.Rows}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="application:ReadinessRowViewModel">
+                    <Border BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" Padding="14" Margin="0,0,0,10">
+                      <StackPanel Spacing="7">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <WrapPanel ItemSpacing="14">
+                          <TextBlock Text="{Binding Tag}" />
+                          <TextBlock Text="{Binding State}" FontWeight="SemiBold" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding Reason}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding ReasonCode}" TextWrapping="Wrap" />
+                        <TextBlock Classes="muted" Text="{Binding Evidence}" TextWrapping="Wrap" />
+                        <Button Command="{Binding NavigateCommand}" Content="{Binding NavigationLabel}" HorizontalAlignment="Left" />
+                        <Expander Header="Why this check / evidence limits">
+                          <TextBlock Text="{Binding Explanation}" TextWrapping="Wrap" />
+                        </Expander>
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Classes="section-title" Text="Manual exclusions — not part of the required denominator" />
+              <ItemsControl ItemsSource="{Binding Readiness.ManualExclusions}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,8" />
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsPlaceholderPage}">
             <StackPanel Spacing="8">
               <TextBlock FontWeight="SemiBold" Text="Action unavailable" />
@@ -71,7 +127,8 @@
           </Border>
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsFirewallPage}">
             <StackPanel Spacing="10">
-              <TextBlock Classes="section-title" Text="Firewall guardrails" />
+              <TextBlock x:Name="ReadinessFirewallStatus" Focusable="True" Classes="section-title" Text="Firewall guardrails" />
+              <TextBlock x:Name="ReadinessFirewallSsh" Focusable="True" Text="SSH access guidance: inspect the current server-side SSH port, family and source rules. Keep existing access until a separate replacement connection is verified. Never expand a narrow source rule to Anywhere solely to make readiness green." TextWrapping="Wrap" />
               <TextBlock Classes="muted" Text="Changes require explicit confirmation and count as successful only after verification." />
               <TextBlock Text="{Binding Firewall.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding Firewall.FirewallState}" />
@@ -128,7 +185,7 @@
           </Border>
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsSshManagementPage}">
             <StackPanel Spacing="10">
-              <TextBlock Classes="section-title" Text="SSH identity" />
+              <TextBlock x:Name="ReadinessKeyAccess" Focusable="True" Classes="section-title" Text="SSH identity" />
               <TextBlock Classes="muted" Text="Private keys, local paths, raw commands, server addresses and credentials are never shown in Activity or this summary. Public-key text has a separate intentional View/Copy action below." />
               <TextBlock Text="{Binding SshManagement.Status}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding SshManagement.TrustedHostStatus}" TextWrapping="Wrap" />
@@ -196,7 +253,11 @@
                 <Button Command="{Binding SystemActions.CancelCommand}" IsEnabled="{Binding SystemActions.CanCancel}" Content="Cancel operation" />
               </StackPanel>
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
-              <TextBlock Classes="section-title" Text="Packages" />
+              <TextBlock x:Name="ReadinessPrivilege" Focusable="True" Classes="section-title" Text="Read privilege guidance" />
+              <TextBlock Text="Readiness needs actual permitted UFW and package reads, not only sudo -n true. Use an account with appropriate existing privilege. No sudoers edit or privilege grant is performed here." TextWrapping="Wrap" />
+              <TextBlock x:Name="ReadinessTimeGuidance" Focusable="True" Classes="section-title" Text="Time synchronization guidance" />
+              <TextBlock Text="Actual synchronized time is distinct from an enabled service. Review clock configuration independently; VPSReady does not enable or configure time services automatically." TextWrapping="Wrap" />
+              <TextBlock x:Name="ReadinessPackages" Focusable="True" Classes="section-title" Text="Packages" />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Click="RefreshPackageIndexAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Refresh package index" />
                 <Button Click="PlanPackageUpgradeAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Read upgrade plan" />
@@ -206,7 +267,7 @@
               <CheckBox IsChecked="{Binding SystemActions.IsUpgradeConfirmed, Mode=TwoWay}" Content="I confirm applying the reviewed normal package upgrade." />
               <Button Click="ApplyPackageUpgradeAsync" IsEnabled="{Binding SystemActions.CanUpgrade}" Content="Apply and verify package upgrade" />
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
-              <TextBlock Classes="section-title" Text="Reboot" />
+              <TextBlock x:Name="ReadinessReboot" Focusable="True" Classes="section-title" Text="Reboot" />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Click="InspectRebootRequiredAsync" IsEnabled="{Binding SystemActions.CanStartOperation}" Content="Inspect reboot requirement" />
                 <TextBlock Text="{Binding SystemActions.RebootRequirementStatus}" VerticalAlignment="Center" TextWrapping="Wrap" />
@@ -215,7 +276,7 @@
               <CheckBox IsChecked="{Binding SystemActions.IsRebootConfirmed, Mode=TwoWay}" Content="I confirm reboot. Connection loss is expected; reconnect and revalidation are bounded." />
               <Button Classes="danger" Click="RebootSystemAsync" IsEnabled="{Binding SystemActions.CanReboot}" Content="Reboot and verify reconnect" HorizontalAlignment="Left" />
               <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,9" />
-              <TextBlock Classes="section-title" Text="Hostname" />
+              <TextBlock x:Name="ReadinessIdentityTime" Focusable="True" Classes="section-title" Text="Hostname" />
               <StackPanel Spacing="5">
                 <TextBlock Classes="field-label" Text="New hostname" />
                 <TextBox AutomationProperties.Name="New hostname" Text="{Binding SystemActions.Hostname, Mode=TwoWay}" />
@@ -246,7 +307,8 @@
           </Border>
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsConnectionPage}">
             <StackPanel Spacing="12">
-              <TextBlock Classes="section-title" Text="SSH connection" />
+              <TextBlock x:Name="ReadinessAuthentication" Focusable="True" Classes="section-title" Text="SSH connection" />
+              <Button Command="{Binding OpenReadinessCommand}" IsVisible="{Binding ConnectionOverview.HasConnectedSession}" Content="Open VPS Ready — explicit Check available" HorizontalAlignment="Left" />
               <StackPanel Spacing="5">
                 <TextBlock Classes="field-label" Text="Host or IP address" />
                 <TextBox x:Name="ConnectionHost" AutomationProperties.Name="Host or IP address" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
@@ -263,13 +325,38 @@
                   <TextBox x:Name="ConnectionUser" AutomationProperties.Name="Username" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                 </StackPanel>
               </Grid>
-              <StackPanel Spacing="5">
+              <StackPanel Orientation="Horizontal" Spacing="14">
+                <RadioButton GroupName="InitialSshAuthentication" IsChecked="{Binding ConnectionOverview.IsPasswordMode, Mode=TwoWay}" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="Password" />
+                <RadioButton GroupName="InitialSshAuthentication" IsChecked="{Binding ConnectionOverview.IsPrivateKeyMode, Mode=TwoWay}" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="SSH private key" />
+              </StackPanel>
+              <StackPanel Spacing="5" IsVisible="{Binding ConnectionOverview.IsPasswordMode}">
                 <TextBlock Classes="field-label" Text="Password" />
                 <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" TextInput="ConnectionPasswordTextInput" AutomationProperties.Name="Password input" Background="#F6F9FE" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" MinHeight="44" Padding="12,9">
                   <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" VerticalAlignment="Center" />
                 </Border>
               </StackPanel>
-              <TextBlock Classes="muted" FontSize="13" Text="Type the password using your keyboard layout. Backspace deletes the last character; Escape clears it. Tab moves to the next control. Clipboard paste is not supported in this version. Input is cleared after submission." />
+              <StackPanel Spacing="7" IsVisible="{Binding ConnectionOverview.IsPrivateKeyMode}">
+                <Button Click="ChooseInitialPrivateKeyAsync" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="Browse private key for login" HorizontalAlignment="Left" />
+                <StackPanel x:Name="InitialPrivateKeyFolderHints" Spacing="3">
+                  <TextBlock Classes="field-hint" Text="Common OpenSSH key folders (your key may be elsewhere):" TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyMacFolderHint" Classes="field-hint" Text="macOS: ~/.ssh (usually /Users/your-name/.ssh). In the file picker, press Cmd+Shift+G and enter ~/.ssh." TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyWindowsFolderHint" Classes="field-hint" Text="Windows: %USERPROFILE%\.ssh (usually C:\Users\your-name\.ssh)." TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyLinuxFolderHint" Classes="field-hint" Text="Linux: ~/.ssh (usually /home/your-name/.ssh)." TextWrapping="Wrap" />
+                  <TextBlock x:Name="InitialPrivateKeyFileHint" Classes="field-hint" Text="Choose the private key, such as id_ed25519 or id_rsa, not the .pub file. No key is selected automatically." TextWrapping="Wrap" />
+                </StackPanel>
+                <TextBlock AutomationProperties.Name="Selected login private key file" Text="{Binding ConnectionOverview.KeyFileName}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding ConnectionOverview.SelectedKeyAlgorithm}" />
+                <TextBlock Text="{Binding ConnectionOverview.SelectedKeyFingerprint}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding ConnectionOverview.KeySelectionStatus}" TextWrapping="Wrap" />
+                <TextBlock Text="The private key stays local; signing proves access. No server password, .pub companion, previous password session or key deployment is required. Host trust must still be reviewed." TextWrapping="Wrap" />
+                <StackPanel Spacing="5" IsVisible="{Binding ConnectionOverview.NeedsKeyPassphrase}">
+                  <TextBlock Classes="field-label" Text="Key passphrase (not server password)" />
+                  <Border x:Name="ConnectionKeyPassphraseInput" Focusable="True" KeyDown="ConnectionKeyPassphraseKeyDown" TextInput="ConnectionKeyPassphraseTextInput" AutomationProperties.Name="Key passphrase input" Background="#F6F9FE" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" MinHeight="44" Padding="12,9">
+                    <TextBlock Text="{Binding ConnectionOverview.KeyPassphraseDisplay}" VerticalAlignment="Center" />
+                  </Border>
+                </StackPanel>
+              </StackPanel>
+              <TextBlock Classes="muted" FontSize="13" Text="Protected inputs: Backspace deletes; Escape clears; Tab moves to the next control. Clipboard paste is not supported. Input is cleared after submission; retry requires re-entry." />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Classes="primary" Click="TestConnectionAsync" IsEnabled="{Binding ConnectionOverview.CanTestConnection}" Content="Test connection" />
                 <Button Command="{Binding ConnectionOverview.CancelConnectionCommand}" IsEnabled="{Binding ConnectionOverview.IsConnecting}" Content="Cancel connection" />
@@ -299,7 +386,7 @@
           </Border>
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsOverviewPage}">
             <StackPanel Spacing="12">
-              <TextBlock Classes="section-title" Text="Verified server facts" />
+              <TextBlock x:Name="ReadinessPlatform" Focusable="True" Classes="section-title" Text="Verified server facts" />
               <TextBlock Text="{Binding ConnectionOverview.OverviewStatus}" TextWrapping="Wrap" />
               <ItemsControl ItemsSource="{Binding ConnectionOverview.Facts}">
                 <ItemsControl.ItemTemplate>
@@ -316,11 +403,13 @@
                 <Button Command="{Binding ConnectionOverview.CancelRefreshCommand}" IsEnabled="{Binding ConnectionOverview.IsRefreshing}" Content="Cancel refresh" />
                 <Button Command="{Binding ConnectionOverview.DisconnectCommand}" IsEnabled="{Binding ConnectionOverview.HasConnectedSession}" Content="Disconnect" />
               </WrapPanel>
+              <TextBlock x:Name="ReadinessStorage" Focusable="True" Classes="section-title" Text="Root storage guidance" />
+              <TextBlock Text="Core Basic requires a writable root filesystem with at least 1 GiB available. Below 2 GiB or 10% is advisory. These are exact byte observations, not workload fitness. Review storage independently; no automatic cleanup, resize, mount change or repair is provided." TextWrapping="Wrap" />
             </StackPanel>
           </Border>
           <Border Classes="card" IsVisible="{Binding SelectedPage.IsActivityPage}">
             <StackPanel Spacing="10">
-              <TextBlock Classes="section-title" Text="Operation history" />
+              <TextBlock x:Name="ReadinessDiagnostics" Focusable="True" Classes="section-title" Text="Operation history" />
               <TextBlock Text="Activity is redacted before display and stored only on this device. VPSReady never uploads diagnostics automatically." TextWrapping="Wrap" />
               <StackPanel Spacing="5">
                 <TextBlock Classes="field-label" Text="Filter activity" />

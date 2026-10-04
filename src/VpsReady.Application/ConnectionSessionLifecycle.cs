@@ -128,7 +128,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         {
             var duplicate = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unknown);
             await ReportTerminalAsync(correlation, duplicate, CancellationToken.None).ConfigureAwait(false);
-            input.Password.Clear();
+            input.Clear();
             return new ConnectionTestResult(correlation.OperationId, duplicate, false);
         }
 
@@ -157,7 +157,9 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
             Publish(correlation.OperationId, ConnectionTestProgressState.Started);
 
             var current = session.Snapshot;
-            if (current.IsConnected && Equals(current.Identity, input.Endpoint))
+            if (current.IsConnected && Equals(current.Identity, input.Endpoint)
+                && (current.AuthenticationMode ?? SshAuthenticationMode.Password) == input.AuthenticationMode
+                && (input.PrivateKey is null || string.Equals(current.KeyFingerprint, input.PrivateKey.Fingerprint, StringComparison.Ordinal)))
             {
                 var reused = await VerifyExistingSessionAsync(correlation, current.SessionId!, input.Timeout, linkedCancellation.Token)
                     .ConfigureAwait(false);
@@ -174,7 +176,8 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
 
             linkedCancellation.Token.ThrowIfCancellationRequested();
             candidate = transportFactory.Create();
-            if (candidate is not IPasswordSshTransport passwordTransport)
+            if (input.AuthenticationMode == SshAuthenticationMode.Password && candidate is not IPasswordSshTransport
+                || input.AuthenticationMode == SshAuthenticationMode.PrivateKey && candidate is not IInitialKeySshTransport)
             {
                 var unsupported = OperationResult.Failure(correlation.OperationId, OperationErrorCode.Unexpected, OperationState.Unknown);
                 await ReportTerminalAsync(correlation, unsupported, CancellationToken.None).ConfigureAwait(false);
@@ -189,7 +192,14 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                 "Authenticating the connection.",
                 CancellationToken.None).ConfigureAwait(false);
             Publish(correlation.OperationId, ConnectionTestProgressState.Connecting);
-            await passwordTransport.ConnectAsync(input.Endpoint, input.Password, input.Timeout, linkedCancellation.Token).ConfigureAwait(false);
+            if (input.PrivateKey is { } key)
+            {
+                await ((IInitialKeySshTransport)candidate).ConnectWithKeyCredentialAsync(input.Endpoint, key, input.Timeout, linkedCancellation.Token).ConfigureAwait(false);
+            }
+            else
+            {
+                await ((IPasswordSshTransport)candidate).ConnectAsync(input.Endpoint, input.Password, input.Timeout, linkedCancellation.Token).ConfigureAwait(false);
+            }
 
             await ReportAsync(
                 correlation,
@@ -208,7 +218,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
             }
 
             linkedCancellation.Token.ThrowIfCancellationRequested();
-            await session.StartAsync(input.Endpoint, candidate, input.Password, linkedCancellation.Token).ConfigureAwait(false);
+            await session.StartAsync(input.Endpoint, candidate, input, linkedCancellation.Token).ConfigureAwait(false);
             candidate = null;
             sensitiveReferenceTransferred = true;
 
@@ -271,7 +281,7 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
                 {
                     if (!sensitiveReferenceTransferred)
                     {
-                        input.Password.Clear();
+                        input.Clear();
                     }
                 }
                 finally
@@ -579,8 +589,14 @@ public sealed class ConnectionSessionLifecycle : IConnectionSessionLifecycle, IA
         long reviewRevision,
         CancellationToken cancellationToken)
     {
+        var assessment = candidate switch
+        {
+            IPasswordSshTransport passwordTransport => passwordTransport.LastHostTrustAssessment,
+            IInitialKeySshTransport key => key.LastHostTrustAssessment,
+            _ => null,
+        };
         if (failure == RemoteTransportFailureKind.HostTrust
-            && candidate is IPasswordSshTransport { LastHostTrustAssessment.Challenge: { } challenge }
+            && assessment?.Challenge is { } challenge
             && challenge.State is KnownHostTrustState.Unknown or KnownHostTrustState.Changed)
         {
             lock (cancellationLock)

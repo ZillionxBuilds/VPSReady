@@ -77,6 +77,15 @@ public static class RemoteCommandCatalog
     public const string UbuntuTimezoneAvailableList = DiagnosticCommandCatalog.UbuntuTimezoneAvailableList;
     public const string UbuntuTimezoneApply = DiagnosticCommandCatalog.UbuntuTimezoneApply;
     public const string UbuntuTimezoneVerifyRead = DiagnosticCommandCatalog.UbuntuTimezoneVerifyRead;
+    public const string ReadinessPlatformRead = DiagnosticCommandCatalog.ReadinessPlatformRead;
+    public const string ReadinessPrivilegeRead = DiagnosticCommandCatalog.ReadinessPrivilegeRead;
+    public const string ReadinessUfwRead = DiagnosticCommandCatalog.ReadinessUfwRead;
+    public const string ReadinessAuditRead = DiagnosticCommandCatalog.ReadinessAuditRead;
+    public const string ReadinessDiskRead = DiagnosticCommandCatalog.ReadinessDiskRead;
+    public const string ReadinessRebootRead = DiagnosticCommandCatalog.ReadinessRebootRead;
+    public const string ReadinessIdentityRead = DiagnosticCommandCatalog.ReadinessIdentityRead;
+    public const string ReadinessTimeSyncRead = DiagnosticCommandCatalog.ReadinessTimeSyncRead;
+    public const string ReadinessCachedUpgradeRead = DiagnosticCommandCatalog.ReadinessCachedUpgradeRead;
 
     private static readonly HashSet<string> Known = new(StringComparer.Ordinal)
     {
@@ -121,6 +130,8 @@ public static class RemoteCommandCatalog
         UbuntuTimezoneAvailableList,
         UbuntuTimezoneApply,
         UbuntuTimezoneVerifyRead,
+        ReadinessPlatformRead, ReadinessPrivilegeRead, ReadinessUfwRead, ReadinessAuditRead,
+        ReadinessDiskRead, ReadinessRebootRead, ReadinessIdentityRead, ReadinessTimeSyncRead, ReadinessCachedUpgradeRead,
     };
 
     public static bool IsKnown(string commandId) => Known.Contains(commandId);
@@ -331,6 +342,9 @@ public sealed record RemoteCommandResult
 
     [System.Text.Json.Serialization.JsonIgnore]
     public bool AptLockContended { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ReadinessProbeEvidence? ReadinessEvidence { get; init; }
 
     public override string ToString() => $"RemoteCommandResult [exit={ExitCode}, policy={OutputCapturePolicy}]";
 }

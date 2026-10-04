@@ -4,5 +4,7 @@ namespace VpsReady.Core.Remote;
 public sealed record UfwStoredSshEvidence(int ServerPort, bool Ipv6Enabled, bool SessionIsIpv6, bool AllowsIpv4, bool AllowsIpv6)
 {
     public bool HasRequiredAllows => AllowsIpv4 && (!Ipv6Enabled || AllowsIpv6) && (!SessionIsIpv6 || Ipv6Enabled);
+    /// <summary>Restricted/range coverage cannot be certified as a broad allow or definite absence.</summary>
+    public bool AmbiguousSshCoverage { get; init; }
     public override string ToString() => "[stored firewall evidence]";
 }

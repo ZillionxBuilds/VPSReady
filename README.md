@@ -95,20 +95,34 @@ machine's architecture (`x64` or `arm64`). They require the SDK from
 `global.json`; Windows also requires Git Bash (run the commands in Git Bash,
 not Command Prompt). Run the script on its named OS:
 
-| Host | Command | Executable in the printed output directory |
+| Host | Build | Fixed run command (ARM64 / x64) |
 | --- | --- | --- |
-| Windows (Git Bash) | `./scripts/build/windows.sh` | `VpsReady.Desktop.exe` |
-| macOS | `./scripts/build/macos.sh` | `VpsReady.Desktop` |
-| Linux | `./scripts/build/linux.sh` | `VpsReady.Desktop` |
+| Windows (Git Bash) | `./scripts/build/windows.sh` | `./artifacts/local-build/win-arm64/VpsReady.Desktop.exe` / `./artifacts/local-build/win-x64/VpsReady.Desktop.exe` |
+| macOS | `./scripts/build/macos.sh` | `./artifacts/local-build/osx-arm64/VpsReady.Desktop` / `./artifacts/local-build/osx-x64/VpsReady.Desktop` |
+| Linux | `./scripts/build/linux.sh` | `./artifacts/local-build/linux-arm64/VpsReady.Desktop` / `./artifacts/local-build/linux-x64/VpsReady.Desktop` |
 
 To choose the other architecture of the **same OS**, append `--arch x64` or
 `--arch arm64`, for example `./scripts/build/macos.sh --arch x64`. Each invocation
-creates a new ignored `artifacts/local-build/<rid>.*` directory, so an old
-publish cannot be mistaken for the new output. Launch the executable from that
-directory (`./VpsReady.Desktop` on macOS/Linux, or
-`./VpsReady.Desktop.exe` in Windows Git Bash). Copy the **whole directory**
+uses the fixed ignored `artifacts/local-build/<rid>/` directory. Close the app
+before rebuilding. A successful build replaces the previous generated output;
+a failed build leaves it intact, so do not interpret old output as the failed
+revision. `local-build-info.json` records RID, source revision and unsigned status;
+dirty source is explicitly marked `uncommitted-<sha>`. Concurrent local builds,
+symbolic-link output and unmarked folders are refused. Copy the **whole directory**
 when moving the app; the executable is not a single-file bundle. A Windows
 build is not runnable on macOS/Linux or vice versa.
+
+For an Apple Silicon Mac, from the checkout you intend to review:
+
+```bash
+./scripts/build/macos.sh
+./artifacts/local-build/osx-arm64/VpsReady.Desktop
+```
+
+The run command stays the same after rebuilds; no timestamp or SHA in its path.
+Build the current feature checkout to review unmerged features, not an older
+release checkout. Official candidate ZIPs remain separately SHA-named and
+checksum/provenance verified; the convenient local path is not release approval.
 
 These scripts do not sign, notarize, checksum, package, or certify a candidate.
 macOS Gatekeeper and Windows SmartScreen may warn about unsigned software;
@@ -129,6 +143,7 @@ After the Release build:
 dotnet test tests/VpsReady.UnitTests/VpsReady.UnitTests.csproj --configuration Release --no-build
 dotnet test tests/VpsReady.ScenarioTests/VpsReady.ScenarioTests.csproj --configuration Release --no-build
 dotnet format VpsReady.slnx --verify-no-changes --no-restore
+bash scripts/tests/local-build.sh
 ```
 
 Fixture-dependent tests can report skips. A skip is not a pass and does not
