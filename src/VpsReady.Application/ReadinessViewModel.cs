@@ -21,6 +21,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
     private ReadinessSnapshot? snapshot;
     private Dictionary<ReadinessCheckId, ReadinessCheckResult> liveRows = [];
     private string? observedSessionId;
+    private string diagnosticSessionId = DiagnosticCorrelationFactory.NewSessionId();
     private string? observedExternalOperation;
     private string? ownOperation;
     private string? runId;
@@ -84,6 +85,19 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
         _ => "Incomplete.",
     };
     public string EvidenceTime => snapshot is null ? "No observation yet." : $"Observed {snapshot.ObservedUtc:O}. Fresh for at most 300 monotonic seconds; no automatic recheck.";
+    public string RequiredProgress
+    {
+        get
+        {
+            lock (gate)
+            {
+                IEnumerable<ReadinessCheckResult> observations = checking ? liveRows.Values : snapshot?.Rows ?? [];
+                var requiredIds = CoreBasicReadinessProfile.Checks.Where(check => check.Required).Select(check => check.Id).ToHashSet();
+                var passed = observations.Count(row => requiredIds.Contains(row.Id) && row.State == ReadinessCheckState.Pass);
+                return $"{passed}/9 required observations Pass. Advisory/manual items never waive missing core evidence.";
+            }
+        }
+    }
     public IReadOnlyList<ReadinessRowViewModel> Rows
     {
         get
@@ -122,7 +136,9 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
             capturedGeneration = ++generation;
             ownOperation = DiagnosticCorrelationFactory.NewOperationId();
             runId = DiagnosticCorrelationFactory.NewRunId();
-            correlation = new(current.SessionId, runId, ownOperation, "validate");
+            // The application handle is not a journal-safe opaque ID. Keep a
+            // stable diagnostic pseudonym for this session, never export the handle.
+            correlation = new(diagnosticSessionId, runId, ownOperation, "validate");
         }
         RefreshPresentation();
         ReadinessSnapshot? observed = null;
@@ -131,7 +147,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
             var result = await session.RunOperationForSessionAsync(correlation.OperationId, CoreBasicReadinessProfile.TotalTimeout,
                 async (transport, operationToken) =>
                 {
-                    observed = await collector.CollectAsync(transport, correlation.SessionId, capturedGeneration, correlation,
+                    observed = await collector.CollectAsync(transport, current.SessionId, capturedGeneration, correlation,
                         row => Progress(row, capturedGeneration), operationToken).ConfigureAwait(false);
                     return observed.Execution switch
                     {
@@ -142,7 +158,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
                     };
                 }, current.SessionId, checkCancellation).ConfigureAwait(false);
 
-            observed ??= new(correlation.SessionId, capturedGeneration, CoreBasicReadinessProfile.Version, clock.GetTimestamp(), clock.GetUtcNow(),
+            observed ??= new(current.SessionId, capturedGeneration, CoreBasicReadinessProfile.Version, clock.GetTimestamp(), clock.GetUtcNow(),
                 result.Cancelled ? ReadinessExecution.Cancelled : ReadinessExecution.CollectorFailed, []);
             if (!result.Succeeded && observed.Execution == ReadinessExecution.Completed)
             {
@@ -160,7 +176,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
                     "VPS Ready", DiagnosticLevel.Information, correlation.ForStep("verify"), DiagnosticPhase.Verify,
                     result.Cancelled ? DiagnosticStatus.Cancelled : effective is ReadinessVerdict.Ready or ReadinessVerdict.ReadyWithWarnings
                         ? DiagnosticStatus.Succeeded : DiagnosticStatus.Warning,
-                    $"Read-only inspection finished: {effective}. No server changes were made. REAL VPS: NOT TESTED.",
+                    $"Read-only {CoreBasicReadinessProfile.Id} v{CoreBasicReadinessProfile.Version} inspection finished: {effective}. No server changes were made. REAL VPS: NOT TESTED.",
                     ErrorCode: result.ErrorCode?.ToStableCode(), Action: "CheckVpsReady", Verification: result.Verification), CancellationToken.None).ConfigureAwait(false);
             }
             catch { observed = WithExecution(observed, ReadinessExecution.DiagnosticsFailed); }
@@ -205,6 +221,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
     {
         lock (gate) { if (!checking || generation != expectedGeneration || disposed) { return; } liveRows[row.Id] = row; }
         OnPropertyChanged(nameof(Rows));
+        OnPropertyChanged(nameof(RequiredProgress));
     }
     private void SessionChanged(object? sender, EventArgs e)
     {
@@ -214,6 +231,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
             if (current.SessionId != observedSessionId)
             {
                 observedSessionId = current.SessionId;
+                diagnosticSessionId = DiagnosticCorrelationFactory.NewSessionId();
                 generation++;
                 activeCancellation?.Cancel();
             }
@@ -248,7 +266,7 @@ public sealed class ReadinessViewModel : ObservableObject, IDisposable
     }
     private void RefreshPresentation()
     {
-        foreach (var property in new[] { nameof(CanCheck), nameof(IsChecking), nameof(CanCancel), nameof(IsDisconnected), nameof(CanExportEvidence), nameof(Verdict), nameof(Status), nameof(Rows), nameof(EvidenceTime), nameof(OperationId), nameof(RunId) })
+        foreach (var property in new[] { nameof(CanCheck), nameof(IsChecking), nameof(CanCancel), nameof(IsDisconnected), nameof(CanExportEvidence), nameof(Verdict), nameof(Status), nameof(Rows), nameof(RequiredProgress), nameof(EvidenceTime), nameof(OperationId), nameof(RunId) })
         {
             OnPropertyChanged(property);
         }

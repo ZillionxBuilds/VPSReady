@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Local;
@@ -80,6 +81,7 @@ public sealed class InitialKeyOnlyE3Tests
                 Assert.True(exercised.Succeeded);
                 Assert.Equal(current.SessionId, session.Snapshot.SessionId);
                 ReadinessSnapshot? readiness = null;
+                var authorizedBeforeCheck = SHA256.HashData(await File.ReadAllBytesAsync(authorized));
                 var readinessResult = await session.RunOperationForSessionAsync("op-key-only-readiness", TimeSpan.FromSeconds(120), async (transport, token) =>
                 {
                     readiness = await new UbuntuReadinessCollector(sink).CollectAsync(transport, current.SessionId!, 1,
@@ -87,6 +89,8 @@ public sealed class InitialKeyOnlyE3Tests
                     return VpsReady.Core.Operations.OperationResult.Success("op-key-only-readiness", VpsReady.Core.Operations.OperationState.Unchanged);
                 }, current.SessionId!);
                 Assert.True(readinessResult.Succeeded);
+                var authorizedAfterCheck = SHA256.HashData(await File.ReadAllBytesAsync(authorized));
+                Assert.True(authorizedBeforeCheck.AsSpan().SequenceEqual(authorizedAfterCheck));
                 Assert.NotNull(readiness);
                 Assert.Equal(ReadinessExecution.Completed, readiness.Execution);
                 Assert.Equal(ReadinessCheckState.Pass, readiness.Rows.Single(row => row.Id == ReadinessCheckId.R01).State);
@@ -116,6 +120,47 @@ public sealed class InitialKeyOnlyE3Tests
                     Assert.Equal(current.SessionId, session.Snapshot.SessionId);
                 }
                 finally { await File.WriteAllTextAsync(authorized, approvedPublic); }
+                if (format == ("ed25519", 0, false, false))
+                {
+                    var sleepMarker = Environment.GetEnvironmentVariable("VPSREADY_E3_KEY_ONLY_SLEEP")!;
+                    Assert.Equal("slow-command", Path.GetFileName(sleepMarker));
+                    var commandId = RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuTimezoneCurrentRead);
+                    RemoteCommand StreamRequest(TimeSpan budget) => new(commandId, "action=current-read", budget, OutputCapturePolicy.SanitizedTruncated, 256);
+                    var capturedResult = await session.RunOperationForSessionAsync("op-key-only-streams", TimeSpan.FromSeconds(20), async (transport, cancellation) =>
+                    {
+                        var captured = await transport.ExecuteAsync(StreamRequest(TimeSpan.FromSeconds(5)), cancellation);
+                        Assert.Equal(23, captured.ExitCode);
+                        Assert.Equal("E3-STANDARD-OUTPUT\n", captured.StandardOutput);
+                        Assert.Equal("E3-STANDARD-ERROR\n", captured.StandardError);
+                        await File.WriteAllTextAsync(sleepMarker, "slow", cancellation);
+                        try
+                        {
+                            await using var probe = await ((IAuthenticatedSessionTransport)transport).CreateAuthenticatedProbeAsync(TimeSpan.FromSeconds(10), cancellation);
+                            using var cancelCommand = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+                            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => probe.ExecuteAsync(StreamRequest(TimeSpan.FromSeconds(5)), cancelCommand.Token));
+                            await using var timeoutProbe = await ((IAuthenticatedSessionTransport)transport).CreateAuthenticatedProbeAsync(TimeSpan.FromSeconds(10), cancellation);
+                            var timeoutFailure = await Assert.ThrowsAsync<RemoteTransportException>(() => timeoutProbe.ExecuteAsync(StreamRequest(TimeSpan.FromMilliseconds(750)), cancellation));
+                            Assert.Equal(RemoteTransportFailureKind.Timeout, timeoutFailure.Kind);
+                        }
+                        finally { File.Delete(sleepMarker); }
+                        return VpsReady.Core.Operations.OperationResult.Success("op-key-only-streams");
+                    }, current.SessionId!);
+                    Assert.True(capturedResult.Succeeded);
+                }
+                await session.DisconnectAsync();
+                var changedAssessment = await trust.AssessAsync(new(endpoint.Host, port), new("SHA256:fixture-different-key"), CancellationToken.None);
+                await trust.ReplaceChangedAsync(changedAssessment.Challenge!, CancellationToken.None);
+                File.Delete(workspace.PrivateKeyPath); // Only this uniquely owned disposable key, never an Owner file.
+                await GenerateAsync(workspace.PrivateKeyPath, format.Item1, format.Item2, marker, format.Item4);
+                var changedUnlock = marker.Length == 0 ? null : new PasswordSessionSecret(marker);
+                using var rejectedSelection = await new InitialPrivateKeySelector().SelectAsync(workspace.PrivateKeyPath, changedUnlock, CancellationToken.None);
+                changedUnlock?.Clear();
+                using var changedInput = ConnectionInputValidator.ValidatePrivateKey(endpoint.Host, port.ToString(System.Globalization.CultureInfo.InvariantCulture), user,
+                    rejectedSelection.Credential!, TimeSpan.FromSeconds(15)).Connection!;
+                var changedLogin = await lifecycle.TestConnectionAsync(changedInput);
+                Assert.False(changedLogin.Result.Succeeded);
+                Assert.Equal(VpsReady.Core.Operations.OperationErrorCode.HostTrust, changedLogin.Result.ErrorCode);
+                Assert.False(session.Snapshot.IsConnected);
                 Assert.All(sink.Events, entry =>
                 {
                     Assert.DoesNotContain(marker.Length == 0 ? "unused-disposable-marker" : marker, entry.Message, StringComparison.Ordinal);

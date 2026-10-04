@@ -72,6 +72,7 @@
             <StackPanel Spacing="12">
               <TextBlock Classes="section-title" Text="{Binding Readiness.Profile}" />
               <TextBlock AutomationProperties.Name="VPS Ready verdict" Text="{Binding Readiness.Status}" TextWrapping="Wrap" FontWeight="SemiBold" />
+              <TextBlock AutomationProperties.Name="Required readiness progress" Text="{Binding Readiness.RequiredProgress}" TextWrapping="Wrap" />
               <TextBlock Text="{Binding Readiness.EvidenceTime}" TextWrapping="Wrap" />
               <TextBlock Text="REAL VPS: NOT TESTED. This checklist does not certify provider controls, workload fitness or server-wide authentication policy." TextWrapping="Wrap" />
               <WrapPanel ItemSpacing="8" LineSpacing="8">

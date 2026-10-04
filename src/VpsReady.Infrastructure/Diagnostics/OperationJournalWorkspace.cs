@@ -185,7 +185,9 @@ public sealed partial class OperationJournalWorkspace : ISanitizedDiagnosticSink
             $"- Expected: Describe the expected result without server identifiers or credentials.",
             $"- Observed safe summary: {Safe(summary)}",
             $"- Verification/recovery: {terminal?.Verification?.ToString() ?? "not-recorded"} / {terminal?.Recovery?.ToString() ?? "not-recorded"}; review the local sanitized support bundle before sharing.",
-            "- Evidence boundary: REAL VPS: NOT TESTED unless this report was produced by Owner testing of a release candidate.");
+            "- Evidence boundary: REAL VPS: NOT TESTED unless this report was produced by Owner testing of a release candidate.")
+            + string.Concat(selected.Where(entry => entry.EventId == DiagnosticEventCatalog.ReadinessRowObserved)
+                .Select(entry => Environment.NewLine + "- Readiness observation: " + Safe(entry.Message)));
     }
 
     public async Task<SupportBundleExportResult> ExportSanitizedSupportBundleAsync(

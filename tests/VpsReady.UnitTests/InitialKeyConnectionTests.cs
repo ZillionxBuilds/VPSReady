@@ -82,6 +82,38 @@ public sealed class InitialKeyConnectionTests
         Assert.DoesNotContain("/disposable-fixture", vm.Status, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task DelayedPrivateKeySelectionCannotReviveIdentityAfterModeChange()
+    {
+        await using var session = new ApplicationSession();
+        var transport = new KeyTransport();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new Factory(transport), new Sink());
+        var selector = new DelayedSelector();
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, initialKeySelector: selector) { IsPrivateKeyMode = true };
+        var pending = vm.SelectInitialPrivateKeyAsync("/disposable-fixture/private-A");
+        await selector.Started.Task;
+        vm.IsPasswordMode = true;
+        var key = new Key();
+        selector.Completion.SetResult(new(key, null));
+        await pending;
+        Assert.True(key.IsCleared);
+        Assert.Null(vm.SelectedKeyFingerprint);
+        Assert.Equal("No private key selected.", vm.KeyFileName);
+        Assert.Null(lifecycle.PendingHostTrustReview);
+        Assert.Equal(0, transport.ConnectCalls);
+    }
+
+    private sealed class DelayedSelector : IInitialPrivateKeySelector
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<InitialPrivateKeySelectionResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task<InitialPrivateKeySelectionResult> SelectAsync(string path, IPasswordCredential? passphrase, CancellationToken cancellationToken)
+        {
+            Started.SetResult();
+            return Completion.Task;
+        }
+    }
+
     private sealed class EncryptedSelector : IInitialPrivateKeySelector
     {
         public PasswordSessionSecret? SubmittedUnlock { get; private set; }

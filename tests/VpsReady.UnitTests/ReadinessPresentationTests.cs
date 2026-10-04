@@ -96,6 +96,53 @@ public sealed class ReadinessPresentationTests
     }
 
     [Fact]
+    public async Task RapidCheckAndMutationOwnershipNeverStartOverlappingCollection()
+    {
+        await using var session = await Connected();
+        var collector = new ControlledCollector { Hold = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var vm = new ReadinessViewModel(session, collector, new Sink(), _ => { });
+        var first = vm.CheckAsync();
+        await vm.CheckAsync();
+        Assert.Equal(1, collector.Calls);
+        Assert.True(vm.CanCancel);
+        collector.Hold.SetResult();
+        await first;
+        Assert.StartsWith("9/9", vm.RequiredProgress, StringComparison.Ordinal);
+        vm.Filter = ReadinessFilter.OptionalManual;
+        Assert.StartsWith("9/9", vm.RequiredProgress, StringComparison.Ordinal);
+        var holdMutation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutation = session.RunOperationAsync("op-held-mutation", TimeSpan.FromSeconds(5), async (_, _) =>
+        {
+            await holdMutation.Task;
+            return OperationResult.Success("op-held-mutation");
+        });
+        Assert.False(vm.CanCheck);
+        await vm.CheckAsync();
+        Assert.Equal(1, collector.Calls);
+        holdMutation.SetResult();
+        await mutation;
+        Assert.Equal(ReadinessVerdict.Stale, vm.Verdict);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SuspendOrWallClockRollbackOnlyInvalidatesAndNeverRunsAutomatically(bool suspend)
+    {
+        var clock = new Clock();
+        await using var session = await Connected();
+        var collector = new ControlledCollector(clock);
+        using var vm = new ReadinessViewModel(session, collector, new Sink(), _ => { }, clock);
+        await vm.CheckAsync();
+        Assert.Equal(ReadinessVerdict.Ready, vm.Verdict);
+        if (suspend) { clock.Timestamp = 10; clock.Utc = clock.Utc.AddSeconds(10); }
+        else { clock.Timestamp = 1; clock.Utc = clock.Utc.AddMinutes(-5); }
+        clock.Fire();
+        Assert.Equal(ReadinessVerdict.Stale, vm.Verdict);
+        Assert.Equal(1, collector.Calls);
+    }
+
+    [Fact]
     public async Task FiltersAndTypedRoutesNeverDispatchRemoteCommandsOrGrantConsent()
     {
         await using var session = await Connected();
@@ -181,9 +228,17 @@ public sealed class ReadinessPresentationTests
     private sealed class Clock : TimeProvider
     {
         public long Timestamp { get; set; }
+        public DateTimeOffset Utc { get; set; } = new(2040, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private Action? tick;
+        public void Fire() => tick?.Invoke();
+        public override DateTimeOffset GetUtcNow() => Utc;
         public override long TimestampFrequency => 1;
         public override long GetTimestamp() => Timestamp;
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) => new Timer();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            tick = () => callback(state);
+            return new Timer();
+        }
         private sealed class Timer : ITimer
         {
             public bool Change(TimeSpan dueTime, TimeSpan period) => true;

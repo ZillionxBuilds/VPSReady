@@ -1,5 +1,9 @@
 using System.Text;
 using System.Text.Json;
+using System.IO.Compression;
+using VpsReady.Application;
+using VpsReady.Core.Local;
+using VpsReady.Infrastructure.Diagnostics;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Remote;
 using VpsReady.Infrastructure.Remote;
@@ -130,6 +134,87 @@ public sealed class ReadinessCollectorTests
         Assert.Equal("configuration-original", host.ConfigurationDigest);
     }
 
+    [Fact]
+    public async Task FreshLoginCannotPassWhenCleanDisposalExceedsWholeLoginBudget()
+    {
+        var clock = new Clock();
+        await using var host = new ReadOnlyFixtureHost { AfterProbeDispose = () => clock.Timestamp = 21 };
+        var snapshot = await new UbuntuReadinessCollector(new Recorder(), clock).CollectAsync(host, "ses_fixture", 1,
+            Correlation(), null, CancellationToken.None);
+        var login = snapshot.Rows.Single(row => row.Id == ReadinessCheckId.R03);
+        Assert.Equal(ReadinessCheckState.Unknown, login.State);
+        Assert.Equal(ReadinessReason.ProbeTimeout, login.Reason);
+        Assert.Equal(ReadinessVerdict.Incomplete, ReadinessEvaluator.Evaluate(snapshot, true, "ses_fixture", 1, clock));
+        Assert.Equal(1, host.ProbeDisposals);
+    }
+
+    [Fact]
+    public async Task MixedReadinessExportsRetainTypedFindingsAndCorrelationWithoutSeededPrivateData()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "VpsReady.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var seeds = new[] { "fixture-private-host", "fixture-private-user", "/private/fixture/key-A", "disposable-readiness-unlock" };
+            var redactor = new FailClosedRedactor();
+            foreach (var seed in seeds) { redactor.RegisterSensitiveValue(seed); }
+            using var journal = new OperationJournalWorkspace(new ExportPaths(root), redactor, new ExportClock(),
+                new DiagnosticEnvironment("0.1.0-test", "vp123-review", "test-os", "test-arch"), new ExportFolderOpener());
+            var sink = new RedactingDiagnosticSink(redactor, journal);
+            await using var session = new ApplicationSession();
+            await session.StartAsync(new(seeds[0], 22, seeds[1]), new ReadOnlyFixtureHost());
+            using var vm = new ReadinessViewModel(session, new UbuntuReadinessCollector(sink), sink, _ => { });
+            await vm.CheckAsync();
+            Assert.Equal(ReadinessVerdict.ReadyWithWarnings, vm.Verdict);
+            var report = journal.CreateSafeIssueReport(vm.RunId, vm.OperationId);
+            Assert.Contains("core-basic-v1 v1.0", report, StringComparison.Ordinal);
+            Assert.Contains("R03: Pass", report, StringComparison.Ordinal);
+            Assert.Contains("A02: Warn", report, StringComparison.Ordinal);
+            Assert.Contains("upstream freshness NOT PROVED", report, StringComparison.Ordinal);
+            Assert.Contains(vm.OperationId!, report, StringComparison.Ordinal);
+            Assert.Contains(vm.RunId!, report, StringComparison.Ordinal);
+            var bundle = await journal.ExportSanitizedSupportBundleAsync(vm.RunId, Path.Combine(root, "exports"), CancellationToken.None, vm.OperationId);
+            using var archive = ZipFile.OpenRead(bundle.BundlePath);
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open());
+                var text = await reader.ReadToEndAsync();
+                foreach (var seed in seeds) { Assert.DoesNotContain(seed, text, StringComparison.Ordinal); }
+                Assert.DoesNotContain("Asia/Bangkok", text, StringComparison.Ordinal);
+                Assert.DoesNotContain("ufw-user", text, StringComparison.Ordinal);
+            }
+            foreach (var seed in seeds) { Assert.DoesNotContain(seed, report, StringComparison.Ordinal); }
+            foreach (var activity in journal.GetActivity())
+            {
+                foreach (var seed in seeds) { Assert.DoesNotContain(seed, activity.Message, StringComparison.Ordinal); }
+            }
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private sealed class ExportPaths(string root) : IPlatformPaths
+    {
+        public string GetStateDirectory() => GetDirectory(LocalStorageArea.State);
+        public string GetDirectory(LocalStorageArea area) => Path.Combine(root, area.ToString().ToLowerInvariant());
+        public string ResolvePath(LocalStorageArea area, string relativePath) => Path.Combine(GetDirectory(area), relativePath);
+    }
+
+    private sealed class ExportClock : IClock
+    {
+        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
+    }
+    private sealed class ExportFolderOpener : IDiagnosticFolderOpener
+    {
+        public Task OpenAsync(string directory, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class Clock : TimeProvider
+    {
+        public long Timestamp { get; set; }
+        public override long TimestampFrequency => 1;
+        public override long GetTimestamp() => Timestamp;
+    }
+
     private static CorrelationIds Correlation() => new("ses_fixture", "run_fixture", "op_fixture", "validate");
     private static Task<ReadinessSnapshot> Collect(ReadOnlyFixtureHost host, Recorder sink) => new UbuntuReadinessCollector(sink)
         .CollectAsync(host, "ses_fixture", 1, Correlation(), null, CancellationToken.None);
@@ -159,6 +244,7 @@ public sealed class ReadinessCollectorTests
         public int LoginAttempts { get; private set; }
         public int ProbeDisposals { get; private set; }
         public int MainDisposals { get; private set; }
+        public Action? AfterProbeDispose { get; init; }
         public List<string> Commands { get; } = [];
         public string ConfigurationDigest { get; } = "configuration-original";
         public async Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken)
@@ -197,7 +283,7 @@ public sealed class ReadinessCollectorTests
             public Task<RemoteCommandResult> ExecuteAsync(RemoteCommand command, CancellationToken cancellationToken) =>
                 command.Id.Value == RemoteCommandCatalog.SshConnectionTest ? Task.FromResult(new RemoteCommandResult(0, "", "", TimeSpan.Zero))
                 : throw new InvalidOperationException("Unexpected probe command ID.");
-            public ValueTask DisposeAsync() { owner.ProbeDisposals++; return ValueTask.CompletedTask; }
+            public ValueTask DisposeAsync() { owner.ProbeDisposals++; owner.AfterProbeDispose?.Invoke(); return ValueTask.CompletedTask; }
         }
     }
 }

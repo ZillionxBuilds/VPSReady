@@ -80,3 +80,16 @@ The HTML links to the exact-candidate specification, current user guide and Owne
 The generated browser UI was exercised with Chromium/Playwright for navigation, keyboard tabs, initial empty results, recording validation, filters, safety hold, JSON/Markdown export, import/schema rejection, literal handling of imported markup, print expansion and mobile layout. This is document-UI verification, NOT VPSReady product tests or Owner E5. The review browser blocked direct `file://` and loopback navigation; in-memory rendering was used without bypassing browser policy. Actual file-origin persistence, Safari and native printing were not certified. Keep JSON backups.
 
 Only the HTML and this guide belong in Git. Synthetic browser-QA results and real Owner result/evidence files must not be committed automatically.
+
+## Separate VP-123 runtime addendum
+
+The new [key authentication / VPS Ready HTML addendum](KEY_AUTH_READINESS_MANUAL_ADDENDUM.html)
+is **TP-VPSREADY-KA-RC-001 revision 1.0**, with 35 new KA/RC/UX manual cases,
+all initially NOT_RUN. It is a static offline procedure, not another tracking
+system or automatic result importer. Its new runtime needs its own exact-SHA
+review/accepted Owner candidate; the frozen `0df6b15` application above cannot
+test this extension. The original 60 cases, storage keys, JSON/results and
+qualification remain unchanged. Do not relabel them or import old PASS into
+the new candidate. Offline native review is E4, not Owner E5. Connected real-VPS
+tests wait for external acceptance, authorized integration and new qualification.
+REAL VPS: NOT TESTED.

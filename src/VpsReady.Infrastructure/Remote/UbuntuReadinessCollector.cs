@@ -25,7 +25,7 @@ public sealed class UbuntuReadinessCollector(IDiagnosticSink diagnostics, TimePr
         {
             await WriteAsync(new(DiagnosticEventCatalog.ReadinessStarted, "VPS Ready", DiagnosticLevel.Information,
                 correlation.ForStep("validate"), DiagnosticPhase.Validate, DiagnosticStatus.Started,
-                "Explicit read-only Core Basic inspection started. No server changes are authorized.", Action: "CheckVpsReady")).ConfigureAwait(false);
+                $"Explicit read-only {CoreBasicReadinessProfile.Id} v{CoreBasicReadinessProfile.Version} inspection started. No server changes are authorized.", Action: "CheckVpsReady")).ConfigureAwait(false);
 
             var platform = await ProbeAsync(RemoteCommandCatalog.ReadinessPlatformRead).ConfigureAwait(false);
             unsupported = platform?.ReadinessEvidence?.IsUbuntu == false;
@@ -166,16 +166,23 @@ public sealed class UbuntuReadinessCollector(IDiagnosticSink diagnostics, TimePr
                 using var loginCancellation = CancellationTokenSource.CreateLinkedTokenSource(linked.Token, loginDeadline.Token);
                 try
                 {
-                    await using var probe = await authenticated.CreateAuthenticatedProbeAsync(budget, loginCancellation.Token).ConfigureAwait(false);
+                    RemoteCommandResult result;
+                    await using (var probe = await authenticated.CreateAuthenticatedProbeAsync(budget, loginCancellation.Token).ConfigureAwait(false))
+                    {
+                        linked.Token.ThrowIfCancellationRequested();
+                        var minimumBudget = Remaining(CoreBasicReadinessProfile.ProbeTimeout);
+                        var loginRemaining = budget - clock.GetElapsedTime(startedLogin);
+                        if (loginRemaining <= TimeSpan.Zero) { throw new TimeoutException(); }
+                        minimumBudget = minimumBudget < loginRemaining ? minimumBudget : loginRemaining;
+                        var minimumCommand = new RemoteCommand(RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.SshConnectionTest), "read_only=true", minimumBudget, OutputCapturePolicy.MetadataOnly, 0);
+                        result = await probe.ExecuteAsync(minimumCommand, loginCancellation.Token).ConfigureAwait(false);
+                    }
                     linked.Token.ThrowIfCancellationRequested();
-                    var minimumBudget = Remaining(CoreBasicReadinessProfile.ProbeTimeout);
-                    var loginRemaining = budget - clock.GetElapsedTime(startedLogin);
-                    if (loginRemaining <= TimeSpan.Zero) { throw new TimeoutException(); }
-                    minimumBudget = minimumBudget < loginRemaining ? minimumBudget : loginRemaining;
-                    var minimumCommand = new RemoteCommand(RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.SshConnectionTest), "read_only=true", minimumBudget, OutputCapturePolicy.MetadataOnly, 0);
-                    var result = await probe.ExecuteAsync(minimumCommand, loginCancellation.Token).ConfigureAwait(false);
-                    linked.Token.ThrowIfCancellationRequested();
-                    if (loginDeadline.IsCancellationRequested) { throw new TimeoutException(); }
+                    if (loginDeadline.IsCancellationRequested || clock.GetElapsedTime(startedLogin) >= budget) { throw new TimeoutException(); }
+                    await WriteAsync(new(DiagnosticEventCatalog.CommandCompleted, "VPS Ready", DiagnosticLevel.Information,
+                        correlation.ForStep("fresh_login"), DiagnosticPhase.Verify, result.Succeeded ? DiagnosticStatus.Succeeded : DiagnosticStatus.Warning,
+                        "Separate active-method authentication and minimum command finished; independent connection disposed. No remote identity or output retained.",
+                        RemoteCommandCatalog.SshConnectionTest, Action: "CheckVpsReady", Duration: clock.GetElapsedTime(startedLogin), ExitCode: result.ExitCode)).ConfigureAwait(false);
                     state = result.Succeeded ? ReadinessCheckState.Pass : ReadinessCheckState.Unknown;
                     reason = result.Succeeded ? ReadinessReason.FreshLoginVerified : ReadinessReason.UnreadableEvidence;
                 }
@@ -201,7 +208,8 @@ public sealed class UbuntuReadinessCollector(IDiagnosticSink diagnostics, TimePr
             // cannot silently certify the check as complete.
             await WriteAsync(new(DiagnosticEventCatalog.ReadinessRowObserved, "VPS Ready", DiagnosticLevel.Information,
                 correlation.ForStep(id.ToString()), DiagnosticPhase.Verify, state == ReadinessCheckState.Pass ? DiagnosticStatus.Succeeded : DiagnosticStatus.Warning,
-                $"{id}: {state}. {row.ReasonCode}. Read-only evidence; no server changes.",
+                $"{id}: {state}. {row.ReasonCode}. Source={source}." + (id == ReadinessCheckId.A02
+                    ? $" Cached upgrades={cachedUpgradeCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}; upstream freshness NOT PROVED." : "") + " Read-only evidence; no server changes.",
                 ErrorCode: state == ReadinessCheckState.Pass ? null : row.ReasonCode, Action: "CheckVpsReady")).ConfigureAwait(false);
             rows[id] = row;
             progress?.Invoke(row);

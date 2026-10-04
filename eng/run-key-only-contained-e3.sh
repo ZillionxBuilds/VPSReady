@@ -27,6 +27,19 @@ unset fixture_unlock
 chmod 711 "$fixture_root"
 mkdir -m 755 "$fixture_root/authorized"
 authorized="$fixture_root/authorized/key-only-approved.pub"
+mkdir -m 755 "$fixture_root/bin"
+sleep_marker="$fixture_root/slow-command"
+cat > "$fixture_root/bin/timedatectl" <<'STUB'
+#!/bin/sh
+if [ "$1" = show ] && [ "$2" = --property=Timezone ] && [ "$3" = --value ]; then
+  if [ -f "$VPSREADY_E3_KEY_ONLY_SLEEP" ]; then sleep 30; fi
+  printf 'E3-STANDARD-OUTPUT\n'
+  printf 'E3-STANDARD-ERROR\n' >&2
+  exit 23
+fi
+exec /usr/bin/timedatectl "$@"
+STUB
+chmod 755 "$fixture_root/bin/timedatectl"
 mkdir -p /run/sshd
 ssh-keygen -q -t ed25519 -N '' -f "$fixture_root/host" >/dev/null
 port="$(shuf -i 42000-52000 -n 1)"
@@ -49,6 +62,7 @@ PermitRootLogin no
 AllowUsers $fixture_user
 PrintMotd no
 LogLevel ERROR
+SetEnv PATH=$fixture_root/bin:/usr/bin:/bin VPSREADY_E3_KEY_ONLY_SLEEP=$sleep_marker
 CONFIG
 /usr/sbin/sshd -t -f "$fixture_root/sshd_config"
 effective="$(/usr/sbin/sshd -T -f "$fixture_root/sshd_config")"
@@ -71,15 +85,15 @@ ssh-keyscan -T 1 -p "$port" 127.0.0.1 >/dev/null 2>&1
 # file contents, private material and remote identity are never exported.
 configuration_digest() {
   local roots=()
-  for path in /etc/ssh /etc/apt /var/lib/apt /var/cache/apt /var/lib/dpkg /etc/ufw /etc/default/ufw; do
+  for path in /etc/ssh /etc/apt /var/lib/apt /var/cache/apt /var/lib/dpkg /etc/ufw /etc/default/ufw /etc/sudoers /etc/sudoers.d /etc/hostname /etc/timezone; do
     if [[ -e "$path" ]]; then roots+=("$path"); fi
   done
-  { find "${roots[@]}" -type f -print0 | sort -z | xargs -0 sha256sum; sha256sum "$fixture_root/sshd_config"; } | sha256sum | cut -d ' ' -f1
+  { find "${roots[@]}" -type f -print0 | sort -z | xargs -0 sha256sum; sha256sum "$fixture_root/sshd_config"; if [[ -f /etc/localtime ]]; then sha256sum /etc/localtime; fi; } | sha256sum | cut -d ' ' -f1
 }
 before_readiness_digest="$(configuration_digest)"
 result_file="key-only-production-$(date -u +%Y%m%dT%H%M%SZ).trx"
 VPSREADY_E3_KEY_ONLY=1 VPSREADY_E3_KEY_ONLY_USER="$fixture_user" \
-  VPSREADY_E3_KEY_ONLY_PORT="$port" VPSREADY_E3_KEY_ONLY_AUTHORIZED="$authorized" \
+  VPSREADY_E3_KEY_ONLY_PORT="$port" VPSREADY_E3_KEY_ONLY_AUTHORIZED="$authorized" VPSREADY_E3_KEY_ONLY_SLEEP="$sleep_marker" \
   dotnet test tests/VpsReady.UnitTests --configuration Release --filter 'FullyQualifiedName~InitialKeyOnlyE3Tests' \
     --logger "trx;LogFileName=$result_file" --results-directory artifacts/verification/123/e3
 after_readiness_digest="$(configuration_digest)"
@@ -103,6 +117,8 @@ explicit_unknown_host_denial_and_retry=PASS
 fresh_login_and_reconnect_from_validated_snapshot=PASS
 production_readiness_required_access_and_no_sudo_unknown=PASS
 rejected_new_key_auth_preserves_main_session_no_fallback=PASS
+changed_host_trust_blocks_initial_key_promotion=PASS
+key_only_streams_exit_cancellation_timeout=PASS
 readonly_configuration_package_digest_unchanged=PASS
 readonly_configuration_package_sha256=$after_readiness_digest
 REAL VPS: NOT TESTED

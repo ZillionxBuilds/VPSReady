@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VP-123 key authentication and readiness — separate manual addendum</title>
+<style>
+body{font:16px/1.55 system-ui,sans-serif;color:#17253d;background:#f5f7fb;margin:0}main{max-width:1100px;margin:auto;padding:24px}
+section{background:white;border:1px solid #d5deeb;border-radius:12px;padding:20px;margin:20px 0}h1,h2{line-height:1.2}a{color:#145ac1}
+.notice{border-left:5px solid #ad5d00;background:#fff5df;padding:16px}.table{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border:1px solid #cbd6e5;padding:10px;text-align:left;vertical-align:top}th{background:#eaf0fa}td:last-child{white-space:nowrap;font-weight:600}
+@media print{body{background:white}section{break-inside:avoid}main{padding:0}th,td{font-size:10px}}
+</style></head><body><main>
+<h1>Key authentication and VPS Ready</h1>
+<p>TP-VPSREADY-KA-RC-001 · revision 1.0 · 2026-10-04 · VP-123 / F02 extension / F11</p>
+<p class="notice"><strong>REAL VPS: NOT TESTED.</strong> This separate addendum is for the new VP-123 runtime, not the old qualified 0df6b15 archive. All 35 new manual outcomes are NOT_RUN. Existing 60-case runbook, saved JSON/results and application evidence remain unchanged and attributable only to their own tested binary.</p>
+<section><h2>Candidate and authority</h2>
+<p>Review phase: feature/123-key-auth-readiness, one PR to release. Record the exact candidate SHA, ZIP name and SHA-256 from its manifest/Workpad. Do not substitute a documentation SHA or the old Owner ZIP. Offline native review is E4, not Owner E5 or independent QA.</p>
+<p>Connected Owner tests begin only after external acceptance, authorized release integration and a freshly qualified exact-SHA Owner candidate. Use the <a href="OWNER_VPS_TEST_PROTOCOL.md">staged Owner protocol</a>. No real VPS, public SSH target, provider console or credentials are used during implementation. No main/stable promotion is authorized by this document.</p>
+<p><a href="OWNER_MANUAL_TEST_RUNBOOK.html">Original frozen runbook</a> · <a href="../user-guide/V0.1_USER_AND_TROUBLESHOOTING_GUIDE.md">Current user guide</a> · <a href="https://github.com/ZillionxBuilds/VPSReady/issues/123">Canonical #123</a></p>
+</section>
+<section><h2>Execution prerequisites and record</h2>
+<ol><li>Verify exact artifact/manifest/checksum and signing/notarization limits. Record local OS/RID, candidate SHA, operator alias and UTC start time in a separate local worksheet.</li>
+<li>Offline first: disconnected fields, invalid synthetic local key, disabled Check, navigation and safe diagnostics. Use disposable local fixtures, not everyday keys/config.</li>
+<li>For later authorized E5 only: fresh disposable Ubuntu, no production data, independent provider rescue/reinstall, snapshot recommendation and separate ordinary SSH control session. Verify host fingerprint independently. Do not force missing/dangerous coverage.</li>
+<li>Use already authorized key-only test access for the key cases; do not enable password authentication to make them pass. Unknown/changed trust must fail closed. Do not regenerate host keys, edit sudoers or reboot a real machine merely to induce coverage.</li>
+<li>For each case, record actual observations, safe evidence alias, operation/error ID, elapsed time, PASS/FAIL/BLOCKED_ENVIRONMENT/NOT_RUN, defect/retest reference and operator/time. Expected behavior alone is never PASS.</li>
+<li>Stop on leakage, wrong target, false readiness, identity uncertainty, lost access or unexplained mutation. Preserve access and sanitized evidence before any cleanup. Review every report/bundle before sharing; never enter credentials, full keys, raw endpoints/accounts/paths/config or provider details.</li></ol>
+<p>This static offline document executes no SSH, reads no clipboard, stores/imports no results, sends no telemetry and updates no GitHub state. Print/save a separate worksheet; it does not reinterpret old runbook JSON or provide an E5 approval.</p>
+</section>
+<section><h2>Authentication — KA-T01–12</h2><div class="table"><table>
+<thead><tr><th>ID</th><th>Procedure / fixture</th><th>Expected observation and recovery</th><th>New manual outcome</th></tr></thead><tbody>
+<tr><td>KA-T01</td><td>Disconnected key-only Connection, valid standalone Ed25519; password/kbdinteractive OFF.</td><td>Explicit trust then authenticated minimum command promotes main session; no password/deployment requirement.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T02</td><td>First-seen controlled host; review, accept, explicitly retry.</td><td>First attempt denied; accepting alone stays disconnected; retry verifies before success.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T03</td><td>Reject trust or use an independently controlled changed-trust fixture.</td><td>No promotion/credential dispatch to untrusted host, old state not actionable. Never force a real-host key change.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T04</td><td>Plain/encrypted OpenSSH Ed25519 and RSA2048/3072/4096; plain RSA PKCS#1 PEM; missing/wrong unlock and unsupported input.</td><td>Supported correct unlock works, RSA SHA-2; errors safe/local, no password or agent fallback.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T05</td><td>No .pub; public/corrupt/oversized/linked/private-B selections in disposable local fixtures.</td><td>Private-derived identity works; negatives refused without companion creation/permission changes.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T06</td><td>Separate Password-mode success/failure/trust/cancel fixture.</td><td>Existing behavior preserved with only the selected method; no key/agent fallback.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T07</td><td>Change endpoint/auth/key during a delayed controlled attempt.</td><td>Old completion/trust/confirmations cannot revive or target new identity; inspect operation IDs.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T08</td><td>A connected; replace only disposable selected path with B; probe/reconnect.</td><td>Captured validated A remains the session identity, never silently B. Re-select via explicit reconnect for a new identity.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T09</td><td>Valid key-only account without root/sudo.</td><td>Login/readable facts succeed, privileged checks UNKNOWN; no password/root/sudoers changes.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T10</td><td>Explicit readiness fresh login; independent deployment selection differs.</td><td>Active initial auth identity used once with trust/minimum/clean disposal; main session intact.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T11</td><td>Controlled fresh reconnect and blind simulated reboot/failure cases; real reboot only at authorized protocol stage.</td><td>Fresh key graph, finite recovery, definitive auth/trust stop; absent lease rejected before reboot dispatch.</td><td>NOT_RUN</td></tr>
+<tr><td>KA-T12</td><td>Parse/unlock/login/cancel/disconnect/close; disposable sensitivity seeds.</td><td>Owned inputs cleared; no secrets/raw identities/paths in journal/report/bundle/errors/artifacts. Do not upload real keys.</td><td>NOT_RUN</td></tr>
+</tbody></table></div></section>
+<section><h2>Readiness — RC-T01–17</h2><div class="table"><table>
+<thead><tr><th>ID</th><th>Procedure / fixture</th><th>Expected observation and recovery</th><th>New manual outcome</th></tr></thead><tbody>
+<tr><td>RC-T01</td><td>Open VPS Ready disconnected.</td><td>Visible page/Connect first; Check disabled; no calls or stale green.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T02</td><td>Controlled complete nine-required/all-advisory PASS model.</td><td>Ready with exact profile/session/time; manual exclusions still visible, not security certification.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T03</td><td>Inactive UFW, pending reboot or low writable root fixture.</td><td>NeedsAttention, failed row/reason/route; completed Check is not healthy-server success.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T04</td><td>Denied/malformed/truncated/missing/timeout required probe.</td><td>Incomplete, never Ready; obtained independent facts retained. Do not weaken privilege for coverage.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T05</td><td>Nine core PASS; Password mode or cached advice unknown.</td><td>ReadyWithWarnings; key-only server is not a password failure.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T06</td><td>Non-Ubuntu or custom unsupported firewall fixture.</td><td>Unsupported/incomplete profile, no insecurity assertion or auto-install.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T07</td><td>Controlled missing/duplicate ID or altered policy.</td><td>Fail-closed validation; no score/manual waiver creates Ready.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T08</td><td>Wait 300 seconds; controlled clock/suspend/resume.</td><td>Stale from monotonic authority/discontinuity, no wall-clock rollback revival or automatic recheck.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T09</td><td>Delayed Check, Cancel/timeout/disconnect/new session.</td><td>Partial incomplete/stale only, no old publication/wrong-session context; one terminal event.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T10</td><td>Explicit existing-tab mutation, including controlled failure/cancel after effect.</td><td>Whole report stale; navigation alone does not make Pass; explicit recheck required.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T11</td><td>Double Check or Check while session mutation active.</td><td>No overlap; visible busy/cancel behavior and finite cleanup.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T12</td><td>Source/range/NAT/IPv4/IPv6/conflicting policy models.</td><td>Server-side identity and conservative policy; no show-added shortcut or Anywhere widening; new login needed.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T13</td><td>Cached zero-upgrades with absent/stale upstream provenance.</td><td>Warning, not patched/up-to-date claim; no apt update/check/cache write.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T14</td><td>1 GiB boundary, read-only root; 2 GiB/10% advisory models.</td><td>Exact inclusive/exclusive byte comparisons, no rounding/overflow or workload-fit promise.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T15</td><td>NTP enabled but actual sync false/unavailable.</td><td>Warn/Unknown, not synchronized Pass or auto-service change.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T16</td><td>Controlled local journal failure.</td><td>Incomplete with local diagnostic guidance, no remote-unhealthy inference or success export.</td><td>NOT_RUN</td></tr>
+<tr><td>RC-T17</td><td>Mixed-result Safe Issue Report and explicitly local support ZIP.</td><td>Profile/check/status/run/operation correlation and safe reasons; no raw output/config/identity/paths/secrets.</td><td>NOT_RUN</td></tr>
+</tbody></table></div></section>
+<section><h2>Navigation and native UX — UX-T01–06</h2><div class="table"><table>
+<thead><tr><th>ID</th><th>Procedure / fixture</th><th>Expected observation and recovery</th><th>New manual outcome</th></tr></thead><tbody>
+<tr><td>UX-T01</td><td>Inspect every non-Pass row's route/guidance.</td><td>Appropriate existing page/section or explicit manual/unsupported explanation; no dead fix button.</td><td>NOT_RUN</td></tr>
+<tr><td>UX-T02</td><td>Click every route; compare fields/confirmations and dispatch spies.</td><td>Correct focus/scroll, ZERO config mutations, automatic confirmations or changed endpoint/port/key/source fields.</td><td>NOT_RUN</td></tr>
+<tr><td>UX-T03</td><td>Old A result while connected to B.</td><td>Discard old context, plain navigation only, no A data/operation transferred.</td><td>NOT_RUN</td></tr>
+<tr><td>UX-T04</td><td>Explicit separate configuration; Back to VPS Ready; Check.</td><td>Stale until recheck, then actual new observations rather than navigation-created green.</td><td>NOT_RUN</td></tr>
+<tr><td>UX-T05</td><td>Existing shell pages, keyboard/assistive labels, progress/cancel.</td><td>Functional navigation, text states and read-only limits visible; not color-only.</td><td>NOT_RUN</td></tr>
+<tr><td>UX-T06</td><td>Actual macOS ARM64 review package offline: key fields, invalid synthetic key, disabled readiness, guided navigation and diagnostics.</td><td>Native controls verified separately from successful contained E3; no browser/runtime dependency added.</td><td>NOT_RUN</td></tr>
+</tbody></table></div></section>
+<section><h2>Completion and traceability</h2>
+<p>New manual counts: 35 NOT_RUN, 0 PASS, 0 FAIL, 0 BLOCKED_ENVIRONMENT. These are initial planning states, not automated-result imports. Record a separate dated execution, do not overwrite historical results. Unavailable environment is honestly NOT_RUN/BLOCKED_ENVIRONMENT, never manufactured Pass.</p>
+<p>Source requirements: <a href="https://github.com/ZillionxBuilds/VPSReady/blob/8ddeae3e753849dc559b0dbcd6b697f422ba83cb/middleman/vps-readiness-key-auth/05_ACCEPTANCE_AND_DOD.md">pinned VP-123 acceptance / DoD A and B</a>. Check budgets: read10s / fresh login including disposal20s / total120s; freshness300 monotonic seconds. Evidence classes E0 Static, E1 Unit, E2 Stateful Simulation, E3 Local-contained Protocol, E4 Actual Local Host/Packaging, E5 Owner Real VPS only.</p>
+<p>FAIL → canonical issue/safe evidence → blind regression/fix → external re-review → authorized fresh candidate → Owner retest. Readiness is not release approval. Main/stable requires separate explicit Owner authority. REAL VPS: NOT TESTED.</p>
+</section></main></body></html>

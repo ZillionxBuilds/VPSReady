@@ -10,10 +10,14 @@ namespace VpsReady.ScenarioTests;
 [Trait("Category", "E2")]
 public sealed class ReadinessScenarioTests
 {
-    [Fact]
-    public async Task ExplicitMutationStalesReadinessAndOnlyRecheckObservesChangedHost()
+    [Theory]
+    [InlineData("22.04 LTS", SshAuthenticationMode.Password)]
+    [InlineData("24.04 LTS", SshAuthenticationMode.PrivateKey)]
+    public async Task ExplicitMutationStalesReadinessAndOnlyRecheckObservesChangedHost(string version, SshAuthenticationMode authentication)
     {
         var state = ScenarioHostState.CreateDefault("scenario.123.readiness.mutable-firewall");
+        state.Ubuntu.Version = version;
+        state.Readiness.AuthenticationMode = authentication;
         state.Ssh.IsConnected = true; state.Ufw.Status = ScenarioUfwStatus.Active;
         var recorder = new ScenarioDiagnosticRecorder();
         var sink = new RedactingDiagnosticSink(new FailClosedRedactor(), recorder);
@@ -95,6 +99,51 @@ public sealed class ReadinessScenarioTests
         Assert.True(state.Ssh.IsConnected);
     }
 
+    [Theory]
+    [InlineData("success")]
+    [InlineData("auth")]
+    [InlineData("trust")]
+    [InlineData("missing")]
+    public async Task KeySessionSimulatedRebootUsesSameMethodAndFailsClosedBeforeOrDuringRecovery(string fault)
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.123.key-reboot." + fault);
+        state.Ssh.IsConnected = true;
+        state.Readiness.AuthenticationMode = SshAuthenticationMode.PrivateKey;
+        state.Readiness.CredentialAvailable = fault != "missing";
+        var host = new DeterministicScenarioHost(state, new ScenarioFaultPlan());
+        var transport = new ReadinessTransport(host) { RecoveryFault = fault };
+        var sink = new RedactingDiagnosticSink(new FailClosedRedactor(), new ScenarioDiagnosticRecorder());
+        var workflow = new RebootWorkflow(new PrivilegePreflightWorkflow(sink), sink,
+            new RebootRecoveryPolicy(TimeSpan.FromSeconds(1), TimeSpan.Zero, TimeSpan.FromSeconds(1), [TimeSpan.Zero], 1));
+        var result = await workflow.RebootAsync(transport, confirmed: true);
+        Assert.Equal(SshAuthenticationMode.PrivateKey, transport.AuthenticationMode);
+        Assert.Equal(fault == "success", result.Result.Succeeded);
+        Assert.Equal(fault == "success" ? 1 : 0, state.Reboot.BootGeneration);
+        Assert.Equal(fault is "auth" or "trust", state.Reboot.IsRebooting); // Apply happened, recovery cannot verify the new boot.
+        Assert.Equal(fault == "missing" ? 0 : 1, transport.RecoveryCalls);
+        if (fault == "trust") { Assert.Equal(RebootReconnectOutcome.HostTrustRejected, result.ReconnectOutcome); }
+        if (fault == "missing") { Assert.Equal(RebootReconnectOutcome.NotStarted, result.ReconnectOutcome); }
+    }
+
+    [Theory]
+    [InlineData(ScenarioFaultKind.Cancellation, ReadinessExecution.Cancelled)]
+    [InlineData(ScenarioFaultKind.Timeout, ReadinessExecution.TimedOut)]
+    public async Task InjectedReadFaultCannotPublishReadyOrMutateState(ScenarioFaultKind fault, ReadinessExecution expected)
+    {
+        var state = ScenarioHostState.CreateDefault("scenario.123.readiness.injected");
+        state.Ssh.IsConnected = true;
+        state.Ufw.Status = ScenarioUfwStatus.Active;
+        var plan = new ScenarioFaultPlan();
+        plan.Inject(DiagnosticPhase.Preflight, fault, "readiness-key-read-fault", RemoteCommandCatalog.ReadinessDiskRead);
+        var before = ConfigurationDigest(state);
+        var sink = new RedactingDiagnosticSink(new FailClosedRedactor(), new ScenarioDiagnosticRecorder());
+        var snapshot = await new UbuntuReadinessCollector(sink).CollectAsync(new ReadinessTransport(new DeterministicScenarioHost(state, plan)),
+            "ses_readiness", 1, new("ses_readiness", "run_readiness", "op_readiness", "validate"), null, CancellationToken.None);
+        Assert.Equal(expected, snapshot.Execution);
+        Assert.Equal(ReadinessVerdict.Incomplete, Verdict(snapshot));
+        Assert.Equal(before, ConfigurationDigest(state));
+    }
+
     private static Task<ReadinessSnapshot> Collect(ScenarioHostState state)
     {
         var sink = new RedactingDiagnosticSink(new FailClosedRedactor(), new ScenarioDiagnosticRecorder());
@@ -119,8 +168,25 @@ public sealed class ReadinessScenarioTests
         state.RemoteFiles.Files,
     });
 
-    private sealed class ReadinessTransport(DeterministicScenarioHost host) : IAuthenticatedSessionTransport
+    private sealed class ReadinessTransport(DeterministicScenarioHost host) : IAuthenticatedSessionTransport, IRebootReconnectTransport
     {
+        public string RecoveryFault { get; init; } = "success";
+        public int RecoveryCalls { get; private set; }
+        public Task ReconnectAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RecoveryCalls++;
+            if (RecoveryFault == "trust") { throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust); }
+            if (RecoveryFault == "auth") { throw new RemoteTransportException(RemoteTransportFailureKind.Authentication); }
+            return host.ReconnectAsync(cancellationToken);
+        }
+        public async Task<BootIdentityReadResult> ReadBootIdentityAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            var command = new RemoteCommand(RemoteCommandCatalog.RequireKnown(RemoteCommandCatalog.UbuntuBootIdentityRead), "boot-identity-read", timeout);
+            var response = await host.ExecuteWireAsync(command, DiagnosticPhase.Verify, cancellationToken);
+            return response.Succeeded && BootIdentityToken.TryCreate(response.StandardOutput.Trim(), out var identity)
+                ? new(identity, true) : BootIdentityReadResult.Unavailable;
+        }
         public SshAuthenticationMode AuthenticationMode => host.State.Readiness.AuthenticationMode;
         public string? KeyFingerprint => AuthenticationMode == SshAuthenticationMode.PrivateKey ? "SHA256:scenario-selected-key" : null;
         public bool CanReauthenticate => host.State.Readiness.CredentialAvailable;
