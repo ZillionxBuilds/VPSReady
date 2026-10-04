@@ -263,13 +263,31 @@
                   <TextBox x:Name="ConnectionUser" AutomationProperties.Name="Username" TextChanged="ConnectionIdentityTextChanged" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" />
                 </StackPanel>
               </Grid>
-              <StackPanel Spacing="5">
+              <StackPanel Orientation="Horizontal" Spacing="14">
+                <RadioButton GroupName="InitialSshAuthentication" IsChecked="{Binding ConnectionOverview.IsPasswordMode, Mode=TwoWay}" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="Password" />
+                <RadioButton GroupName="InitialSshAuthentication" IsChecked="{Binding ConnectionOverview.IsPrivateKeyMode, Mode=TwoWay}" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="SSH private key" />
+              </StackPanel>
+              <StackPanel Spacing="5" IsVisible="{Binding ConnectionOverview.IsPasswordMode}">
                 <TextBlock Classes="field-label" Text="Password" />
                 <Border x:Name="ConnectionPasswordInput" Focusable="True" KeyDown="ConnectionPasswordKeyDown" TextInput="ConnectionPasswordTextInput" AutomationProperties.Name="Password input" Background="#F6F9FE" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" MinHeight="44" Padding="12,9">
                   <TextBlock Text="{Binding ConnectionOverview.SecretDisplay}" VerticalAlignment="Center" />
                 </Border>
               </StackPanel>
-              <TextBlock Classes="muted" FontSize="13" Text="Type the password using your keyboard layout. Backspace deletes the last character; Escape clears it. Tab moves to the next control. Clipboard paste is not supported in this version. Input is cleared after submission." />
+              <StackPanel Spacing="7" IsVisible="{Binding ConnectionOverview.IsPrivateKeyMode}">
+                <Button Click="ChooseInitialPrivateKeyAsync" IsEnabled="{Binding ConnectionOverview.CanEditConnectionIdentity}" Content="Browse private key for login" HorizontalAlignment="Left" />
+                <TextBlock AutomationProperties.Name="Selected login private key file" Text="{Binding ConnectionOverview.KeyFileName}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding ConnectionOverview.SelectedKeyAlgorithm}" />
+                <TextBlock Text="{Binding ConnectionOverview.SelectedKeyFingerprint}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding ConnectionOverview.KeySelectionStatus}" TextWrapping="Wrap" />
+                <TextBlock Text="The private key stays local; signing proves access. No server password, .pub companion, previous password session or key deployment is required. Host trust must still be reviewed." TextWrapping="Wrap" />
+                <StackPanel Spacing="5" IsVisible="{Binding ConnectionOverview.NeedsKeyPassphrase}">
+                  <TextBlock Classes="field-label" Text="Key passphrase (not server password)" />
+                  <Border x:Name="ConnectionKeyPassphraseInput" Focusable="True" KeyDown="ConnectionKeyPassphraseKeyDown" TextInput="ConnectionKeyPassphraseTextInput" AutomationProperties.Name="Key passphrase input" Background="#F6F9FE" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="9" MinHeight="44" Padding="12,9">
+                    <TextBlock Text="{Binding ConnectionOverview.KeyPassphraseDisplay}" VerticalAlignment="Center" />
+                  </Border>
+                </StackPanel>
+              </StackPanel>
+              <TextBlock Classes="muted" FontSize="13" Text="Protected inputs: Backspace deletes; Escape clears; Tab moves to the next control. Clipboard paste is not supported. Input is cleared after submission; retry requires re-entry." />
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Classes="primary" Click="TestConnectionAsync" IsEnabled="{Binding ConnectionOverview.CanTestConnection}" Content="Test connection" />
                 <Button Command="{Binding ConnectionOverview.CancelConnectionCommand}" IsEnabled="{Binding ConnectionOverview.IsConnecting}" Content="Cancel connection" />

@@ -53,6 +53,7 @@ public static class DesktopComposition
         services.AddSingleton<ITimezoneChanger, TimezoneChangeWorkflow>();
         services.AddSingleton<ILocalEd25519KeyGenerator, Ed25519OpenSshKeyPairGenerator>();
         services.AddSingleton<IExistingSshKeySelector, ExistingOpenSshKeySelector>();
+        services.AddSingleton<IInitialPrivateKeySelector, InitialPrivateKeySelector>();
         services.AddSingleton<PublicKeyDeploymentWorkflow>();
         services.AddSingleton<IPublicKeyDeployment>(provider => provider.GetRequiredService<PublicKeyDeploymentWorkflow>());
         services.AddSingleton<KeyAuthenticationVerificationWorkflow>();

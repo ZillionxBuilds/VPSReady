@@ -15,6 +15,7 @@ public enum ConnectionInputValidationError
     PortInvalid,
     UserNameRequiredOrInvalid,
     PasswordRequiredOrInvalid,
+    PrivateKeyRequiredOrInvalid,
     TimeoutInvalid,
 }
 
@@ -23,22 +24,38 @@ public enum ConnectionInputValidationError
 /// It owns the password buffer; callers transfer that same reference to an
 /// application session, which clears it when the session is invalidated.
 /// </summary>
-public sealed class ValidatedConnectionInput : IDisposable
+public sealed class ValidatedConnectionInput : IDisposable, ISensitiveSessionReference
 {
+    private readonly PasswordSessionSecret? passwordHolder;
     internal ValidatedConnectionInput(RemoteEndpoint endpoint, PasswordSessionSecret password, TimeSpan timeout)
     {
         Endpoint = endpoint;
-        Password = password;
+        passwordHolder = password;
+        Timeout = timeout;
+    }
+
+    internal ValidatedConnectionInput(RemoteEndpoint endpoint, IPrivateKeyCredential key, TimeSpan timeout)
+    {
+        Endpoint = endpoint;
+        PrivateKey = key;
         Timeout = timeout;
     }
 
     public RemoteEndpoint Endpoint { get; }
 
-    public PasswordSessionSecret Password { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public PasswordSessionSecret Password => passwordHolder ?? throw new InvalidOperationException("This connection uses a private key, not a server password.");
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IPrivateKeyCredential? PrivateKey { get; }
+
+    public SshAuthenticationMode AuthenticationMode => PrivateKey is null ? SshAuthenticationMode.Password : SshAuthenticationMode.PrivateKey;
 
     public TimeSpan Timeout { get; }
 
-    public void Dispose() => Password.Clear();
+    public void Clear() { passwordHolder?.Clear(); PrivateKey?.Dispose(); }
+
+    public void Dispose() => Clear();
 
     public override string ToString() => "Validated connection input (credential redacted)";
 }
@@ -78,6 +95,24 @@ public static class ConnectionInputValidator
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
 
     public const int DefaultPort = 22;
+
+    /// <summary>Transfers an already locally validated key; server-password validation is not involved.</summary>
+    public static ConnectionInputValidationResult ValidatePrivateKey(
+        string? hostOrIp, string? portText, string? userName, IPrivateKeyCredential key, TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        var errors = new List<ConnectionInputValidationError>();
+        var host = ValidateHost(hostOrIp, errors);
+        var port = ValidatePort(portText, errors);
+        var user = ValidateUserName(userName, errors);
+        var resolvedTimeout = ValidateTimeout(timeout, errors);
+        if (key.IsCleared || key.Length is <= 0 or > 262144)
+        {
+            errors.Add(ConnectionInputValidationError.PrivateKeyRequiredOrInvalid);
+        }
+        if (errors.Count != 0) { key.Dispose(); return new(null, errors); }
+        return new(new ValidatedConnectionInput(new RemoteEndpoint(host!, port!.Value, user!), key, resolvedTimeout!.Value), []);
+    }
 
     public static ConnectionInputValidationResult Validate(
         string? hostOrIp,

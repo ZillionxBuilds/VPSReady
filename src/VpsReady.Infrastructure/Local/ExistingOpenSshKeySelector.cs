@@ -343,9 +343,15 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         return false;
     }
 
-    private static async Task<byte[]> ReadBoundedAsync(string path, CancellationToken cancellationToken, int maximumBytes = MaximumPrivateKeyBytes)
+    internal static async Task<byte[]> ReadForInitialAuthenticationAsync(string path, CancellationToken cancellationToken)
     {
-        await using var stream = OpenNoFollowReadStream(path);
+        if (!TryValidateRegularPath(path, out var validated, out _)) { throw new InvalidDataException(); }
+        return await ReadBoundedAsync(validated, cancellationToken, requirePrivatePermissions: true).ConfigureAwait(false);
+    }
+
+    private static async Task<byte[]> ReadBoundedAsync(string path, CancellationToken cancellationToken, int maximumBytes = MaximumPrivateKeyBytes, bool requirePrivatePermissions = false)
+    {
+        await using var stream = OpenNoFollowReadStream(path, requirePrivatePermissions);
         if (stream.Length <= 0 || stream.Length > maximumBytes)
         {
             throw new InvalidDataException();
@@ -376,11 +382,17 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         }
     }
 
-    private static FileStream OpenNoFollowReadStream(string path)
+    private static FileStream OpenNoFollowReadStream(string path, bool requirePrivatePermissions = false)
     {
         if (OperatingSystem.IsWindows())
         {
-            return OpenWindowsSafeReadStream(path);
+            var stream = OpenWindowsSafeReadStream(path);
+            try
+            {
+                if (requirePrivatePermissions) { VerifyInitialWindowsPrivatePermissions(stream); }
+                return stream;
+            }
+            catch { stream.Dispose(); throw; }
         }
 
         var segments = path.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
@@ -397,7 +409,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             var fileHandle = OpenUnixAt(directoryHandle, segments[^1], UnixOpenFlags.ReadOnly | UnixOpenFlags.NoFollow | UnixOpenFlags.NonBlocking, requiredDirectory: false);
             try
             {
-                VerifyRegularUnixFile(fileHandle);
+                VerifyRegularUnixFile(fileHandle, requirePrivatePermissions);
                 return new FileStream(fileHandle, FileAccess.Read, 4096, isAsync: false);
             }
             catch
@@ -466,7 +478,7 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         return translated;
     }
 
-    private static void VerifyRegularUnixFile(SafeFileHandle handle)
+    private static void VerifyRegularUnixFile(SafeFileHandle handle, bool requirePrivatePermissions = false)
     {
         const int statBufferLength = 256;
         var statBuffer = Marshal.AllocHGlobal(statBufferLength);
@@ -496,6 +508,10 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
             {
                 throw new UnsafeKeySelectionPathException();
             }
+            if (requirePrivatePermissions && (mode & 0x3F) != 0)
+            {
+                throw new UnauthorizedAccessException("Private key permissions must exclude group and other access.");
+            }
         }
         finally
         {
@@ -515,6 +531,25 @@ public sealed class ExistingOpenSshKeySelector : IExistingSshKeySelector
         {
             handle.Dispose();
             throw;
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static void VerifyInitialWindowsPrivatePermissions(FileStream stream)
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var user = identity.User ?? throw new UnauthorizedAccessException();
+        var acl = System.IO.FileSystemAclExtensions.GetAccessControl(stream);
+        var allowedSystem = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.LocalSystemSid, null);
+        var allowedAdmins = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null);
+        foreach (System.Security.AccessControl.FileSystemAccessRule rule in acl.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)))
+        {
+            if (rule.AccessControlType == System.Security.AccessControl.AccessControlType.Allow
+                && !rule.IdentityReference.Equals(user) && !rule.IdentityReference.Equals(allowedSystem) && !rule.IdentityReference.Equals(allowedAdmins)
+                && (rule.FileSystemRights & (System.Security.AccessControl.FileSystemRights.ReadData | System.Security.AccessControl.FileSystemRights.WriteData | System.Security.AccessControl.FileSystemRights.Modify)) != 0)
+            {
+                throw new UnauthorizedAccessException("Private key permissions permit another identity to access the file.");
+            }
         }
     }
 

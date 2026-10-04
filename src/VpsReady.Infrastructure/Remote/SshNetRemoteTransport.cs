@@ -15,13 +15,14 @@ namespace VpsReady.Infrastructure.Remote;
 /// a connection is usable only after SSH.NET reports it connected and its host
 /// key has passed the persisted fail-closed trust assessment.
 /// </summary>
-public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport, IHostnameChangeTransport
+public sealed class SshNetRemoteTransport : IPasswordSshTransport, IInitialKeySshTransport, IAuthenticatedSessionTransport, IPublicKeyDeploymentTransport, IKeyAuthenticationSshTransport, IRebootReconnectTransport, IHostnameChangeTransport
 {
     private readonly IKnownHostTrustStore trustStore;
     private readonly SemaphoreSlim connectionGate = new(1, 1);
     private SshClient? client;
     private RemoteEndpoint? endpoint;
     private PasswordReauthenticationLease? reauthenticationLease;
+    private PrivateKeyReauthenticationLease? keyReauthenticationLease;
     private bool hostTrustAssessmentFailed;
     private bool disposed;
 
@@ -31,6 +32,94 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
     }
 
     public KnownHostTrustAssessment? LastHostTrustAssessment { get; private set; }
+
+    public SshAuthenticationMode AuthenticationMode { get; private set; }
+
+    public string? KeyFingerprint => keyReauthenticationLease?.Fingerprint;
+
+    public bool CanReauthenticate => !disposed && endpoint is not null
+        && (reauthenticationLease is { IsCleared: false } || keyReauthenticationLease is { IsCleared: false });
+
+    public async Task ConnectWithKeyCredentialAsync(RemoteEndpoint endpoint, IPrivateKeyCredential key, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentNullException.ThrowIfNull(key);
+        ValidateFiniteTimeout(timeout);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        PrivateKeyReauthenticationLease? candidateLease = null;
+        try
+        {
+            ThrowIfDisposed();
+            if (client is not null) { throw new InvalidOperationException("This SSH transport is already connected or connecting."); }
+            candidateLease = PrivateKeyReauthenticationLease.Capture(key);
+            this.endpoint = endpoint;
+            await ConnectWithKeyLeaseAsync(endpoint, candidateLease, timeout, cancellationToken).ConfigureAwait(false);
+            keyReauthenticationLease = candidateLease;
+            candidateLease = null;
+            AuthenticationMode = SshAuthenticationMode.PrivateKey;
+        }
+        catch { this.endpoint = null; throw; }
+        finally { candidateLease?.Dispose(); connectionGate.Release(); }
+    }
+
+    private async Task ConnectWithKeyLeaseAsync(RemoteEndpoint target, PrivateKeyReauthenticationLease lease, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        SshClient? candidate = null;
+        LastHostTrustAssessment = null;
+        hostTrustAssessmentFailed = false;
+        try
+        {
+            using var key = lease.OpenAttempt();
+            using var authentication = new PrivateKeyAuthenticationMethod(target.UserName, new PrivateKeyReauthenticationLease.Sha2KeySource(key));
+            var connection = new ConnectionInfo(target.Host, target.Port, target.UserName, authentication) { Timeout = timeout };
+            candidate = new SshClient(connection);
+            candidate.HostKeyReceived += OnHostKeyReceived;
+            using var deadline = new CancellationTokenSource(timeout);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+            try { await candidate.ConnectAsync(linked.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested) { throw new RemoteTransportException(RemoteTransportFailureKind.Timeout); }
+            RequireExplicitTrustedHost(LastHostTrustAssessment);
+            if (!candidate.IsConnected) { throw new RemoteTransportException(RemoteTransportFailureKind.Network); }
+            var previous = client;
+            client = candidate;
+            candidate = null;
+            if (previous is not null) { previous.HostKeyReceived -= OnHostKeyReceived; previous.Dispose(); }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (RemoteTransportException) { throw; }
+        catch (Exception) when (LastHostTrustAssessment is { IsTrusted: false } || hostTrustAssessmentFailed) { throw new RemoteTransportException(RemoteTransportFailureKind.HostTrust); }
+        catch (Exception exception) { throw ToSafeConnectionFailure(exception); }
+        finally { if (candidate is not null) { candidate.HostKeyReceived -= OnHostKeyReceived; candidate.Dispose(); } }
+    }
+
+    public async Task<IRemoteTransport> CreateAuthenticatedProbeAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ValidateFiniteTimeout(timeout);
+        ThrowIfDisposed();
+        await connectionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var probe = new SshNetRemoteTransport(trustStore);
+        try
+        {
+            ThrowIfDisposed();
+            var target = endpoint ?? throw new RemoteTransportException(RemoteTransportFailureKind.Network);
+            if (keyReauthenticationLease is { IsCleared: false } key)
+            {
+                await probe.ConnectWithKeyCredentialAsync(target, key, timeout, cancellationToken).ConfigureAwait(false);
+            }
+            else if (reauthenticationLease is { IsCleared: false } password)
+            {
+                var snapshot = password.CreateCredentialSnapshot();
+                try { await probe.ConnectAsync(target, snapshot, timeout, cancellationToken).ConfigureAwait(false); }
+                finally { snapshot.Clear(); }
+            }
+            else { throw new RemoteTransportException(RemoteTransportFailureKind.KeyIdentity); }
+            return probe;
+        }
+        catch { await probe.DisposeAsync().ConfigureAwait(false); throw; }
+        finally { connectionGate.Release(); }
+    }
 
     public async Task ConnectAsync(
         RemoteEndpoint endpoint,
@@ -369,13 +458,19 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
         {
             ThrowIfDisposed();
             var target = endpoint;
-            var lease = reauthenticationLease;
-            if (target is null || lease is null)
+            if (target is null || !CanReauthenticate)
             {
                 throw new RemoteTransportException(RemoteTransportFailureKind.Network);
             }
 
-            await ConnectWithPasswordLeaseAsync(target, lease, timeout, cancellationToken).ConfigureAwait(false);
+            if (keyReauthenticationLease is { } key)
+            {
+                await ConnectWithKeyLeaseAsync(target, key, timeout, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await ConnectWithPasswordLeaseAsync(target, reauthenticationLease!, timeout, cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -580,6 +675,8 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IPublicKeyDep
             var secretLease = reauthenticationLease;
             reauthenticationLease = null;
             secretLease?.Dispose();
+            keyReauthenticationLease?.Dispose();
+            keyReauthenticationLease = null;
             LastHostTrustAssessment = null;
             if (value is not null)
             {

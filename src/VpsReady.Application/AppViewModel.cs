@@ -63,10 +63,11 @@ public sealed class AppViewModel : ObservableObject
         IKeyAuthenticationVerifier keyAuthentication,
         IOpenSshConfigEditor configEditor,
         IDiagnosticSink diagnostics,
-        IServerOverviewReader? overviewReader = null)
+        IServerOverviewReader? overviewReader = null,
+        IInitialPrivateKeySelector? initialKeySelector = null)
         : this(applicationSession, false, null, diagnosticsWorkspace)
     {
-        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession, overviewReader, diagnostics);
+        ConnectionOverview = new ConnectionOverviewViewModel(lifecycle, applicationSession, overviewReader, diagnostics, initialKeySelector);
         Firewall = new FirewallViewModel(applicationSession, firewallManagement, diagnostics);
         SshManagement = new SshManagementViewModel(
             applicationSession,
@@ -94,7 +95,8 @@ public sealed class AppViewModel : ObservableObject
         IRebootWorkflow rebootWorkflow,
         IHostnameChanger hostnameChanger,
         ITimezoneChanger timezoneChanger,
-        IServerOverviewReader? overviewReader = null)
+        IServerOverviewReader? overviewReader = null,
+        IInitialPrivateKeySelector? initialKeySelector = null)
         : this(
             applicationSession,
             lifecycle,
@@ -106,7 +108,8 @@ public sealed class AppViewModel : ObservableObject
             keyAuthentication,
             configEditor,
             diagnostics,
-            overviewReader)
+            overviewReader,
+            initialKeySelector)
     {
         SystemActions = new SystemActionsViewModel(
             applicationSession,

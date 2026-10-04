@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     {
         DataContext = viewModel;
         this.viewModel = viewModel;
+        Closed += (_, _) => { viewModel.ConnectionOverview?.ClearSecretInput(); viewModel.ConnectionOverview?.ClearKeyPassphrase(); };
         viewModel.SafeIssueReportReady += CopySafeIssueReportAsync;
         viewModel.SupportBundleExportRequested += ExportSanitizedSupportBundleAsync;
     }
@@ -89,6 +90,7 @@ public partial class MainWindow : Window
         finally
         {
             connection.SecretInput.Clear();
+            connection.ClearKeyPassphrase();
         }
     }
 
@@ -98,6 +100,31 @@ public partial class MainWindow : Window
         {
             await connection.InvalidateForIdentityEditAsync();
         }
+    }
+
+    private async void ChooseInitialPrivateKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is not { } connection) { return; }
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Choose the private key for initial login", AllowMultiple = false });
+            if (files.Count == 1) { await connection.SelectInitialPrivateKeyAsync(files[0].Path.LocalPath); }
+        }
+        catch { connection.ClearKeyPassphrase(); }
+    }
+
+    private void ConnectionKeyPassphraseKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is not { } connection) { return; }
+        var action = PasswordInputKeys.Classify(e.Key, e.KeyModifiers);
+        if (action == PasswordInputKeyAction.Backspace) { connection.BackspaceKeyPassphrase(); e.Handled = true; }
+        else if (action == PasswordInputKeyAction.Clear) { connection.ClearKeyPassphrase(); e.Handled = true; }
+        else if (action == PasswordInputKeyAction.RejectPaste) { e.Handled = true; }
+    }
+
+    private void ConnectionKeyPassphraseTextInput(object? sender, Avalonia.Input.TextInputEventArgs e)
+    {
+        if (viewModel?.ConnectionOverview is { } connection) { connection.AppendKeyPassphraseText(e.Text.AsSpan()); e.Handled = true; }
     }
 
     private async void ViewPublicKeyAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

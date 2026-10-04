@@ -22,7 +22,9 @@ public sealed record ApplicationSessionSnapshot(
     ApplicationSessionLifecycle Lifecycle,
     string? SessionId,
     RemoteEndpoint? Identity,
-    string? ActiveOperationId)
+    string? ActiveOperationId,
+    SshAuthenticationMode? AuthenticationMode = null,
+    string? KeyFingerprint = null)
 {
     public bool IsConnected => Lifecycle == ApplicationSessionLifecycle.Connected;
 }
@@ -391,7 +393,9 @@ public sealed class ApplicationSession : IApplicationSession
 
     private static ApplicationSessionSnapshot CreateSnapshot(SessionState? state) => state is null
         ? new(ApplicationSessionLifecycle.Disconnected, null, null, null)
-        : new(ApplicationSessionLifecycle.Connected, state.SessionId, state.Identity, state.ActiveOperationId);
+        : new(ApplicationSessionLifecycle.Connected, state.SessionId, state.Identity, state.ActiveOperationId,
+            (state.Transport as IAuthenticatedSessionTransport)?.AuthenticationMode,
+            (state.Transport as IAuthenticatedSessionTransport)?.KeyFingerprint);
 
     private void RaiseStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
 
