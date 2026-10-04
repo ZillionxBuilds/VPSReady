@@ -1,6 +1,7 @@
 using VpsReady.Application;
 using VpsReady.Core.Diagnostics;
 using VpsReady.Core.Remote;
+using VpsReady.Core.Local;
 
 namespace VpsReady.UnitTests;
 
@@ -56,6 +57,40 @@ public sealed class InitialKeyConnectionTests
         Assert.Equal(0, transport.ConnectCalls);
         Assert.False(session.Snapshot.IsConnected);
         Assert.Contains("No .pub", vm.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WrongKeyPassphraseKeepsUnlockFieldClearsAttemptAndNeverConnectsOrFallsBack()
+    {
+        await using var session = new ApplicationSession();
+        var transport = new KeyTransport();
+        await using var lifecycle = new ConnectionSessionLifecycle(session, new Factory(transport), new Sink());
+        var selector = new EncryptedSelector();
+        var vm = new ConnectionOverviewViewModel(lifecycle, session, initialKeySelector: selector) { IsPrivateKeyMode = true };
+        await vm.SelectInitialPrivateKeyAsync("/disposable-fixture/encrypted-key");
+        Assert.True(vm.NeedsKeyPassphrase);
+        vm.AppendKeyPassphraseText("wrong-disposable-unlock".AsSpan());
+        await vm.TestAsync("fixture.example", "22", "user", null);
+        Assert.Equal("INITIAL_KEY_UNLOCK_OR_PARSE_FAILED", vm.ErrorCode);
+        Assert.True(DiagnosticErrorCatalog.IsKnown(vm.ErrorCode!));
+        Assert.True(vm.NeedsKeyPassphrase);
+        Assert.Equal(0, vm.KeyPassphraseInput.Length);
+        Assert.True(selector.SubmittedUnlock!.IsCleared);
+        Assert.Equal(0, transport.ConnectCalls);
+        Assert.False(session.Snapshot.IsConnected);
+        Assert.DoesNotContain("wrong-disposable-unlock", vm.Status, StringComparison.Ordinal);
+        Assert.DoesNotContain("/disposable-fixture", vm.Status, StringComparison.Ordinal);
+    }
+
+    private sealed class EncryptedSelector : IInitialPrivateKeySelector
+    {
+        public PasswordSessionSecret? SubmittedUnlock { get; private set; }
+        public Task<InitialPrivateKeySelectionResult> SelectAsync(string path, IPasswordCredential? passphrase, CancellationToken cancellationToken)
+        {
+            SubmittedUnlock = passphrase as PasswordSessionSecret;
+            return Task.FromResult(new InitialPrivateKeySelectionResult(null,
+                passphrase is null ? InitialPrivateKeyError.PassphraseRequired : InitialPrivateKeyError.InvalidKeyOrPassphrase));
+        }
     }
 
     private sealed class Key : IPrivateKeyCredential

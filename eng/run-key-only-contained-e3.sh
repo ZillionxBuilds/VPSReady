@@ -67,13 +67,30 @@ for _ in $(seq 1 40); do
   sleep 0.1
 done
 ssh-keyscan -T 1 -p "$port" 127.0.0.1 >/dev/null 2>&1
+# Only disposable fixture configuration/state. Aggregate digests are retained;
+# file contents, private material and remote identity are never exported.
+configuration_digest() {
+  local roots=()
+  for path in /etc/ssh /etc/apt /var/lib/apt /var/cache/apt /var/lib/dpkg /etc/ufw /etc/default/ufw; do
+    if [[ -e "$path" ]]; then roots+=("$path"); fi
+  done
+  { find "${roots[@]}" -type f -print0 | sort -z | xargs -0 sha256sum; sha256sum "$fixture_root/sshd_config"; } | sha256sum | cut -d ' ' -f1
+}
+before_readiness_digest="$(configuration_digest)"
+result_file="key-only-production-$(date -u +%Y%m%dT%H%M%SZ).trx"
 VPSREADY_E3_KEY_ONLY=1 VPSREADY_E3_KEY_ONLY_USER="$fixture_user" \
   VPSREADY_E3_KEY_ONLY_PORT="$port" VPSREADY_E3_KEY_ONLY_AUTHORIZED="$authorized" \
   dotnet test tests/VpsReady.UnitTests --configuration Release --filter 'FullyQualifiedName~InitialKeyOnlyE3Tests' \
-    --logger 'trx;LogFileName=key-only-production.trx' --results-directory artifacts/verification/123/e3
+    --logger "trx;LogFileName=$result_file" --results-directory artifacts/verification/123/e3
+after_readiness_digest="$(configuration_digest)"
+if [[ "$before_readiness_digest" != "$after_readiness_digest" ]]; then
+  printf 'Read-only readiness changed disposable fixture configuration/package state.\n' >&2
+  exit 1
+fi
 mkdir -p artifacts/verification/123/e3
 cat > artifacts/verification/123/e3/key-only-policy.txt <<RESULT
 evidence=E3 Local-contained Protocol
+result_file=$result_file
 PasswordAuthentication=no
 KbdInteractiveAuthentication=no
 AuthenticationMethods=publickey
@@ -84,6 +101,10 @@ plain_encrypted_ed25519_rsa_and_rsa_pem=PASS
 no_pub_companion=PASS
 explicit_unknown_host_denial_and_retry=PASS
 fresh_login_and_reconnect_from_validated_snapshot=PASS
+production_readiness_required_access_and_no_sudo_unknown=PASS
+rejected_new_key_auth_preserves_main_session_no_fallback=PASS
+readonly_configuration_package_digest_unchanged=PASS
+readonly_configuration_package_sha256=$after_readiness_digest
 REAL VPS: NOT TESTED
 RESULT
 printf 'Contained production key-only E3 passed. REAL VPS: NOT TESTED.\n'

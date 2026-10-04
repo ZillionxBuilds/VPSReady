@@ -1,6 +1,8 @@
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using VpsReady.Application;
+using VpsReady.Core.Remote;
+using Avalonia.Threading;
 
 namespace VpsReady.Desktop;
 
@@ -18,10 +20,51 @@ public partial class MainWindow : Window
     {
         DataContext = viewModel;
         this.viewModel = viewModel;
-        Closed += (_, _) => { viewModel.ConnectionOverview?.ClearSecretInput(); viewModel.ConnectionOverview?.ClearKeyPassphrase(); };
+        Closed += (_, _) => { viewModel.ConnectionOverview?.ClearSecretInput(); viewModel.ConnectionOverview?.ClearKeyPassphrase(); viewModel.Readiness?.Dispose(); };
+        viewModel.ReadinessSectionRequested += FocusReadinessSection;
         viewModel.SafeIssueReportReady += CopySafeIssueReportAsync;
         viewModel.SupportBundleExportRequested += ExportSanitizedSupportBundleAsync;
     }
+
+    private async void CheckReadinessAsync(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (viewModel?.Readiness is { } readiness) { await readiness.CheckAsync(); }
+    }
+
+    private void CopyReadinessSafeIssueReport(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        viewModel?.CopyReadinessSafeReport();
+    }
+
+    private void ExportReadinessSupportBundle(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        viewModel?.ExportReadinessBundle();
+    }
+
+    private void FocusReadinessSection(ReadinessDestination page, string section) => Dispatcher.UIThread.Post(() =>
+    {
+        var name = (page, section) switch
+        {
+            (ReadinessDestination.Connection, "authentication") => "ReadinessAuthentication",
+            (ReadinessDestination.Overview, "platform") => "ReadinessPlatform",
+            (ReadinessDestination.Overview, "storage") => "ReadinessStorage",
+            (ReadinessDestination.Firewall, "status") => "ReadinessFirewallStatus",
+            (ReadinessDestination.Firewall, "ssh-access") => "ReadinessFirewallSsh",
+            (ReadinessDestination.SshKeysAndConfig, "key-access") => "ReadinessKeyAccess",
+            (ReadinessDestination.System, "privilege") => "ReadinessPrivilege",
+            (ReadinessDestination.System, "packages") => "ReadinessPackages",
+            (ReadinessDestination.System, "reboot") => "ReadinessReboot",
+            (ReadinessDestination.System, "identity-time") => "ReadinessIdentityTime",
+            (ReadinessDestination.System, "time-guidance") => "ReadinessTimeGuidance",
+            (ReadinessDestination.ActivityAndDiagnostics, "diagnostics") => "ReadinessDiagnostics",
+            _ => null,
+        };
+        if (name is not null && this.FindControl<Control>(name) is { } control)
+        {
+            control.BringIntoView();
+            control.Focus();
+        }
+    }, DispatcherPriority.Background);
 
     private async void CopySafeIssueReportAsync(string report)
     {

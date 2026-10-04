@@ -79,6 +79,43 @@ public sealed class InitialKeyOnlyE3Tests
                 }, current.SessionId!);
                 Assert.True(exercised.Succeeded);
                 Assert.Equal(current.SessionId, session.Snapshot.SessionId);
+                ReadinessSnapshot? readiness = null;
+                var readinessResult = await session.RunOperationForSessionAsync("op-key-only-readiness", TimeSpan.FromSeconds(120), async (transport, token) =>
+                {
+                    readiness = await new UbuntuReadinessCollector(sink).CollectAsync(transport, current.SessionId!, 1,
+                        new(current.SessionId!, "run-key-only-readiness", "op-key-only-readiness", "validate"), null, token);
+                    return VpsReady.Core.Operations.OperationResult.Success("op-key-only-readiness", VpsReady.Core.Operations.OperationState.Unchanged);
+                }, current.SessionId!);
+                Assert.True(readinessResult.Succeeded);
+                Assert.NotNull(readiness);
+                Assert.Equal(ReadinessExecution.Completed, readiness.Execution);
+                Assert.Equal(ReadinessCheckState.Pass, readiness.Rows.Single(row => row.Id == ReadinessCheckId.R01).State);
+                Assert.Equal(ReadinessCheckState.Pass, readiness.Rows.Single(row => row.Id == ReadinessCheckId.R02).State);
+                Assert.Equal(ReadinessCheckState.Pass, readiness.Rows.Single(row => row.Id == ReadinessCheckId.R03).State);
+                Assert.Equal(ReadinessCheckState.Unknown, readiness.Rows.Single(row => row.Id == ReadinessCheckId.R04).State); // Fixture has no root/sudo.
+                Assert.Equal(ReadinessCheckState.Pass, readiness.Rows.Single(row => row.Id == ReadinessCheckId.A01).State);
+                Assert.Equal(ReadinessReason.UfwAbsent, readiness.Rows.Single(row => row.Id == ReadinessCheckId.R05).Reason);
+                Assert.Equal(ReadinessVerdict.NeedsAttention, ReadinessEvaluator.Evaluate(readiness, true, current.SessionId, 1, TimeProvider.System));
+                // Remove ONLY the disposable fixture's allowlisted key. A fresh
+                // login must fail, cannot fall back to password, and must not
+                // replace/disconnect the authenticated main channel.
+                var approvedPublic = await File.ReadAllTextAsync(authorized);
+                await File.WriteAllTextAsync(authorized, "");
+                try
+                {
+                    var rejected = await session.RunOperationForSessionAsync("op-key-only-rejected", TimeSpan.FromSeconds(30), async (transport, token) =>
+                    {
+                        var failure = await Assert.ThrowsAsync<RemoteTransportException>(() =>
+                            ((IAuthenticatedSessionTransport)transport).CreateAuthenticatedProbeAsync(TimeSpan.FromSeconds(10), token));
+                        Assert.Equal(RemoteTransportFailureKind.Authentication, failure.Kind);
+                        var mainStillWorks = await transport.ExecuteAsync(UbuntuFactCommandCatalog.CreateRequest(RemoteCommandCatalog.SshConnectionTest), token);
+                        Assert.True(mainStillWorks.Succeeded);
+                        return VpsReady.Core.Operations.OperationResult.Success("op-key-only-rejected");
+                    }, current.SessionId!);
+                    Assert.True(rejected.Succeeded);
+                    Assert.Equal(current.SessionId, session.Snapshot.SessionId);
+                }
+                finally { await File.WriteAllTextAsync(authorized, approvedPublic); }
                 Assert.All(sink.Events, entry =>
                 {
                     Assert.DoesNotContain(marker.Length == 0 ? "unused-disposable-marker" : marker, entry.Message, StringComparison.Ordinal);

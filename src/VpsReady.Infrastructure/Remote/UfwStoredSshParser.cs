@@ -45,15 +45,21 @@ public static class UfwStoredSshParser
         var split = Array.IndexOf(lines, "[user6]");
         var end = Array.IndexOf(lines, "[end]");
         if (split <= 12 || end <= split || lines.Skip(end + 1).Any(line => line.Length != 0)
-            || !TryRules(lines[13..split], false, port, out var allows4)) { return null; }
+            || !TryRules(lines[13..split], false, port, out var allows4, out var ambiguous4)) { return null; }
         var allows6 = false;
-        if (ipv6 ? !TryRules(lines[(split + 1)..end], true, port, out allows6) : lines[(split + 1)..end].Any(line => line.Length != 0)) { return null; }
-        return new(port, ipv6, lines[2] == "session_family=6", allows4, allows6);
+        var ambiguous6 = false;
+        if (ipv6 ? !TryRules(lines[(split + 1)..end], true, port, out allows6, out ambiguous6) : lines[(split + 1)..end].Any(line => line.Length != 0)) { return null; }
+        return new(port, ipv6, lines[2] == "session_family=6", allows4, allows6)
+        {
+            AmbiguousSshCoverage = (!allows4 && ambiguous4) || (ipv6 && !allows6 && ambiguous6)
+                || (!ipv6 && lines[2] == "session_family=6"),
+        };
     }
 
-    private static bool TryRules(string[] input, bool ipv6, int port, out bool allows)
+    private static bool TryRules(string[] input, bool ipv6, int port, out bool allows, out bool ambiguous)
     {
         allows = false;
+        ambiguous = false;
         var lines = input.Select(line => line.Trim()).Where(line => line.Length != 0 && !line.StartsWith('#')).ToArray();
         var prefix = ipv6 ? "ufw6" : "ufw";
         var framework = new List<string>();
@@ -80,6 +86,7 @@ public static class UfwStoredSshParser
                     || !int.TryParse(range.Groups[4].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var start)
                     || !int.TryParse(range.Groups[5].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var end)
                     || start < 1 || end <= start || end > 65535) { return false; }
+                ambiguous |= range.Groups[1].Value == "input" && range.Groups[2].Value == "tcp" && port >= start && port <= end;
                 continue;
             }
             if (!IsAnyOrNetwork(match.Groups[3].Value, ipv6) || !IsAnyOrNetwork(match.Groups[5].Value, ipv6)) { return false; }
@@ -87,6 +94,9 @@ public static class UfwStoredSshParser
             if (match.Groups[1].Value == "input" && match.Groups[2].Value == "tcp"
                 && match.Groups[4].Value == port.ToString(CultureInfo.InvariantCulture)
                 && IsAny(match.Groups[3].Value, ipv6) && IsAny(match.Groups[5].Value, ipv6)) { allows = true; }
+            ambiguous |= match.Groups[1].Value == "input" && match.Groups[2].Value is "tcp" or "all"
+                && (!match.Groups[4].Success || match.Groups[4].Value == port.ToString(CultureInfo.InvariantCulture))
+                && (!IsAny(match.Groups[3].Value, ipv6) || !IsAny(match.Groups[5].Value, ipv6) || !match.Groups[4].Success);
         }
         // Exact known scaffolding includes complete chain declarations and
         // logging/limit auxiliary rules. Custom jumps/blocks outside the user

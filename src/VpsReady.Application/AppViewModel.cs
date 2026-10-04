@@ -11,7 +11,7 @@ namespace VpsReady.Application;
 /// Presentation-only state for the desktop shell. Remote workflows are added by
 /// their owning application cards; this shell never invokes a transport.
 /// </summary>
-public sealed class AppViewModel : ObservableObject
+public sealed class AppViewModel : ObservableObject, IDisposable
 {
     private const string DisconnectedStatus = "No server is connected.";
     private readonly string title = "VPSReady";
@@ -96,7 +96,8 @@ public sealed class AppViewModel : ObservableObject
         IHostnameChanger hostnameChanger,
         ITimezoneChanger timezoneChanger,
         IServerOverviewReader? overviewReader = null,
-        IInitialPrivateKeySelector? initialKeySelector = null)
+        IInitialPrivateKeySelector? initialKeySelector = null,
+        IReadinessCollector? readinessCollector = null)
         : this(
             applicationSession,
             lifecycle,
@@ -118,6 +119,11 @@ public sealed class AppViewModel : ObservableObject
             rebootWorkflow,
             hostnameChanger,
             timezoneChanger);
+        if (readinessCollector is not null)
+        {
+            Readiness = new ReadinessViewModel(applicationSession, readinessCollector, diagnostics, NavigateFromReadiness);
+            Readiness.PropertyChanged += OnReadinessStateChanged;
+        }
     }
 
     private AppViewModel(IApplicationSession? applicationSession, bool hasStartupFailure, string? startupErrorId, IDiagnosticsWorkspace? diagnosticsWorkspace = null, string? startupJournalPath = null)
@@ -142,6 +148,7 @@ public sealed class AppViewModel : ObservableObject
         [
             CreateItem(ShellPage.Connection),
             CreateItem(ShellPage.Overview),
+            CreateItem(ShellPage.Readiness),
             CreateItem(ShellPage.Firewall),
             CreateItem(ShellPage.SshKeysAndConfig),
             CreateItem(ShellPage.System),
@@ -179,6 +186,41 @@ public sealed class AppViewModel : ObservableObject
     public FirewallViewModel? Firewall { get; }
     public SshManagementViewModel? SshManagement { get; }
     public SystemActionsViewModel? SystemActions { get; }
+    public ReadinessViewModel? Readiness { get; }
+    public ICommand OpenReadinessCommand => new DelegateCommand(() => NavigateTo(navigationItems.Single(item => item.Page.Page == ShellPage.Readiness).Page));
+    public ICommand OpenConnectionCommand => new DelegateCommand(() => NavigateTo(navigationItems.Single(item => item.Page.Page == ShellPage.Connection).Page));
+    public ICommand OpenReadinessDiagnosticsCommand => new DelegateCommand(() => NavigateFromReadiness(new(
+        ReadinessDestination.ActivityAndDiagnostics, "diagnostics", ReadinessCheckId.R02, "", -1)));
+    public void CopyReadinessSafeReport() => ActivityDiagnostics?.CopySafeReportFor(Readiness?.RunId, Readiness?.OperationId);
+    public void ExportReadinessBundle() => SupportBundleExportRequested?.Invoke(Readiness?.RunId, Readiness?.OperationId);
+    private string? readinessNavigationGuidance;
+    public string? ReadinessNavigationGuidance { get => readinessNavigationGuidance; private set => SetProperty(ref readinessNavigationGuidance, value); }
+    public bool HasReadinessNavigationGuidance => ReadinessNavigationGuidance is not null;
+    public event Action<ReadinessDestination, string>? ReadinessSectionRequested;
+
+    public void NavigateFromReadiness(ReadinessActionTarget target)
+    {
+        var definition = CoreBasicReadinessProfile.Require(target.CheckId);
+        var diagnosticsRoute = target.Page == ReadinessDestination.ActivityAndDiagnostics && target.Section == "diagnostics";
+        if (!diagnosticsRoute && (target.Page != definition.Page || target.Section != definition.Section)) { return; }
+        var page = target.Page switch
+        {
+            ReadinessDestination.Connection => ShellPage.Connection,
+            ReadinessDestination.Overview => ShellPage.Overview,
+            ReadinessDestination.Firewall => ShellPage.Firewall,
+            ReadinessDestination.SshKeysAndConfig => ShellPage.SshKeysAndConfig,
+            ReadinessDestination.System => ShellPage.System,
+            ReadinessDestination.ActivityAndDiagnostics => ShellPage.ActivityAndDiagnostics,
+            _ => throw new ArgumentOutOfRangeException(nameof(target)),
+        };
+        var current = Readiness?.IsCurrent(target) == true;
+        ReadinessNavigationGuidance = current
+            ? $"VPS Ready: {definition.Id} — {definition.Title}. {Readiness?.GuidanceFor(target)} Navigation only: review this section and explicitly choose any later action. Return and recheck afterward."
+            : "Historical or disconnected VPS Ready context was discarded. Reconnect/recheck for current guidance. Navigation does not fetch data, change fields, apply settings or grant confirmation.";
+        OnPropertyChanged(nameof(HasReadinessNavigationGuidance));
+        NavigateTo(navigationItems.Single(item => item.Page.Page == page).Page);
+        ReadinessSectionRequested?.Invoke(target.Page, target.Section);
+    }
 
     /// <summary>Desktop hosts copy this already-sanitized report only after an explicit user action.</summary>
     public event Action<string>? SafeIssueReportReady;
@@ -232,6 +274,21 @@ public sealed class AppViewModel : ObservableObject
     }
 
     private void OnSessionStateChanged(object? sender, EventArgs e) => OnPropertyChanged(nameof(Status));
+    private void OnReadinessStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ReadinessViewModel.Verdict) && HasReadinessNavigationGuidance
+            && Readiness?.Verdict is ReadinessVerdict.Stale or ReadinessVerdict.NotChecked)
+        {
+            ReadinessNavigationGuidance = "Readiness guidance is stale. Reconnect/recheck for current findings; no action or confirmation is authorized by this historical context.";
+        }
+    }
+
+    public void Dispose()
+    {
+        Readiness?.Dispose();
+        if (Readiness is not null) { Readiness.PropertyChanged -= OnReadinessStateChanged; }
+        if (applicationSession is not null) { applicationSession.StateChanged -= OnSessionStateChanged; }
+    }
 }
 
 /// <summary>Presentation state for the local-only Activity and Diagnostics surface.</summary>
@@ -312,6 +369,18 @@ public sealed class ActivityDiagnosticsViewModel : ObservableObject
         : "Select a safe Activity entry to view its operation detail or export that operation's sanitized support material.";
 
     public string LogDirectory => workspace.GetLogDirectory();
+
+    public void CopySafeReportFor(string? runId, string? operationId)
+    {
+        try
+        {
+            copySafeIssueReport(workspace.CreateSafeIssueReport(runId, operationId));
+        }
+        catch
+        {
+            Status = "Safe issue report could not be prepared. No raw diagnostics were copied.";
+        }
+    }
 
     private void Refresh()
     {
@@ -397,6 +466,7 @@ public enum ShellPage
 {
     Connection,
     Overview,
+    Readiness,
     Firewall,
     SshKeysAndConfig,
     System,
@@ -450,6 +520,7 @@ public sealed record ShellPageViewModel(
     public bool IsPlaceholderPage => !Enum.IsDefined(Page);
     public bool IsConnectionPage => Page == ShellPage.Connection;
     public bool IsOverviewPage => Page == ShellPage.Overview;
+    public bool IsReadinessPage => Page == ShellPage.Readiness;
 
     public static ShellPageViewModel Create(ShellPage page) => page switch
     {
@@ -474,6 +545,13 @@ public sealed record ShellPageViewModel(
             "Review verified rules before changing access.",
             "Manage firewall",
             "Connect to a server before managing its firewall."),
+        ShellPage.Readiness => new(
+            page,
+            "VPS Ready",
+            "VPS Ready",
+            "Explicit read-only Core Basic inspection: nine required checks, six advisory checks and manual exclusions.",
+            "Check VPS Ready",
+            "Connect first, then explicitly inspect. Unknown, stale or cancelled evidence is never Ready."),
         ShellPage.SshKeysAndConfig => new(
             page,
             "SSH Keys & Config",

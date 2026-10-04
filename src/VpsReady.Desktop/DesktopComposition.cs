@@ -18,6 +18,7 @@ public static class DesktopComposition
         var services = new ServiceCollection();
         services.AddSingleton<IApplicationSession, ApplicationSession>();
         services.AddSingleton<IServerOverviewReader, ServerOverviewReader>();
+        services.AddSingleton<IReadinessCollector, UbuntuReadinessCollector>();
         services.AddSingleton<AppViewModel>();
         services.AddSingleton<IClock, SystemClock>();
         if (platformPaths is null)

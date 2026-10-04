@@ -411,6 +411,10 @@ public sealed class SshNetRemoteTransport : IPasswordSshTransport, IInitialKeySs
     internal static string ResolveShellCommand(RemoteCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (UbuntuReadinessCommandCatalog.Supports(command.Id.Value))
+        {
+            return UbuntuReadinessCommandCatalog.RequireShellCommand(command);
+        }
         if (UbuntuFactCommandCatalog.TryGet(command.Id.Value, out var factDefinition))
         {
             return factDefinition!.ShellCommand!;
@@ -803,13 +807,14 @@ internal static class SshNetBoundedOutputCapture
     {
         var startedAt = Stopwatch.GetTimestamp();
         var storedSsh = command.Id.Value == RemoteCommandCatalog.UbuntuUfwStoredSshRead;
-        var parserOnly = command.OutputCapturePolicy == OutputCapturePolicy.MetadataOnly && (storedSsh || CommandParserEvidence.Supports(command.Id.Value));
+        var readiness = UbuntuReadinessCommandCatalog.Supports(command.Id.Value);
+        var parserOnly = command.OutputCapturePolicy == OutputCapturePolicy.MetadataOnly && (storedSsh || readiness || CommandParserEvidence.Supports(command.Id.Value));
         var aptCommand = command.Id.Value is RemoteCommandCatalog.UbuntuAptIndexUpdate or RemoteCommandCatalog.UbuntuAptUpgradeApply or RemoteCommandCatalog.UbuntuAptUpgradePlan;
         async Task<string?> ReadOrdinaryAsync(Stream stream) => await ReadAsync(stream, command.OutputCapturePolicy, command.MaximumOutputBytes, cancellationToken).ConfigureAwait(false);
         // Drain both pipes during execution, not after it. In particular, apt
         // progress must not accumulate in SSH.NET until a long upgrade ends.
         var outputTask = parserOnly
-            ? ReadEphemeralSingleLineAsync(stdout, storedSsh ? UfwStoredSshParser.MaximumBytes : CommandParserEvidence.MaximumBytes, cancellationToken, trimLineEnding: false)
+            ? ReadEphemeralSingleLineAsync(stdout, storedSsh ? UfwStoredSshParser.MaximumBytes : readiness ? UbuntuReadinessCommandCatalog.MaximumParserBytes : CommandParserEvidence.MaximumBytes, cancellationToken, trimLineEnding: false)
             : ReadOrdinaryAsync(stdout);
         var errorTask = aptCommand ? ReadEphemeralSingleLineAsync(stderr, 4096, cancellationToken)
             : ReadOrdinaryAsync(stderr);
@@ -822,6 +827,7 @@ internal static class SshNetBoundedOutputCapture
         {
             ParserEvidence = parserOnly && exitCode == 0 ? CommandParserEvidence.Parse(command.Id.Value, ephemeral) : null,
             StoredSshEvidence = parserOnly && storedSsh && exitCode == 0 ? UfwStoredSshParser.Parse(ephemeral) : null,
+            ReadinessEvidence = parserOnly && readiness && exitCode == 0 ? UbuntuReadinessProbeParser.Parse(command.Id.Value, ephemeral) : null,
             AptLockContended = aptCommand && exitCode != 0 && transientError is not null &&
                 (transientError.Contains("Could not get lock", StringComparison.Ordinal)
                 || transientError.Contains("Unable to acquire the dpkg frontend lock", StringComparison.Ordinal)

@@ -228,11 +228,11 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
                         await DisconnectLifecycleSafelyAsync().ConfigureAwait(false);
                         if (revision != Volatile.Read(ref identityRevision)) { return; }
                         State = ConnectionScreenState.Failed;
-                        NeedsKeyPassphrase = selected?.Error == InitialPrivateKeyError.PassphraseRequired;
+                        NeedsKeyPassphrase = NeedsKeyPassphrase || selected?.Error == InitialPrivateKeyError.PassphraseRequired;
                         KeySelectionStatus = Status = DescribeKeyError(selected?.Error);
                         var correlation = CorrelationIds.Create("validate_key");
                         OperationId = correlation.OperationId;
-                        ErrorCode = OperationErrorCode.Validation.ToStableCode();
+                        ErrorCode = InitialPrivateKeyErrorCatalog.Code(selected?.Error);
                         await ReportValidationFailureAsync(correlation).ConfigureAwait(false);
                         return;
                     }
@@ -325,7 +325,7 @@ public sealed class ConnectionOverviewViewModel : ObservableObject
                     DiagnosticPhase.Validate,
                     DiagnosticStatus.Failed,
                     Status,
-                    ErrorCode: OperationErrorCode.Validation.ToStableCode(),
+                    ErrorCode: ErrorCode ?? OperationErrorCode.Validation.ToStableCode(),
                     Action: "TestConnection",
                     OutputPolicy: OutputCapturePolicy.None),
                 CancellationToken.None).ConfigureAwait(false);

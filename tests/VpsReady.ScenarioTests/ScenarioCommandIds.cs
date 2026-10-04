@@ -120,6 +120,9 @@ public static class ScenarioCommandIds
         RemoteCommandCatalog.UbuntuTimezoneAvailableList,
         RemoteCommandCatalog.UbuntuTimezoneApply,
         RemoteCommandCatalog.UbuntuTimezoneVerifyRead,
+        RemoteCommandCatalog.ReadinessPlatformRead, RemoteCommandCatalog.ReadinessPrivilegeRead, RemoteCommandCatalog.ReadinessUfwRead,
+        RemoteCommandCatalog.ReadinessAuditRead, RemoteCommandCatalog.ReadinessDiskRead, RemoteCommandCatalog.ReadinessRebootRead,
+        RemoteCommandCatalog.ReadinessIdentityRead, RemoteCommandCatalog.ReadinessTimeSyncRead, RemoteCommandCatalog.ReadinessCachedUpgradeRead,
     })
     .ToFrozenSet(StringComparer.Ordinal);
 
